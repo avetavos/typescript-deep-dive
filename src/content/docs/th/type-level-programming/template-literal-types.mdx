@@ -1,0 +1,131 @@
+---
+title: 'Template Literal Types'
+description: 'คำนวณ string type ด้วย template literal, distribute over union, ใช้ intrinsic string manipulator และ pattern-match string ด้วย infer'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## string ที่คุณคำนวณได้
+
+template literal type หน้าตาเหมือน template string ของ JavaScript แต่มันสร้าง **type** คุณ interpolate type อื่นเข้าไปใน type ที่มีรูปเป็น string
+
+```ts
+type Greeting = `Hello, ${string}`;
+
+const a: Greeting = "Hello, Ada"; // ✅
+const b: Greeting = "Hi, Ada";    // ❌ ต้องขึ้นต้นด้วย "Hello, "
+```
+
+interpolate union ของ literal เข้าไป แล้ว template จะ **distribute** บนมัน — สร้างทุกการผสมออกมาเป็น union ของ literal type:
+
+```ts
+type Lang = "en" | "th";
+type Kind = "page" | "post";
+
+type Key = `${Lang}-${Kind}`;
+//   ^? "en-page" | "en-post" | "th-page" | "th-post"
+```
+
+union สองตัวที่มี 2 member ให้ literal type 4 ตัว นี่คือวิธีที่ library generate string key แบบเป๊ะ — CSS property, event name, i18n key — โดยไม่มี runtime code เลย
+
+## intrinsic string manipulator
+
+TypeScript มาพร้อม type built-in 4 ตัวที่ transform string literal type: `Uppercase`, `Lowercase`, `Capitalize` และ `Uncapitalize`
+
+```ts
+type Loud = Uppercase<"hello">;      // "HELLO"
+type Cap = Capitalize<"name">;        // "Name"
+
+// รวมกับ template เพื่อสร้างชื่อ event handler
+type Handler<E extends string> = `on${Capitalize<E>}`;
+type ClickHandler = Handler<"click">; // "onClick"
+```
+
+<Mermaid title="union distribute บน template literal type" code={distDiagram} />
+
+export const distDiagram = `flowchart LR
+  u["union: en or th"] -->|"interpolate into 'X-page'"| out["en-page or th-page"]`;
+
+## pattern matching ด้วย `infer`
+
+พลังจริง ๆ มาเมื่อคุณรวม template literal กับ conditional type และ `infer`: คุณ **destructure string type** ได้ โดย capture ส่วนหนึ่งของมันเข้าไปใน type variable ใหม่
+
+```ts
+// capture ชื่อ event หลัง prefix "on"
+type EventName<T> = T extends `on${infer E}` ? E : never;
+
+type E1 = EventName<"onClick">; // "Click"
+type E2 = EventName<"onHover">; // "Hover"
+type E3 = EventName<"click">;   // never — ไม่มี prefix "on"
+
+// แยก route เป็นส่วน ๆ
+type Method<T> = T extends `${infer M} ${string}` ? M : never;
+type M = Method<"GET /users">; // "GET"
+```
+
+`infer E` บอกว่า "match อะไรก็ได้ตรงนี้แล้วเรียกมันว่า `E`" นี่คือการ parse จริง ๆ ที่ระดับ type — เป็นเทคนิคเบื้องหลัง typed router ที่ดึง `:id` param จาก path string และ library ที่ validate format string
+
+## เจอที่ไหนบ้าง
+
+- **typed key**: `` `${Theme}-${Shade}` `` สำหรับ type ของ design-token
+- **event map**: เปลี่ยน `"click"` เป็น `"onClick"` สำหรับ prop type
+- **route param**: ดึง `id` จาก `"/users/:id"` เป็น `{ id: string }`
+- **ORM/query builder**: parse column string เป็น typed shape
+
+ใช้มันตรงที่ string encode structure จริง ๆ ถ้าใช้กระตือรือร้นเกินไปคุณจะได้ type ที่เพื่อนร่วมทีมอ่านไม่ออก — เป็น trade-off ที่กลับมาเสมอของ type-level programming
+
+<Callout title="สรุปบรรทัดเดียว">
+template literal type สร้าง string type ด้วยการ interpolate และมัน **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform มัน และการรวม template กับ conditional type บวก `infer` ให้คุณ **pattern-match และ parse** string type ได้ (capture ชิ้นส่วนเข้า type variable ใหม่) มันคือการ parse string จริง ๆ ที่ compiler ประเมินให้
+</Callout>
+
+export const quizTemplate = [
+  {
+    q: 'type `${Lang}-${Kind}` ที่ `Lang = "en" | "th"` และ `Kind = "a" | "b"` คืออะไร?',
+    options: [
+      'string',
+      '"en-a" | "en-b" | "th-a" | "th-b" — union distribute',
+      '"en-th-a-b"',
+      'never',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`Capitalize<"click">` ให้อะไร?',
+    options: [
+      '"CLICK"',
+      '"Click"',
+      '"click"',
+      'string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน `T extends \\`on${infer E}\\` ? E : never` `infer E` ทำอะไร?',
+    options: [
+      'uppercase string',
+      'capture ส่วนของ string หลัง "on" เข้าไปใน type variable E ใหม่',
+      'เช็คความยาว string',
+      'แปลง string เป็น number',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`EventName<"click">` คืนอะไรถ้า `EventName<T> = T extends \\`on${infer E}\\` ? E : never`?',
+    options: [
+      '"click"',
+      '"Click"',
+      'never — ไม่มี prefix "on" ให้ match',
+      'string',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/template-literal-types" questions={quizTemplate} />
+
+<ProgressTracker client:visible id="type-level-programming/template-literal-types" />

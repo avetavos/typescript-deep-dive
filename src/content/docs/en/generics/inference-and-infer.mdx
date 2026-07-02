@@ -1,0 +1,133 @@
+---
+title: 'Inference & infer'
+description: 'How TypeScript picks type arguments from inference sites, and how the infer keyword extracts types out of other types.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Where inference gets its answers: inference sites
+
+When you call a generic function without type arguments, TypeScript looks at every place the type parameter appears in the parameters — each is an **inference site** — and computes a type that fits them all.
+
+```ts
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+const p = pair(1, "hi");
+//    ^? [number, string]   — A from the first arg, B from the second
+```
+
+When a parameter appears more than once, TypeScript reconciles the candidates:
+
+```ts
+function both<T>(a: T, b: T): T { return a; }
+
+const x = both(1, 2);        // T = number
+const y = both(1, "two");    // T = number | string (best common type)
+```
+
+Understanding that inference reads *argument positions* explains most "why did it infer that?" moments — and why annotating a return type never changes what the arguments infer.
+
+## `infer`: extract a type from inside another type
+
+Inside a conditional type, the `infer` keyword introduces a **new type variable that TypeScript solves for you** by pattern-matching the structure. It is how you pull a piece out of a bigger type.
+
+The canonical example — get a function's return type:
+
+```ts
+type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+
+type A = MyReturnType<() => number>;      // number
+type B = MyReturnType<(x: string) => User>; // User
+type C = MyReturnType<string>;            // never (not a function)
+```
+
+Read `infer R` as: "match this type against the pattern `(...args) => R`, and if it fits, bind `R` to whatever was in the return position." This is exactly how the built-in `ReturnType<T>` is defined.
+
+## The pattern generalizes: pull out any part
+
+`infer` can capture any position in a structure — element types, promise values, argument types:
+
+```ts
+// element type of an array
+type ElementType<T> = T extends (infer E)[] ? E : T;
+type E1 = ElementType<number[]>; // number
+type E2 = ElementType<string>;   // string (unchanged — not an array)
+
+// the value a Promise resolves to
+type Awaited1<T> = T extends Promise<infer V> ? V : T;
+type V1 = Awaited1<Promise<string>>; // string
+
+// the first parameter type
+type FirstArg<T> = T extends (first: infer P, ...rest: any[]) => any ? P : never;
+type P1 = FirstArg<(id: number) => void>; // number
+```
+
+Each one is the same move: describe the shape you expect, put `infer X` where the interesting part lives, and TypeScript fills `X` in when the shape matches.
+
+## A pitfall: multiple `infer` in the same position
+
+When the same `infer` name appears in multiple spots, TypeScript's behavior depends on position — it infers a **union** in covariant positions and an **intersection** in contravariant (parameter) positions. You rarely need this, but it explains occasional surprises:
+
+```ts
+type Merge<T> = T extends { a: infer U; b: infer U } ? U : never;
+type M = Merge<{ a: string; b: number }>; // string | number (union)
+```
+
+For most day-to-day work, one `infer` per pattern is all you need.
+
+<Callout title="The one-line takeaway">
+Generic inference reads **argument positions** (inference sites) and reconciles them into one type — which is why the arguments, not the return annotation, decide what `T` becomes. The `infer` keyword, used inside a conditional type, introduces a variable that TypeScript solves by pattern-matching structure: put `infer X` where the part you want lives (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) and TypeScript hands you that piece. This is how `ReturnType` and friends are built.
+</Callout>
+
+export const quizInfer = [
+  {
+    q: 'Where does TypeScript get the values for a generic function\'s type parameters?',
+    options: [
+      'From the return type annotation',
+      'From the argument positions (inference sites), reconciled into one type',
+      'From a config file',
+      'They are always `any` unless written explicitly',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `infer R` do in `T extends (...args: any[]) => infer R ? R : never`?',
+    options: [
+      'Declares a runtime variable',
+      'Pattern-matches the type and binds `R` to whatever is in the return position',
+      'Converts `T` to a function',
+      'Throws an error if `T` is not a function',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How would you extract the element type from an array type?',
+    options: [
+      '`T extends (infer E)[] ? E : T`',
+      '`T extends E[] ? T : E`',
+      '`keyof T`',
+      '`T[number][]`',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'The built-in `ReturnType<T>` is built using:',
+    options: [
+      'A mapped type',
+      'A conditional type with `infer` in the return position',
+      'A runtime reflection call',
+      'A class',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/inference-and-infer" questions={quizInfer} />
+
+<ProgressTracker client:visible id="generics/inference-and-infer" />

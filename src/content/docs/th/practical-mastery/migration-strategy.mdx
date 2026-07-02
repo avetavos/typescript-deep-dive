@@ -1,0 +1,108 @@
+---
+title: 'Migration Strategy'
+description: 'ย้าย JavaScript codebase ไป TypeScript โดยไม่ต้อง rewrite ทีเดียว — allowJs, การ ratchet strictness, การจัดการ any และการเขียน library'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## migrate ทีละส่วน ไม่ใช่ทีเดียว
+
+การ rewrite JS codebase จริงไป TypeScript ทีเดียวคือวิธีที่ migration ตายกัน จุดสำคัญของ TypeScript คือมันเป็น type system แบบ *gradual*: JS และ TS อยู่ด้วยกันได้ทีละไฟล์ คุณจึงแปลงทีละนิดขณะที่ยัง ship ได้ตลอด
+
+## เส้นทางแบบเป็น phase
+
+<Mermaid title="ratchet การ migrate แบบค่อยเป็นค่อยไป" code={migrateDiagram} />
+
+export const migrateDiagram = `flowchart LR
+  js["allowJs: TS builds\nalongside JS"] --> checkjs["checkJs: type-check\nthe JS too"]
+  checkjs --> convert["rename .js to .ts\nfile by file"]
+  convert --> strict["ratchet strict flags\none at a time"]`;
+
+1. **เปิด `allowJs`** ตอนนี้ TypeScript compile project แบบผสมได้ — ไฟล์ `.js` build เหมือนเดิม และคุณเริ่มเพิ่มไฟล์ `.ts` ข้าง ๆ ได้
+2. **เพิ่ม `checkJs` (และ `// @ts-check`)** TypeScript type-check *JavaScript* ของคุณด้วย inference และ JSDoc คุณได้ error จริงก่อนแปลงไฟล์สักไฟล์ — first pass ฟรี ๆ
+3. **แปลงทีละไฟล์** rename `.js` เป็น `.ts`, แก้ error ที่โผล่, commit เริ่มจาก leaf (utility ที่ dependency น้อย) แล้วไล่เข้าหา core
+4. **ratchet strictness** อย่าเริ่มด้วย `strict` เต็ม เปิด flag ทีละตัว — `noImplicitAny` ก่อน แล้ว `strictNullChecks` แล้วที่เหลือ แก้แต่ละ wave ให้เสร็จก่อนเปิดตัวถัดไป
+
+แต่ละ step ship ได้ คุณไม่เคยติดอยู่ในสภาพ migrate ค้างครึ่ง ๆ นาน ๆ
+
+## `any` เป็น tool ก่อน แล้วเป็นหนี้
+
+ระหว่าง migrate `any` เป็นวิธีที่ถูกต้องในการบอกว่า "ยังไม่ type — ไปต่อก่อน" อันตรายคือทิ้งมันไว้ วินัยสองข้อทำให้มันซื่อสัตย์:
+
+- **ทำให้ explicit และ grep เจอ** เลือก `any` ที่ explicit (หรือ alias `// TODO: type this`) แทน implicit เพื่อให้หาและกำจัดทีหลังได้
+- **ratchet ด้วย `noImplicitAny`** พอเปิด compiler เลิกแอบใส่ `any` — code ใหม่ต้อง type หนี้จึงมีแต่ลดลง
+
+## `@ts-expect-error` ดีกว่า `@ts-ignore`
+
+เมื่อต้อง suppress error ให้ใช้ `@ts-expect-error` ไม่ใช่ `@ts-ignore`:
+
+```ts
+// @ts-expect-error — legacy shape, tracked in TICKET-123
+legacyCall(weirdValue);
+```
+
+ทั้งคู่ silence error ในบรรทัดถัดไป แต่ `@ts-expect-error` **จะ error ด้วยถ้าบรรทัดนั้นเลิกมี error** ดังนั้นเมื่อคุณแก้ type ที่เป็นต้นเหตุทีหลัง suppression ที่ไม่จำเป็นแล้วจะทำให้ build พัง และบอกให้คุณลบมันออก ส่วน `@ts-ignore` แค่เน่าเงียบ ๆ
+
+## การเขียน library
+
+ถ้าคุณ publish package มีกฎเพิ่มอีกไม่กี่ข้อ:
+
+- **ship declaration file (`.d.ts`)** ตั้ง `"declaration": true` เพื่อให้ผู้ใช้ได้ type ของคุณ ชี้ `"types"` ใน `package.json` ไปที่ entry `.d.ts`
+- **อย่าให้ internal type leak** เฉพาะ type ของ public API เท่านั้นที่เป็น contract เก็บ type ของ implementation ไว้ไม่ export เพื่อให้เปลี่ยนได้อย่างอิสระ
+- **มอง type เป็น semver** การเปลี่ยนที่ทำให้ *type checking* ของผู้ใช้พังคือ breaking change แม้ runtime behavior จะเหมือนเดิม การ widen parameter มักปลอดภัย; การ narrow มัน หรือเปลี่ยน return type ทำให้ build ของ downstream พังได้
+
+<Callout title="สรุปหนึ่งบรรทัด">
+migrate ทีละส่วน: `allowJs` ให้อยู่ด้วยกัน, `checkJs` เพื่อ type-check JS ฟรี ๆ แล้วแปลงทีละไฟล์จาก leaf เข้าใน พร้อม ratchet flag ของ `strict` ทีละตัว มอง `any` เป็นหนี้ที่ track ไว้ (ทำให้ explicit, เปิด `noImplicitAny`), เลือก `@ts-expect-error` (ที่ลบตัวเองเมื่อแก้แล้ว) มากกว่า `@ts-ignore` และถ้า publish library ให้ ship `.d.ts`, ซ่อน internal type และ version type ของคุณตาม semver
+</Callout>
+
+export const quizMigrate = [
+  {
+    q: 'วิธีที่แนะนำในการ migrate JS codebase ไป TypeScript คืออะไร?',
+    options: [
+      'rewrite ทีเดียวแบบ big-bang',
+      'ทีละส่วน — allowJs ให้อยู่ด้วยกัน แล้วแปลงทีละไฟล์และ ratchet strictness',
+      'rewrite เป็นภาษาอื่นก่อน',
+      'เปิด strict mode เต็มตั้งแต่วันแรก',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`checkJs` (พร้อม @ts-check) ให้อะไรก่อนแปลงไฟล์?',
+    options: [
+      'แปลง .js เป็น .ts อัตโนมัติ',
+      'type-check JavaScript ของคุณด้วย inference และ JSDoc ทำให้เจอ error แต่เนิ่น ๆ',
+      'ลบ any ทั้งหมด',
+      'ปิด build',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมควรเลือก `@ts-expect-error` มากกว่า `@ts-ignore`?',
+    options: [
+      'มันสั้นกว่า',
+      'มันจะ error ด้วยถ้าบรรทัดนั้นเลิกมี error แล้ว จึง flag suppression ที่ค้างเมื่อ type ถูกแก้',
+      'มัน suppress error ได้มากกว่า',
+      'มันทำงานตอน runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สำหรับ library ที่ publish ทำไมต้องมอง type เป็นส่วนหนึ่งของ semver?',
+    options: [
+      'type ไม่มีผลเรื่อง versioning',
+      'การเปลี่ยนที่ทำให้ type checking ของผู้ใช้พังคือ breaking change แม้ runtime behavior ไม่เปลี่ยน',
+      'เพราะ runtime เปลี่ยนตาม type เสมอ',
+      'เพื่อให้ package ใหญ่ขึ้น',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/migration-strategy" questions={quizMigrate} />
+
+<ProgressTracker client:visible id="practical-mastery/migration-strategy" />

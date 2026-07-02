@@ -1,0 +1,133 @@
+---
+title: 'Mixins & Composition'
+description: 'สร้าง behavior ที่ reuse ได้จาก class factory ที่ compose ได้ แทน inheritance ลึก ๆ และการ type มันด้วย generic constructor type'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาของ inheritance ที่ลึก
+
+single inheritance บังคับให้ทุกความสามารถอยู่ใน chain เดียวที่แข็งทื่อ ถ้า `Timestamped`, `Serializable` และ `Comparable` เป็น behavior ที่คุณอยากแชร์ข้าม class ที่ไม่เกี่ยวกัน hierarchy แบบเส้นตรงแสดงออกไม่ได้ — คุณต้องเลือก parent ตัวเดียวแล้ว duplicate ที่เหลือ
+
+**mixin** แก้ปัญหานี้ด้วยการทำให้ behavior เป็น *function* ที่เพิ่ม feature ให้ base class ใดก็ได้ ดังนั้น class หนึ่งจึง compose ได้หลายอัน
+
+## mixin คือ class factory
+
+mixin คือ function ที่รับ base class (constructor) แล้ว return class ใหม่ที่ `extends` มันพร้อม behavior เพิ่ม
+
+```ts
+type Constructor = new (...args: any[]) => {};
+
+function Timestamped<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    createdAt = new Date();
+  };
+}
+
+function Activatable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    isActive = false;
+    activate() { this.isActive = true; }
+  };
+}
+
+class User {
+  constructor(public name: string) {}
+}
+
+// Compose several behaviors onto User:
+const SmartUser = Activatable(Timestamped(User));
+
+const u = new SmartUser("Ada");
+u.createdAt; // from Timestamped
+u.activate(); // from Activatable
+u.name;       // from User
+```
+
+constraint แบบ generic `TBase extends Constructor` คือสิ่งที่ทำให้มัน type-safe: มันบอกว่า "class ไหนก็ตามที่คุณส่งเข้ามา ฉัน return class ที่มี member ของ *มัน* ทั้งหมดบวกตัวใหม่" TypeScript track shape ที่สะสมผ่านแต่ละชั้นการ wrap
+
+<Mermaid title="inheritance เป็น chain ส่วน mixin compose" code={mixinDiagram} />
+
+export const mixinDiagram = `flowchart LR
+  base["class User"] --> m1["Timestamped(...)\n+ createdAt"]
+  m1 --> m2["Activatable(...)\n+ activate()"]
+  m2 --> result["SmartUser\nhas all three"]`;
+
+## constrained mixin
+
+บางที mixin ต้องการให้ base class มี member บางอย่างอยู่แล้ว constrain base ให้เป็น constructor ที่ produce shape ที่ต้องการ:
+
+```ts
+type Positioned = new (...args: any[]) => { x: number; y: number };
+
+function Movable<TBase extends Positioned>(Base: TBase) {
+  return class extends Base {
+    move(dx: number, dy: number) {
+      this.x += dx; // ✅ allowed — the constraint guarantees x exists
+      this.y += dy;
+    }
+  };
+}
+```
+
+ตอนนี้ `Movable` apply ได้แค่กับ base ที่ instance มี `x` และ `y` และภายในมัน member เหล่านั้นถูกรู้ว่ามีอยู่
+
+## composition over inheritance
+
+mixin เป็นรูปแบบหนึ่งของหลักการที่กว้างกว่า: **เลือกประกอบ behavior จากชิ้นเล็ก ๆ ที่อิสระต่อกัน แทนการ derive ผ่าน hierarchy ที่แข็งทื่อ** บ่อยครั้งคุณไม่ต้องใช้ mixin ด้วยซ้ำ — plain object composition (ถือ collaborator เป็น field แล้ว delegate ให้มัน) ง่ายกว่าและเลี่ยงกลไก class-factory ไปเลย ใช้ mixin เมื่อคุณต้องการให้ผลลัพธ์ที่ compose แล้ว *เป็น* class ที่มีทุก behavior merge อยู่บน instance ของมันจริง ๆ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+**mixin** คือ function ที่รับ base class แล้ว return subclass พร้อม behavior เพิ่ม type ด้วย generic constructor constraint (`TBase extends new (...args: any[]) => {}`) เพื่อให้ compiler track shape ที่ merge แล้ว mixin ให้ class หนึ่ง compose หลาย behavior อิสระที่ inheritance chain เดียวแสดงออกไม่ได้ มันเป็นเครื่องมือหนึ่งสำหรับ **composition over inheritance** — และ plain object composition มักง่ายกว่าอีก
+</Callout>
+
+export const quizMixins = [
+  {
+    q: 'mixin ใน TypeScript คืออะไร?',
+    options: [
+      'keyword พิเศษ',
+      'function ที่รับ base class แล้ว return subclass ที่ extend มันพร้อม behavior เพิ่ม',
+      'interface ที่มี default method',
+      'decorator ที่ apply กับ class',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม mixin ใช้ generic constraint แบบ `TBase extends new (...args: any[]) => {}`?',
+    options: [
+      'เพื่อให้ code สั้นลง',
+      'เพื่อให้ compiler track member ของ base class แล้ว merge กับตัวใหม่ใน type ที่ return',
+      'เพื่อปิด type checking',
+      'มันเป็นแค่การตกแต่ง',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'mixin แก้ปัญหาอะไรที่ single inheritance แก้ไม่ได้?',
+    options: [
+      'ทำให้ class รันเร็วขึ้น',
+      'compose หลาย behavior อิสระเข้ากับ class ที่ไม่เกี่ยวกัน โดยไม่ต้องมี parent chain เดียวที่แข็งทื่อ',
+      'ลบความจำเป็นของ constructor',
+      'บังคับ runtime privacy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อไร plain object composition ดีกว่า mixin?',
+    options: [
+      'ไม่มีวัน — mixin ดีกว่าเสมอ',
+      'เมื่อคุณถือ collaborator เป็น field แล้ว delegate ได้ โดยไม่ต้องให้ผลลัพธ์เป็น class เดียวที่ merge แล้ว',
+      'ใน JavaScript เท่านั้น ไม่ใช่ TypeScript',
+      'เมื่อต้องการ runtime privacy',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/mixins-and-composition" questions={quizMixins} />
+
+<ProgressTracker client:visible id="classes-and-oop/mixins-and-composition" />

@@ -1,0 +1,154 @@
+---
+title: 'keyof & Indexed Access'
+description: 'keyof to get a type of keys, and T[K] to look up value types — the two lookups that power mapped types and most utility types.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `keyof` gives you the keys as a type
+
+The `keyof` operator takes an object type and produces a **union of its keys** as a type.
+
+```ts
+interface User {
+  id: number;
+  name: string;
+  active: boolean;
+}
+
+type UserKey = keyof User;
+//   ^? "id" | "name" | "active"
+```
+
+`keyof User` is not a value — it is the union type `"id" | "name" | "active"`. This is the raw material for iterating over a type, which is exactly what mapped types do.
+
+For an object type with an index signature, `keyof` gives the index type:
+
+```ts
+type Dict = { [key: string]: number };
+type DictKey = keyof Dict;
+//   ^? string | number   (JS object keys can be accessed by number too)
+```
+
+## Indexed access: `T[K]` looks up value types
+
+Once you have keys, **indexed access** looks up the *type* of the value at a key — the type-level version of `obj[key]`.
+
+```ts
+interface User {
+  id: number;
+  name: string;
+}
+
+type IdType = User["id"];
+//   ^? number
+
+type NameType = User["name"];
+//   ^? string
+```
+
+You can index with a **union** of keys to get a union of value types:
+
+```ts
+type Values = User[keyof User];
+//   ^? number | string
+```
+
+`User[keyof User]` reads as "the type of every value in `User`" — a common idiom for getting the union of a type's value types.
+
+<Mermaid title="keyof gets keys; indexed access gets value types" code={lookupDiagram} />
+
+export const lookupDiagram = `flowchart LR
+  t["User { id: number, name: string }"] -->|keyof| keys["keys: id or name"]
+  keys -->|"T[key]"| vals["value types: number or string"]`;
+
+## Indexing arrays and tuples
+
+Arrays and tuples are object types too, so indexed access works on them — and `[number]` is the trick for "the element type":
+
+```ts
+type Nums = number[];
+type Elem = Nums[number];
+//   ^? number
+
+const tuple = [1, "two", true] as const;
+type TupleElem = (typeof tuple)[number];
+//   ^? 1 | "two" | true
+
+type First = (typeof tuple)[0];
+//   ^? 1
+```
+
+`Arr[number]` means "index this array with any number," which yields the union of all element types — the standard way to turn an array/tuple type into a union.
+
+## Why these two matter so much
+
+Nearly every utility type is built from `keyof` plus indexed access plus a mapped type:
+
+```ts
+// Pick, from scratch — iterate chosen keys, look up each value type
+type MyPick<T, K extends keyof T> = {
+  [P in K]: T[P];
+};
+
+type NameOnly = MyPick<User, "name">;
+//   ^? { name: string }
+```
+
+`K extends keyof T` constrains the keys to real keys of `T`; `[P in K]` iterates them (a mapped type, next lesson if you skipped it); `T[P]` looks up each value type. Three primitives, one useful tool.
+
+<Callout title="The one-line takeaway">
+`keyof T` produces a **union of `T`'s keys** as a type; **indexed access** `T[K]` looks up the **value type** at those keys, and `T[keyof T]` gives the union of all value types. `Arr[number]` turns an array or tuple type into the union of its elements. Together these two lookups are the foundation of mapped types and nearly every utility type.
+</Callout>
+
+export const quizKeyof = [
+  {
+    q: 'What does `keyof User` produce for `interface User { id: number; name: string }`?',
+    options: [
+      'number | string (the value types)',
+      '"id" | "name" (a union of the keys)',
+      'A runtime array of keys',
+      'User',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the indexed access type `User["name"]` give you?',
+    options: [
+      'The string "name"',
+      'The value type at that key — string',
+      'A boolean for whether the key exists',
+      'keyof User',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you get the element type of an array type `T = string[]`?',
+    options: [
+      '`T[0]`',
+      '`T[number]`',
+      '`keyof T`',
+      '`T[string]`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `User[keyof User]` represent?',
+    options: [
+      'The union of all key names',
+      'The union of all value types in User',
+      'The first property only',
+      'never',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/keyof-and-indexed-access" questions={quizKeyof} />
+
+<ProgressTracker client:visible id="type-level-programming/keyof-and-indexed-access" />

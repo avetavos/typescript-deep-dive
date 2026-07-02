@@ -1,0 +1,117 @@
+---
+title: 'Declaration Files'
+description: 'What .d.ts files are, how declare and ambient declarations work, typing an untyped library, and where the @types packages come from.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Types without implementation
+
+A declaration file — a `.d.ts` — is a file that contains **types only, no runtime code**. It describes the shape of something that exists elsewhere: a JavaScript library, a global variable, a module. It is how TypeScript knows the types of code it did not compile.
+
+You have used them constantly without noticing. When you import `fs` in Node and get autocomplete, that is a `.d.ts`. When `document.querySelector` is typed, that is `lib.dom.d.ts`. The types and the implementation are separate files.
+
+## `declare` and ambient declarations
+
+The `declare` keyword means "trust me, this exists at runtime — here is its type." It introduces an **ambient** declaration: a type with no implementation attached.
+
+```ts
+// globals.d.ts
+declare const APP_VERSION: string;      // injected by the bundler at build time
+declare function gtag(...args: any[]): void; // a global from a script tag
+
+// now usable anywhere, fully typed, with no import
+console.log(APP_VERSION);
+gtag("event", "page_view");
+```
+
+Without `declare`, writing `const APP_VERSION: string` would be a *value* declaration and the compiler would expect an initializer and emit code. `declare` says: this is purely a type promise; emit nothing.
+
+## Typing an untyped library
+
+Say you install a small JavaScript library with no types. You can describe its shape yourself with a module declaration:
+
+```ts
+// legacy-lib.d.ts
+declare module "legacy-lib" {
+  export function parse(input: string): { ok: boolean; value: number };
+  export const version: string;
+}
+```
+
+Now `import { parse } from "legacy-lib"` is fully typed, even though the library ships plain JavaScript. You have supplied the missing contract by hand.
+
+## DefinitelyTyped and `@types`
+
+Most of the time, someone has already written those declarations for you. **DefinitelyTyped** is a huge community repository of `.d.ts` files for thousands of JavaScript libraries, published under the `@types/*` scope:
+
+```bash
+npm install --save-dev @types/lodash
+```
+
+`tsc` automatically picks up `@types/*` packages from `node_modules`, so installing `@types/lodash` instantly types `import _ from "lodash"`. Many modern libraries ship their own types in the package (declared via the `"types"` field in their `package.json`), in which case you need no `@types` package at all.
+
+## Emitting your own declarations
+
+If you publish a library written in TypeScript, you want to ship `.d.ts` files so *your* consumers get types. Turn on emit for declarations:
+
+```json
+{ "compilerOptions": { "declaration": true } }
+```
+
+Now `tsc` produces a `.d.ts` next to each emitted `.js`, and you point `package.json`'s `"types"` field at the entry declaration. Your users import your library and get full type information — the same mechanism the whole ecosystem runs on.
+
+<Callout title="The one-line takeaway">
+A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package). Most libraries are covered either by types shipped in the package or by community `@types/*` packages from DefinitelyTyped, which `tsc` picks up automatically. When you publish a library, set `declaration: true` so your consumers get types too.
+</Callout>
+
+export const quizDecl = [
+  {
+    q: 'What does a `.d.ts` file contain?',
+    options: [
+      'Types only — no runtime code',
+      'Minified JavaScript',
+      'Test cases',
+      'Compiler configuration',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'What does the `declare` keyword do?',
+    options: [
+      'Creates a runtime constant',
+      'Introduces an ambient declaration — a type promise with no emitted code',
+      'Imports a module',
+      'Marks a class as abstract',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where do `@types/lodash` and similar packages come from?',
+    options: [
+      'They are generated at runtime',
+      'DefinitelyTyped, a community repository of declaration files published under `@types/*`',
+      'The npm registry generates them automatically',
+      'They ship inside the TypeScript compiler',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How do you ship types when publishing your own TypeScript library?',
+    options: [
+      'Manually copy your .ts files',
+      'Enable `declaration: true` so tsc emits `.d.ts` files, and point `package.json` `types` at them',
+      'Publish to DefinitelyTyped yourself',
+      'You cannot — consumers must retype it',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/declaration-files" questions={quizDecl} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/declaration-files" />

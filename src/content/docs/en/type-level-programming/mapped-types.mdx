@@ -1,0 +1,149 @@
+---
+title: 'Mapped Types'
+description: 'Iterate over a type keys to transform it — mapping modifiers, adding and removing readonly and optional, and building Partial and Readonly from scratch.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A loop over keys
+
+A **mapped type** iterates over the keys of a type and produces a new type. The syntax mirrors an object type, but with `[K in ...]` where the keys would be — a type-level `for` loop.
+
+```ts
+type Flags = {
+  [K in "a" | "b" | "c"]: boolean;
+};
+//   ^? { a: boolean; b: boolean; c: boolean }
+```
+
+`K` ranges over each member of the union `"a" | "b" | "c"`, and for each one the type produces a property. Combine that with `keyof` and you can iterate over an existing type:
+
+```ts
+interface User { id: number; name: string; }
+
+type Stringify = {
+  [K in keyof User]: string;
+};
+//   ^? { id: string; name: string }
+```
+
+## Referencing the original value type
+
+Inside the loop, `T[K]` (indexed access) gives you the original value type — so you can transform it rather than replace it:
+
+```ts
+type Getters<T> = {
+  [K in keyof T]: () => T[K];
+};
+
+type UserGetters = Getters<User>;
+//   ^? { id: () => number; name: () => string }
+```
+
+Each property becomes a function returning that property original type. This "keep the keys, transform the values" shape is the everyday use of mapped types.
+
+## Mapping modifiers: add or remove `readonly` and `?`
+
+Mapped types can also change the **modifiers** on each property. You add `readonly` or `?` by writing them, and you *remove* them with a `-` prefix.
+
+```ts
+// Make every property optional (this is how Partial works)
+type MyPartial<T> = {
+  [K in keyof T]?: T[K];
+};
+
+// Make every property readonly (this is Readonly)
+type MyReadonly<T> = {
+  readonly [K in keyof T]: T[K];
+};
+
+// Strip optional AND readonly off every property
+type Concrete<T> = {
+  -readonly [K in keyof T]-?: T[K];
+};
+```
+
+<Mermaid title="A mapped type transforms each property" code={mapDiagram} />
+
+export const mapDiagram = `flowchart LR
+  src["T: { id: number, name: string }"] -->|"for each K in keyof T"| loop["apply transform:\nmodifier + value type"]
+  loop --> out["new type:\n{ id?: number, name?: string }"]`;
+
+The `-?` removes optionality and `-readonly` removes immutability — which is exactly how the built-in `Required` and a mutable-clone utility are written. When you see `-?` in a library, it means "force every property to be present."
+
+## Key remapping with `as`
+
+A newer feature lets you **rename or filter** keys during the map using an `as` clause. This is how you build things like a "getters" type with `get`-prefixed names, or drop keys whose value type you do not want:
+
+```ts
+// Rename each key to get<Key>
+type Getters2<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type UG = Getters2<{ name: string }>;
+//   ^? { getName: () => string }
+
+// Filter: keep only string-valued properties (remap unwanted keys to never)
+type StringProps<T> = {
+  [K in keyof T as T[K] extends string ? K : never]: T[K];
+};
+```
+
+Remapping a key to `never` **removes** it from the result — the standard trick for filtering properties by their value type.
+
+<Callout title="The one-line takeaway">
+A mapped type `{ [K in keyof T]: ... }` is a type-level loop over the keys of `T`; inside it, `T[K]` gives each original value type to transform. You add modifiers by writing `readonly`/`?` and remove them with `-readonly`/`-?`. An `as` clause remaps keys — renaming them (with template literals) or filtering them out by remapping to `never`. This one construct is how `Partial`, `Readonly`, `Required`, and most utility types are built.
+</Callout>
+
+export const quizMapped = [
+  {
+    q: 'What is a mapped type?',
+    options: [
+      'A runtime Map object',
+      'A type-level loop over keys that produces a new type',
+      'A way to import types from another file',
+      'A JSON schema',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Inside `{ [K in keyof T]: ... }`, how do you reference the original value type at key K?',
+    options: [
+      '`keyof T`',
+      '`T[K]` (indexed access)',
+      '`typeof K`',
+      '`K.value`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the `-?` modifier do in a mapped type?',
+    options: [
+      'Makes every property optional',
+      'Removes optionality — forces every property to be present (like Required)',
+      'Deletes the property',
+      'Marks it readonly',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In a key-remapping `as` clause, what happens when you remap a key to `never`?',
+    options: [
+      'The key value becomes never',
+      'The key is removed from the resulting type — the standard filtering trick',
+      'It throws a compile error',
+      'The key becomes optional',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/mapped-types" questions={quizMapped} />
+
+<ProgressTracker client:visible id="type-level-programming/mapped-types" />

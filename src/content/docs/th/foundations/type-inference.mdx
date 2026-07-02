@@ -1,0 +1,143 @@
+---
+title: 'Type Inference'
+description: 'compiler เดา type ที่คุณไม่เคยเขียนออกมาได้อย่างไร — let กับ const widening, contextual typing, best common type และเมื่อไรควร annotate'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## คุณเขียน type น้อยกว่าที่คิด
+
+TypeScript ที่ดีไม่ได้เต็มไปด้วย annotation compiler *infer* type ส่วนใหญ่ให้ และการฝืนมันด้วย annotation ที่ซ้ำซ้อนคือสัญญาณของมือใหม่ ทักษะที่แท้จริงคือรู้ว่ามัน infer **อะไร** และ **ตรงไหน** ที่คุณต้องเข้าไปช่วยจริง ๆ
+
+```ts
+let count = 5;        // inferred: number
+const name = "Ada";   // inferred: "Ada"  (a literal type!)
+const items = [1, 2]; // inferred: number[]
+```
+
+สังเกตว่า `count` กับ `name` ถูก infer ต่างกัน และความต่างนั้นคือหนึ่งในกฎที่สำคัญที่สุดของภาษา
+
+## `let` widen, `const` เก็บ literal
+
+`const` reassign ไม่ได้เลย compiler จึงเก็บ type ที่ **แคบสุด** ไว้ — คือ literal ส่วน `let` reassign ได้ compiler จึง **widen** ไปเป็น type ทั่วไป
+
+```ts
+const a = "hello"; // type: "hello"   (literal — it can't change)
+let   b = "hello"; // type: string    (widened — b might become any string)
+```
+
+นี่คือเหตุผลที่ literal type "โผล่มาแล้วก็หายไป" มันสำคัญอยู่ตลอด:
+
+```ts
+const method = "GET";        // type: "GET"
+let   method2 = "GET";       // type: string
+
+function req(m: "GET" | "POST") {}
+req(method);  // ✅ "GET" fits the union
+req(method2); // ❌ string is too wide for "GET" | "POST"
+```
+
+<Mermaid title="const เก็บ literal; let widen" code={widenDiagram} />
+
+export const widenDiagram = `flowchart LR
+  lit["literal value\nGET"] -->|const: เปลี่ยนไม่ได้| keep["type: GET\n(แคบ)"]
+  lit -->|let: อาจเปลี่ยนได้| wide["type: string\n(ถูก widen)"]`;
+
+เมื่อคุณอยากได้ literal type จาก `let` หรือจาก property ของ object ให้ใช้ **const assertion** (`as const`) — เป็นหัวข้อเต็ม ๆ ในโมดูลถัดไป
+
+## Contextual typing: inference ไหลเข้าด้านใน
+
+inference ไม่ได้ไหลจากล่างขึ้นบน (จาก value ไปหา type) อย่างเดียว มันไหลจาก **บนลงล่าง** จาก context รอบ ๆ ด้วย — นี่คือ *contextual typing*
+
+```ts
+const nums = [1, 2, 3];
+
+nums.forEach((n) => {
+  // n is inferred as number — you didn't annotate it.
+  // The context (an array of number) told the compiler what n must be.
+  console.log(n.toFixed(2));
+});
+
+window.addEventListener("click", (e) => {
+  // e is inferred as MouseEvent from the event name — pure contextual typing.
+});
+```
+
+นี่คือเหตุผลที่ parameter ของ callback มักไม่ต้อง annotate: function ที่คุณส่งมันเข้าไปประกาศ type ของ parameter ไว้แล้ว inference จึงไหลเข้ามา
+
+## Best common type
+
+เมื่อ value อาจเป็นได้หลาย type — เช่น array ที่มี element ปนกัน — compiler จะคำนวณ **best common type** ที่ครอบคลุมทั้งหมด:
+
+```ts
+const mixed = [1, "two", 3]; // inferred: (string | number)[]
+const shapes = [circle, square]; // inferred: (Circle | Square)[]
+```
+
+มันไม่ได้เลือกอันหนึ่งแล้ว error ที่เหลือ แต่สร้าง union ที่เข้าได้กับทุก element บางครั้ง best common type กว้างกว่าที่คุณอยากได้ ซึ่งเป็นสัญญาณว่าควร annotate ให้ชัด
+
+## เมื่อไรควร annotate
+
+ปล่อยให้ inference ทำงาน แล้ว annotate อย่างจงใจใน 3 จุด:
+
+1. **parameter ของ function** — inference อ่านใจคุณเรื่อง input ไม่ได้ (แม้ contextual typing จะครอบคลุม callback ให้)
+2. **return type ของ function บน public API** — การ annotate return type จับความผิดพลาด *ภายใน* function และบอก intent (inference ทำงานได้ แต่ return type ที่ระบุชัดคือ guardrail)
+3. **เมื่อ inference กว้างกว่าที่คุณอยากได้** — เช่นคุณต้องการ literal หรือ union เฉพาะ ไม่ใช่ type ที่ถูก widen
+
+ที่เหลือทั้งหมดให้ใช้ inference annotation ที่ซ้ำซ้อนคือ noise ที่อาจ *เพี้ยน* ไปจากความจริงตอน refactor
+
+<Callout title="สรุปบรรทัดเดียว">
+compiler infer type ส่วนใหญ่ให้ ดังนั้นเขียนมันให้น้อยลง กฎสำคัญ: **`const` เก็บ literal type ส่วน `let` widen** ไปเป็น type ทั่วไป inference ยังไหลจากบนลงล่างด้วย (contextual typing) ซึ่งเป็นเหตุผลที่ parameter ของ callback แทบไม่ต้อง annotate และมันสร้าง **best common type** (เป็น union) ให้ value ที่ปนกัน annotate parameter กับ return type ของ public API แล้วปล่อยที่เหลือให้ inference จัดการ
+</Callout>
+
+export const quizInference = [
+  {
+    q: '`const x = "GET"` ถูก infer เป็น type อะไร?',
+    options: [
+      'string',
+      '"GET" (literal type)',
+      'any',
+      'String',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม `let y = "GET"` ถึง infer เป็น `string` ขณะที่ `const x = "GET"` infer เป็น `"GET"`?',
+    options: [
+      'let ช้ากว่า',
+      'let reassign ได้ compiler จึง widen ไปเป็น type ทั่วไป; const ทำไม่ได้ จึงเก็บ literal ไว้',
+      'มันสุ่ม',
+      'ตัวแปร let มี type เป็น any เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม parameter ของ callback มักไม่ต้อง annotate type?',
+    options: [
+      'callback มี type เป็น any เสมอ',
+      'contextual typing ไหล type เข้าด้านในจาก function ที่คุณส่งมันเข้าไป',
+      'compiler ไม่สนใจ parameter ของ callback',
+      'คุณต้อง annotate มันเสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'TypeScript infer อะไรให้ `[1, "two", 3]`?',
+    options: [
+      'any[]',
+      '(string | number)[] — best common type ในรูป union',
+      'number[] พร้อม error ที่ "two"',
+      '[number, string, number]',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/type-inference" questions={quizInference} />
+
+<ProgressTracker client:visible id="foundations/type-inference" />

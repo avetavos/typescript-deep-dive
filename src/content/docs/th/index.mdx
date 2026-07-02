@@ -1,0 +1,60 @@
+---
+title: TypeScript Deep Dive
+description: เชี่ยวชาญ type system ของ TypeScript ตั้งแต่พื้นฐาน — structural typing, inference, generics, conditional และ mapped types, template literals, utility types, classes, compiler และการ type code จริง สำหรับ developer ที่รู้พื้นฐานแล้วและอยากเจาะลึก
+template: splash
+hero:
+  tagline: คอร์สแบบ standalone ระดับ intermediate→advanced ว่าด้วย type system ของ TypeScript ตั้งแต่ structural typing และ inference ไปจนถึง generics, conditional & mapped types, template literals, recursive types, decorators, compiler และการ type API จริง — ทุกหัวข้อสอนผ่าน code ที่ annotate ให้เห็นชัดว่า compiler infer อะไรออกมา
+  actions:
+    - text: เริ่มที่นี่
+      link: /typescript/th/foundations/
+      icon: right-arrow
+      variant: primary
+    - text: ข้ามไปที่ Generics
+      link: /typescript/th/generics/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## สิ่งที่คุณจะได้เรียน
+
+<CardGrid>
+  <Card title="Foundations & Mental Model" icon="rocket">
+    ทำไมต้อง TypeScript, type คือเซตของ value, structural typing และ inference ทำงานจริงอย่างไร [เริ่ม →](/typescript/th/foundations/)
+  </Card>
+  <Card title="Everyday Types, Deep" icon="seti:typescript">
+    literal และ widening, union และ intersection, object/array/tuple, function และ narrowing [ฝึกให้คม →](/typescript/th/everyday-types/)
+  </Card>
+  <Card title="Generics" icon="seti:plan">
+    type parameter, constraint, conditional type และ inference กับ `infer` ทำงานอย่างไร [generalize →](/typescript/th/generics/)
+  </Card>
+  <Card title="Type-Level Programming" icon="puzzle">
+    mapped types, template literal types, keyof และ indexed access, utility types และ recursion [เขียน type →](/typescript/th/type-level-programming/)
+  </Card>
+  <Card title="Classes & Advanced OOP" icon="seti:config">
+    field และ access, this type, stage-3 decorators และ mixin [ออกแบบ →](/typescript/th/classes-and-oop/)
+  </Card>
+  <Card title="The Compiler & Tooling" icon="seti:powershell">
+    tsconfig ที่สำคัญ, module resolution, declaration file และ emit [ตั้งค่า →](/typescript/th/compiler-and-tooling/)
+  </Card>
+  <Card title="Practical Mastery" icon="approve-check">
+    การ type API และ boundary, nullability และ never, pitfall เรื่อง performance และกลยุทธ์ migration [นำไปใช้ →](/typescript/th/practical-mastery/)
+  </Card>
+</CardGrid>
+
+## คอร์สนี้ทำงานยังไง
+
+<CardGrid>
+  <Card title="type คือพระเอก" icon="seti:typescript">
+    นี่คือคอร์สว่าด้วย *type system* ไม่ใช่ syntax ของ JavaScript ตัวอย่างทุกอันถูก annotate ให้เห็นชัดว่า compiler infer อะไรและ error ตรงไหน — แบบที่คุณอ่าน TypeScript จริง ๆ
+  </Card>
+  <Card title="เข้าใจ mental model ก่อน" icon="rocket">
+    ทุกหัวข้อเริ่มจาก model — type คือเซตของ value, structural compatibility, inference site — พอเข้าใจแล้ว feature ขั้นสูงจะเลิกดูเหมือนเวทมนตร์และกลายเป็นเรื่องที่สมเหตุสมผล
+  </Card>
+  <Card title="ลึก ไม่ใช่แค่วิธีใช้" icon="approve-check">
+    ไม่ใช่แค่ "นี่คือ `Partial<T>`" แต่เป็น "นี่คือวิธีที่ `Partial` ถูกสร้างขึ้น และสร้างเองได้อย่างไร" คุณจะอ่านและเขียน type-level code ได้อย่างมั่นใจ
+  </Card>
+  <Card title="ไดอะแกรมที่อธิบายได้" icon="puzzle">
+    type widening, narrowing flow, conditional-type distribution และ module resolution เป็นไดอะแกรม Mermaid ที่รองรับธีม สองภาษา (English / ไทย) พร้อมบันทึกความคืบหน้า quiz
+  </Card>
+</CardGrid>

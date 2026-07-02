@@ -1,0 +1,154 @@
+---
+title: 'keyof & Indexed Access'
+description: 'keyof เพื่อเอา type ของ key และ T[K] เพื่อ lookup value type — สอง lookup ที่เป็นพลังของ mapped type และ utility type ส่วนใหญ่'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `keyof` ให้ key มาเป็น type
+
+operator `keyof` รับ object type แล้วสร้าง **union ของ key** ออกมาเป็น type
+
+```ts
+interface User {
+  id: number;
+  name: string;
+  active: boolean;
+}
+
+type UserKey = keyof User;
+//   ^? "id" | "name" | "active"
+```
+
+`keyof User` ไม่ใช่ value — มันคือ union type `"id" | "name" | "active"` นี่คือวัตถุดิบสำหรับการวนซ้ำบน type ซึ่งก็คือสิ่งที่ mapped type ทำพอดี
+
+สำหรับ object type ที่มี index signature `keyof` จะให้ index type ออกมา:
+
+```ts
+type Dict = { [key: string]: number };
+type DictKey = keyof Dict;
+//   ^? string | number   (JS object key เข้าถึงด้วย number ได้ด้วย)
+```
+
+## Indexed access: `T[K]` lookup value type
+
+พอมี key แล้ว **indexed access** จะ lookup *type* ของ value ที่ key นั้น — เวอร์ชันระดับ type ของ `obj[key]`
+
+```ts
+interface User {
+  id: number;
+  name: string;
+}
+
+type IdType = User["id"];
+//   ^? number
+
+type NameType = User["name"];
+//   ^? string
+```
+
+index ด้วย **union** ของ key เพื่อเอา union ของ value type ก็ได้:
+
+```ts
+type Values = User[keyof User];
+//   ^? number | string
+```
+
+`User[keyof User]` อ่านว่า "type ของทุก value ใน `User`" — เป็น idiom ที่ใช้บ่อยเพื่อเอา union ของ value type ทั้งหมดของ type
+
+<Mermaid title="keyof เอา key, indexed access เอา value type" code={lookupDiagram} />
+
+export const lookupDiagram = `flowchart LR
+  t["User { id: number, name: string }"] -->|keyof| keys["keys: id or name"]
+  keys -->|"T[key]"| vals["value types: number or string"]`;
+
+## index array และ tuple
+
+array และ tuple ก็เป็น object type เหมือนกัน indexed access จึงใช้ได้ — และ `[number]` คือทริกสำหรับ "element type"
+
+```ts
+type Nums = number[];
+type Elem = Nums[number];
+//   ^? number
+
+const tuple = [1, "two", true] as const;
+type TupleElem = (typeof tuple)[number];
+//   ^? 1 | "two" | true
+
+type First = (typeof tuple)[0];
+//   ^? 1
+```
+
+`Arr[number]` แปลว่า "index array นี้ด้วย number อะไรก็ได้" ซึ่งได้ union ของ element type ทั้งหมด — เป็นวิธีมาตรฐานในการเปลี่ยน array/tuple type ให้เป็น union
+
+## ทำไมสองตัวนี้สำคัญมาก
+
+แทบทุก utility type สร้างจาก `keyof` + indexed access + mapped type:
+
+```ts
+// Pick เขียนเอง — วนซ้ำ key ที่เลือก, lookup value type แต่ละตัว
+type MyPick<T, K extends keyof T> = {
+  [P in K]: T[P];
+};
+
+type NameOnly = MyPick<User, "name">;
+//   ^? { name: string }
+```
+
+`K extends keyof T` จำกัด key ให้เป็น key จริงของ `T`; `[P in K]` วนซ้ำมัน (mapped type, บทเรียนถัดไปถ้าคุณข้ามมา); `T[P]` lookup value type แต่ละตัว สาม primitive ได้เครื่องมือที่มีประโยชน์หนึ่งตัว
+
+<Callout title="สรุปบรรทัดเดียว">
+`keyof T` สร้าง **union ของ key ของ `T`** เป็น type; **indexed access** `T[K]` lookup **value type** ที่ key เหล่านั้น และ `T[keyof T]` ให้ union ของ value type ทั้งหมด `Arr[number]` เปลี่ยน array หรือ tuple type เป็น union ของ element สอง lookup นี้รวมกันคือฐานของ mapped type และแทบทุก utility type
+</Callout>
+
+export const quizKeyof = [
+  {
+    q: '`keyof User` ให้อะไรออกมาสำหรับ `interface User { id: number; name: string }`?',
+    options: [
+      'number | string (value type)',
+      '"id" | "name" (union ของ key)',
+      'runtime array ของ key',
+      'User',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'indexed access type `User["name"]` ให้อะไร?',
+    options: [
+      'string "name"',
+      'value type ที่ key นั้น — string',
+      'boolean ว่า key นั้นมีหรือไม่',
+      'keyof User',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะเอา element type ของ array type `T = string[]` อย่างไร?',
+    options: [
+      '`T[0]`',
+      '`T[number]`',
+      '`keyof T`',
+      '`T[string]`',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`User[keyof User]` แทนอะไร?',
+    options: [
+      'union ของชื่อ key ทั้งหมด',
+      'union ของ value type ทั้งหมดใน User',
+      'property แรกอย่างเดียว',
+      'never',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/keyof-and-indexed-access" questions={quizKeyof} />
+
+<ProgressTracker client:visible id="type-level-programming/keyof-and-indexed-access" />

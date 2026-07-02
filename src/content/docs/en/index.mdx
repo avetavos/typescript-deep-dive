@@ -1,0 +1,60 @@
+---
+title: TypeScript Deep Dive
+description: Master TypeScript's type system from first principles — structural typing, inference, generics, conditional and mapped types, template literals, the utility types, classes, the compiler, and typing real-world code — for developers who already know the basics and want to go deep.
+template: splash
+hero:
+  tagline: A standalone, intermediate→advanced course on TypeScript's type system. From structural typing and inference to generics, conditional & mapped types, template literals, recursive types, decorators, the compiler, and typing real APIs — every topic taught through annotated code that shows exactly what the compiler infers.
+  actions:
+    - text: Start here
+      link: /typescript/en/foundations/
+      icon: right-arrow
+      variant: primary
+    - text: Jump to Generics
+      link: /typescript/en/generics/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## What you'll learn
+
+<CardGrid>
+  <Card title="Foundations & Mental Model" icon="rocket">
+    Why TypeScript, types as sets of values, structural typing, and how inference really works. [Start →](/typescript/en/foundations/)
+  </Card>
+  <Card title="Everyday Types, Deep" icon="seti:typescript">
+    Literals & widening, unions & intersections, objects/arrays/tuples, functions, and narrowing. [Sharpen →](/typescript/en/everyday-types/)
+  </Card>
+  <Card title="Generics" icon="seti:plan">
+    Type parameters, constraints, conditional types, and how inference and `infer` work. [Generalize →](/typescript/en/generics/)
+  </Card>
+  <Card title="Type-Level Programming" icon="puzzle">
+    Mapped types, template literal types, keyof & indexed access, the utility types, and recursion. [Compute →](/typescript/en/type-level-programming/)
+  </Card>
+  <Card title="Classes & Advanced OOP" icon="seti:config">
+    Fields & access, this types, stage-3 decorators, and mixins. [Model →](/typescript/en/classes-and-oop/)
+  </Card>
+  <Card title="The Compiler & Tooling" icon="seti:powershell">
+    tsconfig that matters, module resolution, declaration files, and emit. [Configure →](/typescript/en/compiler-and-tooling/)
+  </Card>
+  <Card title="Practical Mastery" icon="approve-check">
+    Typing APIs & boundaries, nullability & never, performance pitfalls, and migration strategy. [Apply →](/typescript/en/practical-mastery/)
+  </Card>
+</CardGrid>
+
+## How this course works
+
+<CardGrid>
+  <Card title="Types as the star" icon="seti:typescript">
+    This is a course about the *type system*, not JavaScript syntax. Examples are annotated to show exactly what the compiler infers and where it errors — the way you actually read TypeScript.
+  </Card>
+  <Card title="Mental models first" icon="rocket">
+    Every topic starts from a model — types as sets of values, structural compatibility, inference sites — so advanced features stop feeling like magic and start feeling inevitable.
+  </Card>
+  <Card title="Depth, not just usage" icon="approve-check">
+    Not "here's `Partial<T>`" but "here's how `Partial` is built, and how to build your own." You'll read and write type-level code with confidence.
+  </Card>
+  <Card title="Diagrams that explain" icon="puzzle">
+    Type widening, narrowing flow, conditional-type distribution, and module resolution as theme-aware Mermaid diagrams. Bilingual (English / ไทย) with saved quiz progress.
+  </Card>
+</CardGrid>

@@ -1,0 +1,138 @@
+---
+title: 'Objects, Arrays & Tuples'
+description: 'Object types in depth — optional and readonly properties, index signatures — plus the real difference between arrays and tuples.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Object types and their modifiers
+
+An object type describes a shape by listing properties. Two modifiers carry a lot of meaning:
+
+```ts
+interface User {
+  readonly id: string;   // can't be reassigned after creation
+  name: string;          // required
+  email?: string;        // optional — string | undefined
+}
+```
+
+- **`readonly`** blocks reassignment of a property. It's compile-time only (nothing stops mutation at runtime), but it documents and enforces intent.
+- **`?` (optional)** means the property may be absent. Crucially, an optional property has type `T | undefined`, so you must handle the `undefined` case:
+
+```ts
+function greet(u: User) {
+  u.email.toLowerCase();
+  // ❌ Object is possibly 'undefined'.
+  u.email?.toLowerCase(); // ✅ optional chaining handles the absence
+}
+```
+
+`interface` and `type` are nearly interchangeable for object shapes; `interface` can be re-opened (declaration merging) and is idiomatic for public object contracts, while `type` can also express unions, tuples, and mapped types. Use `type` when you need those; either is fine for a plain object.
+
+## Index signatures: objects as maps
+
+When keys aren't known ahead of time, an **index signature** types them uniformly:
+
+```ts
+interface Scores {
+  [player: string]: number;
+}
+
+const s: Scores = { ada: 10, alan: 12 };
+s.grace = 9; // ✅ any string key, number value
+```
+
+The cost is honesty about absence: `s.someone` is typed `number` but is actually `undefined` at runtime. With the `noUncheckedIndexedAccess` compiler option, TypeScript makes this real by typing every index access as `number | undefined` — a strongly recommended setting.
+
+## Arrays vs tuples
+
+An **array** is a homogeneous, variable-length list: `number[]` is "any number of numbers." A **tuple** is a fixed-length list where each position has its own type:
+
+```ts
+let list: number[] = [1, 2, 3, 4];         // any length, all number
+let point: [number, number] = [10, 20];    // exactly two numbers
+let pair: [string, number] = ["age", 36];  // position 0 string, position 1 number
+```
+
+Tuples power patterns like React's `useState` return (`[value, setter]`) and named-ish coordinates. They also support **labels** (documentation only, no runtime effect) and rest elements:
+
+```ts
+type HttpResult = [status: number, body: string];
+type Args = [first: string, ...rest: number[]];
+```
+
+<Mermaid title="Array is homogeneous and variable; tuple is positional and fixed" code={arrTupDiagram} />
+
+export const arrTupDiagram = `flowchart TB
+  arr["number[]\nany length · all same type"] --> arrEx["[1, 2, 3, 4, ...]"]
+  tup["[string, number]\nfixed length · per-position type"] --> tupEx["['age', 36]"]`;
+
+## `readonly` arrays and tuples
+
+`readonly number[]` (or `ReadonlyArray<number>`) forbids mutating methods like `push` and index assignment — great for parameters you promise not to change. And recall from the last lesson: `as const` on an array literal produces exactly a `readonly` tuple of literals:
+
+```ts
+const rgb = [255, 128, 0] as const;
+// type: readonly [255, 128, 0]
+
+function paint(color: readonly number[]) { /* can't mutate color */ }
+```
+
+Preferring `readonly` array parameters is a cheap, high-value habit: it prevents a whole class of accidental-mutation bugs and communicates ownership.
+
+<Callout title="The one-line takeaway">
+Object types are shapes with `readonly` and optional (`?`) modifiers — remember an optional property is `T \| undefined` and must be handled. Index signatures type unknown keys uniformly (turn on `noUncheckedIndexedAccess` so absent keys read as `T \| undefined`). An **array** is variable-length and homogeneous; a **tuple** is fixed-length with a type per position. Prefer `readonly` arrays for parameters you won't mutate.
+</Callout>
+
+export const quizOAT = [
+  {
+    q: 'What is the type of an optional property `email?: string`?',
+    options: [
+      'string',
+      'string | undefined',
+      'string | null',
+      'any',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the `noUncheckedIndexedAccess` option change?',
+    options: [
+      'It disables index signatures',
+      'It types every index access as `T | undefined`, reflecting that the key might be absent',
+      'It makes all properties readonly',
+      'It speeds up compilation',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the difference between `number[]` and `[number, number]`?',
+    options: [
+      'They are identical',
+      '`number[]` is any length of numbers; `[number, number]` is a fixed-length tuple of exactly two',
+      '`[number, number]` allows any length',
+      '`number[]` can only hold two elements',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What type does `[255, 128, 0] as const` produce?',
+    options: [
+      'number[]',
+      'readonly [255, 128, 0] — a readonly tuple of literals',
+      '[number, number, number]',
+      'any[]',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/objects-arrays-tuples" questions={quizOAT} />
+
+<ProgressTracker client:visible id="everyday-types/objects-arrays-tuples" />

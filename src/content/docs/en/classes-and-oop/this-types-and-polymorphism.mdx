@@ -1,0 +1,125 @@
+---
+title: 'this Types & Polymorphism'
+description: 'The polymorphic this type for fluent chaining, this parameters, and how losing the this binding shows up in the type system.'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## `this` is also a type
+
+Inside a class, `this` is not only a value — it is a **type** that means "the type of the current instance." Crucially, in a subclass `this` refers to the *subclass*, not the class where the method was written. This is the **polymorphic `this` type**, and it makes fluent APIs work correctly across inheritance.
+
+## Fluent chaining with polymorphic `this`
+
+A builder that returns `this` from each method lets calls chain. Typing the return as `this` (not the class name) means subclass methods stay chainable too.
+
+```ts
+class QueryBuilder {
+  private parts: string[] = [];
+  where(cond: string): this {   // return type is `this`, not QueryBuilder
+    this.parts.push(cond);
+    return this;
+  }
+}
+
+class MySQLBuilder extends QueryBuilder {
+  limit(n: number): this {
+    return this;
+  }
+}
+
+new MySQLBuilder()
+  .where("a = 1") // returns MySQLBuilder (because of `this`), so...
+  .limit(10);     // ...limit() is still available. ✅
+```
+
+If `where` had been typed to return `QueryBuilder`, the chain would "forget" it was a `MySQLBuilder` and `.limit()` would fail. Polymorphic `this` preserves the real type through the chain.
+
+## `this` parameters
+
+A function can declare a fake first parameter named `this` to type what `this` must be when the function is called. It is erased on emit and does not affect the real argument list — it exists purely to type-check the calling context.
+
+```ts
+interface Card { title: string; }
+
+function render(this: Card) {
+  return this.title.toUpperCase();
+}
+
+// render();            // ❌ The 'this' context of type 'void' is not assignable...
+render.call({ title: "hi" }); // ✅ this is a Card here
+```
+
+This catches a whole class of bugs where a method relies on a `this` it might not actually get.
+
+## The lost-`this` pitfall, in the types
+
+The classic JavaScript footgun — passing a method as a callback and losing its `this` — has a type-level story too. When you pass `obj.method` by reference, the `this` binding is dropped:
+
+```ts
+class Counter {
+  count = 0;
+  increment() { this.count++; } // relies on `this`
+}
+
+const c = new Counter();
+const fn = c.increment;
+// fn(); // 💥 at runtime `this` is undefined
+```
+
+TypeScript can catch this when you opt in. The `strictBindCallApply` and (with a `this` parameter) the checker will flag an unbound method call. The idiomatic fixes are an **arrow-function field** (`increment = () => { ... }`, which binds `this` lexically) or binding at the call site (`c.increment.bind(c)`).
+
+<Callout title="The one-line takeaway">
+`this` is a type meaning "the current instance," and it is **polymorphic** — in a subclass it means the subclass. Return `this` (not the class name) from builder methods so chains keep their real subtype. A `this` **parameter** types the required calling context and is erased on emit. And the JavaScript lost-`this` bug has a type-level defense — bind with an arrow-function field or `.bind()`.
+</Callout>
+
+export const quizThis = [
+  {
+    q: 'What does the `this` type mean inside a class method?',
+    options: [
+      'Always the exact class where the method is defined',
+      'The type of the current instance — in a subclass, the subclass type (polymorphic)',
+      'The global object',
+      'A special any type',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why return `this` (rather than the class name) from a chainable builder method?',
+    options: [
+      'It is faster',
+      'So the chain preserves the real subtype and subclass methods stay available',
+      'It is required syntax',
+      'To avoid inheritance',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a `this` parameter used for?',
+    options: [
+      'To pass an extra runtime argument',
+      'To type-check the required calling context; it is erased and not a real argument',
+      'To make the method static',
+      'To rename the instance',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is an idiomatic fix for a method losing its `this` when passed as a callback?',
+    options: [
+      'Make the method static',
+      'Use an arrow-function class field, or bind at the call site with `.bind()`',
+      'Rename the method',
+      'There is no fix',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/this-types-and-polymorphism" questions={quizThis} />
+
+<ProgressTracker client:visible id="classes-and-oop/this-types-and-polymorphism" />

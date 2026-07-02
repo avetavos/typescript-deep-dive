@@ -1,0 +1,117 @@
+---
+title: 'Declaration Files'
+description: '.d.ts คืออะไร, declare และ ambient declaration ทำงานอย่างไร, การ type library ที่ไม่มี type และ package @types มาจากไหน'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type ที่ไม่มี implementation
+
+declaration file — `.d.ts` — คือไฟล์ที่มี **แต่ type ไม่มี runtime code** มันอธิบาย shape ของบางอย่างที่อยู่ที่อื่น: JavaScript library, global variable, module มันคือวิธีที่ TypeScript รู้ type ของ code ที่มันไม่ได้ compile เอง
+
+คุณใช้มันตลอดโดยไม่รู้ตัว เมื่อคุณ import `fs` ใน Node แล้วได้ autocomplete นั่นคือ `.d.ts` เมื่อ `document.querySelector` มี type นั่นคือ `lib.dom.d.ts` ตัว type กับ implementation เป็นไฟล์แยกกัน
+
+## `declare` และ ambient declaration
+
+keyword `declare` แปลว่า "เชื่อผมสิ ตัวนี้มีอยู่จริงตอน runtime — นี่คือ type ของมัน" มันแนะนำ **ambient** declaration: type ที่ไม่มี implementation แนบมา
+
+```ts
+// globals.d.ts
+declare const APP_VERSION: string;      // injected by the bundler at build time
+declare function gtag(...args: any[]): void; // a global from a script tag
+
+// now usable anywhere, fully typed, with no import
+console.log(APP_VERSION);
+gtag("event", "page_view");
+```
+
+ถ้าไม่มี `declare` การเขียน `const APP_VERSION: string` จะเป็น *value* declaration และ compiler จะคาดหวัง initializer และ emit code ออกมา `declare` บอกว่า: นี่เป็นแค่คำสัญญาเรื่อง type ล้วน ๆ ไม่ต้อง emit อะไร
+
+## การ type library ที่ไม่มี type
+
+สมมติคุณ install JavaScript library เล็ก ๆ ที่ไม่มี type คุณอธิบาย shape ของมันเองได้ด้วย module declaration:
+
+```ts
+// legacy-lib.d.ts
+declare module "legacy-lib" {
+  export function parse(input: string): { ok: boolean; value: number };
+  export const version: string;
+}
+```
+
+ตอนนี้ `import { parse } from "legacy-lib"` มี type ครบ แม้ library จะ ship JavaScript ธรรมดามา คุณได้เติม contract ที่ขาดไปด้วยมือ
+
+## DefinitelyTyped และ `@types`
+
+ส่วนใหญ่มีคนเขียน declaration พวกนั้นให้คุณแล้ว **DefinitelyTyped** คือ repository ชุมชนขนาดใหญ่ของไฟล์ `.d.ts` สำหรับ JavaScript library หลายพันตัว publish ภายใต้ scope `@types/*`:
+
+```bash
+npm install --save-dev @types/lodash
+```
+
+`tsc` หยิบ package `@types/*` จาก `node_modules` มาใช้อัตโนมัติ การ install `@types/lodash` จึงทำให้ `import _ from "lodash"` มี type ทันที library สมัยใหม่หลายตัว ship type ของตัวเองมาใน package (declare ผ่าน field `"types"` ใน `package.json` ของมัน) ซึ่งกรณีนั้นคุณไม่ต้องใช้ package `@types` เลย
+
+## การ emit declaration ของตัวเอง
+
+ถ้าคุณ publish library ที่เขียนด้วย TypeScript คุณอยาก ship ไฟล์ `.d.ts` เพื่อให้ผู้ใช้ *ของคุณ* ได้ type เปิดการ emit สำหรับ declaration:
+
+```json
+{ "compilerOptions": { "declaration": true } }
+```
+
+ตอนนี้ `tsc` ผลิต `.d.ts` ไว้ข้าง ๆ `.js` ที่ emit แต่ละไฟล์ แล้วคุณชี้ field `"types"` ใน `package.json` ไปที่ entry declaration ผู้ใช้ของคุณ import library แล้วได้ type information ครบ — กลไกเดียวกับที่ทั้ง ecosystem ใช้
+
+<Callout title="The one-line takeaway">
+`.d.ts` คือ type ที่ไม่มี runtime code `declare` แนะนำ ambient declaration แบบนั้น (global หรือ `declare module` สำหรับ package ที่ไม่มี type) library ส่วนใหญ่ถูกครอบคลุมทั้งจาก type ที่ ship มาใน package หรือจาก package `@types/*` จาก DefinitelyTyped ที่ `tsc` หยิบมาใช้อัตโนมัติ เมื่อคุณ publish library ตั้ง `declaration: true` เพื่อให้ผู้ใช้ได้ type ด้วย
+</Callout>
+
+export const quizDecl = [
+  {
+    q: 'ไฟล์ `.d.ts` มีอะไรอยู่ข้างใน?',
+    options: [
+      'แต่ type เท่านั้น — ไม่มี runtime code',
+      'JavaScript ที่ minify แล้ว',
+      'test case',
+      'compiler configuration',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'keyword `declare` ทำอะไร?',
+    options: [
+      'สร้าง runtime constant',
+      'แนะนำ ambient declaration — คำสัญญาเรื่อง type ที่ไม่มี code emit ออกมา',
+      'import module',
+      'mark class เป็น abstract',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`@types/lodash` และ package คล้าย ๆ กันมาจากไหน?',
+    options: [
+      'ถูก generate ตอน runtime',
+      'DefinitelyTyped, repository ชุมชนของ declaration file ที่ publish ภายใต้ `@types/*`',
+      'npm registry generate ให้อัตโนมัติ',
+      'ship มาข้างใน TypeScript compiler',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะ ship type อย่างไรเมื่อ publish TypeScript library ของตัวเอง?',
+    options: [
+      'copy ไฟล์ .ts ด้วยมือ',
+      'เปิด `declaration: true` ให้ tsc emit ไฟล์ `.d.ts` แล้วชี้ field `types` ใน `package.json` ไปที่มัน',
+      'publish ขึ้น DefinitelyTyped เอง',
+      'ทำไม่ได้ — ผู้ใช้ต้อง retype เอง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/declaration-files" questions={quizDecl} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/declaration-files" />

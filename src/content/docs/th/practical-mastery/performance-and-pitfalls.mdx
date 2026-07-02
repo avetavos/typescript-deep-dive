@@ -1,0 +1,102 @@
+---
+title: 'Performance & Pitfalls'
+description: 'ทำไม type checker ช้าลง, footgun ที่กัด codebase จริง และวิธี diagnose กับ simplify เมื่อ type ฉลาดเกินไป'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type มี cost ตอน compile
+
+การ type check คือการคำนวณจริง และ type ที่ฉลาดเกินไปทำให้ `tsc` คลานหรือ editor หน่วงได้ type system (ที่ขึ้นชื่อว่า) ทรงพลังพอที่จะเป็นภาษาโปรแกรมของตัวเอง — และเหมือน runtime code มันเขียนในแบบที่ evaluate แพงได้
+
+ตัวการที่พบบ่อย:
+
+- **union ขนาดใหญ่** union ของ string literal เป็นพัน ๆ ตัว (มักถูก generate) ทวีคูณงานทุกที่ที่ถูกใช้
+- **recursion ลึก** recursive conditional/mapped type ที่เดิน tuple หรือ string ยาว ๆ ชน exponential blow-up และ instantiation-depth limit
+- **distributive conditional บน union ใหญ่** conditional type distribute บนทุก member — บน union ใหญ่ก็คือ instantiation จำนวนมาก
+- **inference ที่ทำงานหนักเกินไป** API ที่ generic มากบังคับให้ checker แก้หา type argument หลายตัวในทุก call
+
+คุณมักไม่สังเกตจนกว่าไฟล์หนึ่งใช้เวลา check เป็นวินาที หรือ red squiggle ใน editor ตามการพิมพ์ไม่ทัน นั่นคือสัญญาณให้มองที่ type ไม่ใช่แค่ code
+
+## footgun ที่พบบ่อย
+
+นอกจาก performance เหล่านี้กัดทีมจริง:
+
+- **type ฉลาดเกินจนไม่มีใครอ่านออก** conditional type 40 บรรทัดที่ประหยัด duplicate ไปสามบรรทัด มักขาดทุนสุทธิ ความฉลาดคือ cost ที่ผู้อ่านในอนาคตทุกคนต้องจ่าย
+- **`any` leak** `any` ตัวเดียวลาม: `any.foo` เป็น `any` มันจึงปิดการ check เงียบ ๆ ทุกที่ที่มันแตะ แบนมันด้วย `noImplicitAny` และ lint rule
+- **cast ที่โกหก** `x as Foo` บอก compiler ให้เลิก check — ถ้า `x` ไม่ใช่ `Foo` จริง คุณเพิ่งซ่อน bug ไว้ double cast (`x as unknown as Foo`) คือธงแดงขนาดยักษ์
+- **เรื่องเซอร์ไพรส์ของ enum** numeric `enum` ยอมให้ number อะไรก็ได้เป็น value และ emit runtime code; `const` object กับ `as const` หรือ string-literal union มักชัดกว่าและถูกกว่า
+- **ใช้ `as` เกินจำเป็น** การคว้า `as` มา silence error มักหมายความว่าคุณเลิก model ปัญหาแล้วเริ่มเถียงกับ compiler
+
+<Mermaid title="any ตัวเดียว leak ทั่ว codebase อย่างไร" code={anyDiagram} />
+
+export const anyDiagram = `flowchart LR
+  src["one any\n(bad cast / JSON.parse)"] --> a1["any.user"]
+  a1 --> a2["any.user.name"]
+  a2 --> a3["passed to typed fn\nchecks silently skipped"]`;
+
+## การ diagnose
+
+เมื่อการ check รู้สึกช้า ให้วัดแทนการเดา:
+
+- `tsc --extendedDiagnostics` พิมพ์ว่าเวลาและ memory ไปไหน (check time, instantiation count, memory)
+- `tsc --generateTrace traceDir` สร้าง trace ที่เปิดใน profiler เพื่อหา type ที่แพงได้
+- bisect: comment type ที่สงสัยออกแล้วดูตัวเลขขยับ
+
+การแก้เกือบทุกครั้งคือ **simplify**: แทน conditional type ที่วีรบุรุษด้วย union ธรรมดา, แตก type ยักษ์เป็นชิ้นเล็กที่มีชื่อ หรือยอมรับ type ที่หลวมกว่านิดหน่อยแต่ถูกกว่า 10 เท่าและปลอดภัยพอ ๆ กันในทางปฏิบัติ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+การ type check คือการคำนวณ union ใหญ่, recursion ลึก และ distributive conditional จึงทำให้ `tsc` และ editor ช้าได้ footgun ประจำวัน — `any` ที่ leak, cast ที่โกหก, type ฉลาดจนอ่านไม่ออก และ numeric enum — ทำให้เสียทั้งความถูกต้องและความชัดเจน เมื่ออะไรช้า ให้วัดด้วย `--extendedDiagnostics` / `--generateTrace` แล้ว **simplify**: type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ไม่มีใคร maintain ได้
+</Callout>
+
+export const quizPerf = [
+  {
+    q: 'อะไรที่มักทำให้ type checker ช้า?',
+    options: [
+      'ใช้ const แทน let',
+      'union ใหญ่, recursive type ลึก และ distributive conditional บน union ใหญ่',
+      'เพิ่ม return type annotation',
+      'ตั้งชื่อตัวแปรให้ชัดเจน',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม `any` ตัวเดียวถึงอันตราย?',
+    options: [
+      'มัน throw ตอน runtime',
+      'มัน leak — เข้าถึงอะไรบน any ก็ยังเป็น any ปิดการ check downstream เงียบ ๆ',
+      'มันทำให้ compile time เพิ่มเป็นสองเท่า',
+      'มัน assign ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`x as Foo` ทำอะไรจริง ๆ?',
+    options: [
+      'validate ตอน runtime ว่า x เป็น Foo',
+      'บอก compiler ให้ปฏิบัติต่อ x เป็น Foo โดยไม่ check — ซ่อน bug ถ้ามันผิด',
+      'แปลง x เป็น instance ของ Foo',
+      'สร้าง copy ของ x',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อ type ทั้งฉลาดและช้า move ที่ถูกต้องมักคืออะไร?',
+    options: [
+      'เพิ่ม type parameter อีก',
+      'simplify — type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ maintain ไม่ได้',
+      'ปิด type check สำหรับไฟล์นั้น',
+      'cast ทุกอย่างเป็น any',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/performance-and-pitfalls" questions={quizPerf} />
+
+<ProgressTracker client:visible id="practical-mastery/performance-and-pitfalls" />

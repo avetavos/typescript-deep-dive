@@ -1,0 +1,82 @@
+---
+title: 'Type-Level Programming'
+description: 'type คือภาษาที่คุณเขียนโปรแกรมได้ — mapped types, keyof, template literals, utility types และ recursion จุดที่ TypeScript เลิกแค่อธิบายข้อมูลแล้วเริ่ม transform มัน'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type คือภาษาหนึ่ง
+
+ที่ผ่านมา type ทำหน้าที่ *อธิบาย* ข้อมูล ในโมดูลนี้มันจะเริ่ม *คำนวณ* จากข้อมูลนั้น จาก type หนึ่งคุณ derive อีก type ออกมาได้ — ทำให้ทุก field เป็น optional, pick key แค่บางส่วน, ดึง return type ของ function ออกมา หรือ parse string ให้เป็น union — ทั้งหมดที่ระดับ type โดย compiler ประเมินก่อน code รัน
+
+นี่คือการเขียนโปรแกรมจริง ๆ type system มีตัวแปร (type parameter), การ branch (conditional type), การวนซ้ำ (mapped type และ recursion) และ function (generic type alias) มีคนเขียน arithmetic หรือแม้แต่ parser ด้วย type ล้วน ๆ คุณคงไม่ทำแบบนั้นในงานจริง — แต่เข้าใจกลไกนี้คือสิ่งที่ทำให้คุณ *อ่าน* type ของ library ออก และเขียน type เจ๋ง ๆ ไม่กี่ตัวที่คุ้มค่าจริง
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| Mapped types | วนซ้ำ key ของ type เพื่อ transform มัน — สร้าง `Partial` และ `Readonly` เอง |
+| keyof & indexed access | `keyof T` และ `T[K]` — การ lookup ที่เป็นฐานของทุกอย่าง |
+| Template literal types | คำนวณ string type และ pattern-match string ด้วย `infer` |
+| The utility types | ตัว built-in และวิธีที่มันถูก implement จริง |
+| Recursive types | type ที่เรียกตัวเอง — และจุดที่ compiler ขีดเส้น |
+
+## ชิ้นส่วนต่าง ๆ ประกอบกัน
+
+<Mermaid title="เครื่องมือระดับ type ประกอบกันอย่างไร" code={composeDiagram} />
+
+export const composeDiagram = `flowchart TB
+  keyof["keyof T\n(get the keys)"] --> mapped["Mapped types\n(iterate the keys)"]
+  indexed["T[K]\n(look up value types)"] --> mapped
+  cond["Conditional types + infer\n(branch and capture)"] --> util["Utility types\n(Pick, Exclude, ReturnType)"]
+  mapped --> util
+  tmpl["Template literals\n(compute strings)"] --> util
+  util --> rec["Recursion\n(repeat until done)"]`;
+
+แทบทุก type ขั้นสูงในโลกจริงคือการผสม 5 primitive: `keyof` เพื่อเอา key, indexed access เพื่อ lookup value type, mapped type เพื่อวนซ้ำ, conditional type กับ `infer` เพื่อ branch และ capture, และ recursion เพื่อทำซ้ำ เรียน 5 ตัวนี้แล้วไฟล์ `.d.ts` ของ library จะเลิกเป็นอักษรอียิปต์โบราณ
+
+<Callout title="การเปลี่ยนมุมมอง">
+generic อย่าง `Box<T>` คือ *function* ระดับ type — รับ type แล้วคืน type โมดูลนี้ว่าด้วยการเขียน function แบบนั้นให้ซับซ้อนขึ้น: ตัวที่วน loop over key, branch ตามเงื่อนไข และเรียกตัวเอง compiler คือ interpreter ของคุณ และเส้นหยักสีแดงคือการประเมินที่ล้มเหลว
+</Callout>
+
+export const quizIndex = [
+  {
+    q: '"type-level programming" หมายความว่าอะไร?',
+    options: [
+      'เขียน runtime function ที่ตรวจ type',
+      'คำนวณ type ใหม่จาก type เดิม — compiler ประเมินมันก่อน runtime',
+      'วิธีรัน JavaScript ที่เร็วขึ้น',
+      'generate เอกสารจาก type',
+    ],
+    answer: 1,
+  },
+  {
+    q: '5 primitive ใดที่ประกอบกันเป็น type ขั้นสูงส่วนใหญ่?',
+    options: [
+      'class, interface, enum, namespace, module',
+      'keyof, indexed access, mapped type, conditional type กับ infer และ recursion',
+      'Promise, async, await, generator, iterator',
+      'let, const, var, function, return',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'generic type อย่าง `Box<T>` เข้าใจได้ดีที่สุดว่าเป็น:',
+    options: [
+      'runtime container class',
+      'function ระดับ type ที่รับ type แล้วคืน type',
+      'JavaScript object',
+      'compiler flag',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="type-level-programming/index" />

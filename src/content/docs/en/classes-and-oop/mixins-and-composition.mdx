@@ -1,0 +1,133 @@
+---
+title: 'Mixins & Composition'
+description: 'Building reusable behavior from composable class factories instead of deep inheritance, and how to type them with generic constructor types.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem with deep inheritance
+
+Single inheritance forces every capability into one rigid chain. If `Timestamped`, `Serializable`, and `Comparable` are all behaviors you want to share across unrelated classes, a linear hierarchy cannot express that — you would have to pick one parent and duplicate the rest.
+
+**Mixins** solve this by making a behavior a *function* that adds features to any base class, so a class can compose several.
+
+## A mixin is a class factory
+
+A mixin is a function that takes a base class (a constructor) and returns a new class that `extends` it with extra behavior.
+
+```ts
+type Constructor = new (...args: any[]) => {};
+
+function Timestamped<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    createdAt = new Date();
+  };
+}
+
+function Activatable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    isActive = false;
+    activate() { this.isActive = true; }
+  };
+}
+
+class User {
+  constructor(public name: string) {}
+}
+
+// Compose several behaviors onto User:
+const SmartUser = Activatable(Timestamped(User));
+
+const u = new SmartUser("Ada");
+u.createdAt; // from Timestamped
+u.activate(); // from Activatable
+u.name;       // from User
+```
+
+The generic `TBase extends Constructor` constraint is what makes this type-safe: it says "whatever class you pass in, I return a class that has all of *its* members plus the new ones." TypeScript tracks the accumulated shape through each wrap.
+
+<Mermaid title="Inheritance is a chain; mixins compose" code={mixinDiagram} />
+
+export const mixinDiagram = `flowchart LR
+  base["class User"] --> m1["Timestamped(...)\n+ createdAt"]
+  m1 --> m2["Activatable(...)\n+ activate()"]
+  m2 --> result["SmartUser\nhas all three"]`;
+
+## Constrained mixins
+
+Sometimes a mixin needs the base class to already have certain members. Constrain the base to a constructor that produces the required shape:
+
+```ts
+type Positioned = new (...args: any[]) => { x: number; y: number };
+
+function Movable<TBase extends Positioned>(Base: TBase) {
+  return class extends Base {
+    move(dx: number, dy: number) {
+      this.x += dx; // ✅ allowed — the constraint guarantees x exists
+      this.y += dy;
+    }
+  };
+}
+```
+
+Now `Movable` can only be applied to a base whose instances have `x` and `y`, and inside it those members are known to exist.
+
+## Composition over inheritance
+
+Mixins are one form of a broader principle: **prefer assembling behavior from small, independent pieces over deriving it through a rigid hierarchy.** Often you do not even need mixins — plain object composition (holding collaborators as fields and delegating to them) is simpler still and avoids the `class`-factory machinery entirely. Reach for mixins when you genuinely need the composed result to *be* a class with all behaviors merged onto its instances.
+
+<Callout title="The one-line takeaway">
+A **mixin** is a function that takes a base class and returns a subclass with extra behavior, typed with a generic constructor constraint (`TBase extends new (...args: any[]) => {}`) so the compiler tracks the merged shape. Mixins let one class compose several independent behaviors that a single inheritance chain cannot express. They are one tool for **composition over inheritance** — and plain object composition is often simpler still.
+</Callout>
+
+export const quizMixins = [
+  {
+    q: 'What is a mixin in TypeScript?',
+    options: [
+      'A special keyword',
+      'A function that takes a base class and returns a subclass extending it with extra behavior',
+      'An interface with default methods',
+      'A decorator applied to a class',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why do mixins use a generic constraint like `TBase extends new (...args: any[]) => {}`?',
+    options: [
+      'To make the code shorter',
+      'So the compiler tracks the base class members and merges them with the new ones in the returned type',
+      'To disable type checking',
+      'It is only decorative',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What problem do mixins solve that single inheritance cannot?',
+    options: [
+      'Making classes run faster',
+      'Composing several independent behaviors onto unrelated classes without a single rigid parent chain',
+      'Removing the need for constructors',
+      'Enforcing runtime privacy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When is plain object composition preferable to a mixin?',
+    options: [
+      'Never — mixins are always better',
+      'When you can hold collaborators as fields and delegate, without needing the result to be one merged class',
+      'Only in JavaScript, not TypeScript',
+      'When you need runtime privacy',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/mixins-and-composition" questions={quizMixins} />
+
+<ProgressTracker client:visible id="classes-and-oop/mixins-and-composition" />

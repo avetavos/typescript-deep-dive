@@ -1,0 +1,77 @@
+---
+title: 'Practical Mastery'
+description: 'Turning type knowledge into judgment — typing the boundary with the untyped world, nullability, performance, and migrating real codebases.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Where knowledge becomes judgment
+
+You now know how the type system *works*. This module is about using it *well* — the judgment calls that separate someone who can pass the compiler from someone who ships maintainable TypeScript.
+
+The through-line is one uncomfortable truth: **the compiler only knows what you tell it.** Types are a model of your program, and a model can be wrong. An `any`, a bad cast, or a JSON blob from the network can all lie to the checker. Mastery is knowing where the model meets reality and defending that boundary.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Typing APIs & boundaries | `unknown` vs `any`, validating external data, branded types |
+| Nullability & never | `strictNullChecks`, Result types, exhaustiveness with `never` |
+| Performance & pitfalls | Why `tsc` gets slow, common footguns, when to simplify |
+| Migration strategy | Moving a JS codebase to TS without a big-bang rewrite |
+
+## The one idea tying it together
+
+<Mermaid title="The typed island in an untyped sea" code={boundaryDiagram} />
+
+export const boundaryDiagram = `flowchart LR
+  world["untyped world\nnetwork, JSON, any, casts"] -->|validate at the edge| edge["boundary\n(guards, schemas)"]
+  edge -->|trusted types| inside["your typed code\n(safe to trust)"]`;
+
+Everything here is a variation on **validate at the edge, trust inside**. Push the uncertainty to the boundary of your program, turn it into real types there, and let the whole interior enjoy the guarantees. Get the boundary right and the type system pays you back everywhere else.
+
+<Callout title="The mental shift">
+Stop treating a green compiler as proof of correctness. It proves your code is *internally consistent* with the types you wrote — nothing more. If those types don't match runtime reality (unvalidated input, a wrong `as`, a stray `any`), the compiler is confidently wrong. The practitioner's job is to make the types *earn* their trust at the edges.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is the central truth of this module?',
+    options: [
+      'TypeScript makes runtime errors impossible',
+      'The compiler only knows what you tell it — types are a model that can be wrong',
+      'Types always match runtime reality',
+      'Validation is unnecessary with strict mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the recurring strategy for handling the untyped world?',
+    options: [
+      'Cast everything to the type you expect',
+      'Validate at the edge, then trust the types inside',
+      'Use `any` everywhere for flexibility',
+      'Disable strict mode at boundaries',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A project compiles with zero errors. What does that guarantee?',
+    options: [
+      'The program is correct at runtime',
+      'The code is internally consistent with the types you wrote — no more',
+      'There are no bugs',
+      'All external data is valid',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="practical-mastery/index" />

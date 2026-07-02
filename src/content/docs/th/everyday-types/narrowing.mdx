@@ -1,0 +1,189 @@
+---
+title: 'Narrowing'
+description: 'control flow เปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะได้อย่างไร — typeof, in, discriminated union, exhaustiveness ด้วย never, type guard และ assertion function'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## จุดประสงค์ของ union คือการ narrow
+
+union มีประโยชน์ก็เพราะคุณ **narrow** มันได้ TypeScript อ่าน control flow ของคุณ — `if`, `switch`, `typeof`, `return` — แล้วย่อ type ในแต่ละ branch ลงเหลือ case ที่ต้องเป็นจริงตรงนั้น นี่คือ *control-flow analysis* หนึ่งในส่วนที่ฉลาดที่สุดของ compiler
+
+```ts
+function printId(id: string | number) {
+  if (typeof id === "string") {
+    id.toUpperCase(); // ✅ ตรงนี้ id เป็น string
+  } else {
+    id.toFixed(2);    // ✅ ตรงนี้ id เป็น number
+  }
+}
+```
+
+ใน `if` type เป็น `string`; branch `else` ตัด `string` ออกจาก union เหลือ `number` คุณไม่ได้ cast อะไรเลย — compiler narrow จาก runtime check จริงที่มันเข้าใจ
+
+## narrowing operator ที่มีมาให้
+
+TypeScript เข้าใจ JavaScript check ทั่วไปหลายตัวและ narrow จากมัน:
+
+- **`typeof x`** — narrow primitive: `"string"`, `"number"`, `"boolean"`, `"object"`, `"function"`, `"undefined"`, `"symbol"`, `"bigint"`
+- **`instanceof`** — narrow เป็น class จาก prototype chain
+- **`"key" in obj`** — narrow object union ด้วยการมี property
+- **truthiness** — `if (x)` ตัด `null`, `undefined`, `0`, `""`, `false` ออกจากความเป็นไปได้
+- **equality** — `if (x === "a")` narrow เป็น literal นั้น; เทียบสองตัวแปร narrow ทั้งคู่
+
+```ts
+function area(shape: Circle | Square) {
+  if ("radius" in shape) {
+    return Math.PI * shape.radius ** 2; // shape เป็น Circle
+  }
+  return shape.side ** 2;               // shape เป็น Square
+}
+```
+
+## Discriminated union: pattern ที่ควรหยิบมาใช้
+
+วิธีที่สะอาดที่สุดในการ model "หนึ่งใน object shape หลายแบบ" คือ **discriminated union**: ทุก member มี literal field ร่วมกัน (ตัว *discriminant* หรือ *tag*) แล้ว switch บน field นั้นเพื่อ narrow เหลือ member ที่ถูก
+
+```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "rect"; width: number; height: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2; // s เป็น member circle
+    case "square": return s.side ** 2;
+    case "rect":   return s.width * s.height;
+  }
+}
+```
+
+<Mermaid title="discriminant field narrow union เหลือ member เดียว" code={discDiagram} />
+
+export const discDiagram = `flowchart TB
+  u["Shape (union)\ncircle | square | rect"] -->|switch on kind| c["kind === circle\n→ radius available"]
+  u --> sq["kind === square\n→ side available"]
+  u --> r["kind === rect\n→ width, height available"]`;
+
+pattern นี้อยู่ทุกที่: Redux action, API response, state machine, result type เวลาคุณเผลอจะหยิบ class hierarchy มา model variant discriminated union มักเรียบง่ายและปลอดภัยกว่า
+
+## Exhaustiveness ด้วย `never`
+
+นี่คือของรางวัล เพิ่ม branch `default` ที่ assign value เข้า `never` แล้ว compiler จะ error ในวันที่มีคนเพิ่ม union member ใหม่แล้วลืม handle:
+
+```ts
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2;
+    case "square": return s.side ** 2;
+    case "rect":   return s.width * s.height;
+    default:
+      const _exhaustive: never = s; // ❌ error ถ้ามี kind ใหม่ที่ยังไม่ handle
+      return _exhaustive;
+  }
+}
+```
+
+ใน `default` ทุก case ที่รู้จักถูก narrow ออกไปหมด `s` จึงเป็น `never` เพิ่ม member `"triangle"` แล้ว `s` จะไม่ใช่ `never` ตรงนั้นอีก — การ assign compile ไม่ผ่าน ชี้ตรงไป case ที่ขาด เปลี่ยน "ฉัน handle ครบทุก variant หรือยัง?" จากคำถามใน code review เป็น compile error
+
+## Custom type guard: `x is T`
+
+เมื่อ narrowing ต้องใช้ logic เอง เขียน **type-guard function** ที่ return type เป็น *type predicate* `x is T`:
+
+```ts
+function isString(x: unknown): x is string {
+  return typeof x === "string";
+}
+
+function handle(v: unknown) {
+  if (isString(v)) {
+    v.toUpperCase(); // ✅ v ถูก narrow เป็น string ด้วย guard
+  }
+}
+```
+
+predicate คือคำสัญญาต่อ compiler: "ถ้าอันนี้ return true ให้มอง argument เป็น `T`" มันคือวิธี narrow `unknown` จากข้อมูลภายนอก และวิธีที่ library เปิด validation ที่ type system เชื่อถือ
+
+## Assertion function: `asserts x is T`
+
+ญาติของ type guard คือ **assertion function** ซึ่ง throw แทนที่จะ return boolean และ narrow ให้ตลอด scope ที่เหลือ:
+
+```ts
+function assert(cond: unknown, msg: string): asserts cond {
+  if (!cond) throw new Error(msg);
+}
+
+function use(v: string | null) {
+  assert(v !== null, "v must be set");
+  v.toUpperCase(); // ✅ v เป็น string ตั้งแต่ตรงนี้ไป — assert ตัด null ออก
+}
+```
+
+หลังเรียก compiler รู้ว่าเงื่อนไขที่ assert เป็นจริง (ไม่งั้นคง throw ไปแล้ว) เลย narrow ตาม นี่คือวิธีที่ helper แบบ `assert` และ `assert` ของ Node ให้ type narrowing มาฟรี ๆ
+
+<Callout title="สรุปหนึ่งบรรทัด">
+narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บนมัน แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) ที่ compiler เชื่อถือ
+</Callout>
+
+export const quizNarrow = [
+  {
+    q: 'control-flow narrowing คืออะไร?',
+    options: [
+      'การ optimize performance ตอน runtime',
+      'compiler ย่อ union type ในแต่ละ branch จาก check อย่าง typeof และ in',
+      'วิธี cast any เป็น type เฉพาะ',
+      'การลบ branch ที่ไม่ใช้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อะไรนิยาม discriminated union?',
+    options: [
+      'ทุก member มี literal tag field ร่วมกันที่ switch ได้',
+      'ทุก member เป็น class',
+      'member ไม่มี property ร่วมกัน',
+      'มันใช้ intersection แทน union',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'การ assign เข้า `never` ใน branch default ช่วยอะไร?',
+    options: [
+      'ทำให้ switch เร็วขึ้น',
+      'บังคับให้เกิด compile error ถ้ามี union member ใหม่ที่ยังไม่ handle — exhaustiveness',
+      'log error ตอน runtime',
+      'ไม่มีผล',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'function ที่ return `x is string` (type predicate) ทำอะไร?',
+    options: [
+      'return ค่า string ของ x',
+      'บอก compiler ว่าเมื่อมัน return true ให้มอง argument เป็น string',
+      'throw ถ้า x ไม่ใช่ string',
+      'แปลง x เป็น string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'assertion function `asserts cond` ทำอะไรหลังถูกเรียก?',
+    options: [
+      'return boolean ให้ผู้เรียก check',
+      'narrow type ให้ตลอด scope ที่เหลือ เพราะไม่งั้นคงจะ throw ไปแล้ว',
+      'ไม่ทำอะไรตอน compile',
+      'run เฉพาะใน test',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/narrowing" questions={quizNarrow} />
+
+<ProgressTracker client:visible id="everyday-types/narrowing" />

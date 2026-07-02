@@ -1,0 +1,121 @@
+---
+title: 'tsconfig, Deep'
+description: 'The compiler options that actually change your safety and output — strict and its family, target, module, and the strict-adjacent flags worth turning on.'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Start from strict
+
+`tsconfig.json` has dozens of options, but a handful decide whether TypeScript is actually protecting you. The single most important one is `strict`. It is not one check — it is a bundle that turns on a family of flags at once, and every one of them catches real bugs.
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true
+  }
+}
+```
+
+Turn `strict` on from day one. Adopting it later, on a large codebase, means fixing hundreds of errors at once — far harder than never letting them accumulate.
+
+## What `strict` actually turns on
+
+`strict: true` is shorthand for this whole family:
+
+| Flag (inside `strict`) | What it catches |
+|------------------------|-----------------|
+| `strictNullChecks` | `null` and `undefined` are no longer silently in every type — the biggest win |
+| `noImplicitAny` | A value that would fall back to `any` becomes an error you must resolve |
+| `strictFunctionTypes` | Function parameters are checked contravariantly — unsafe callbacks are caught |
+| `strictBindCallApply` | `bind`, `call`, and `apply` are type-checked against the function signature |
+| `strictPropertyInitialization` | Class fields must be assigned in the constructor (or marked optional) |
+| `useUnknownInCatchVariables` | `catch (e)` gives you `unknown`, not `any`, forcing you to narrow |
+| `alwaysStrict` | Emits `"use strict"` and parses in strict mode |
+
+The headline is `strictNullChecks`. Without it, `string` secretly includes `null` and `undefined`, and the compiler cannot warn you about the single most common runtime crash in JavaScript. With it, `null` and `undefined` are their own types that you must handle deliberately.
+
+## `target`, `module`, and `lib`
+
+Three options describe the world your code runs in:
+
+- **`target`** — which JavaScript version `tsc` emits. `ES2022` is a safe modern default; a lower target down-levels newer syntax into older equivalents.
+- **`module`** — the module format of the output (`NodeNext`, `ESNext`, `CommonJS`, ...). This should match how your code is actually loaded.
+- **`lib`** — which built-in type declarations are available (for example, `DOM` for browser globals, `ES2022` for newer runtime methods). If you use `structuredClone` or `Array.prototype.at`, your `lib` must include a version that declares them.
+
+## Strict-adjacent flags worth adding
+
+`strict` is the floor, not the ceiling. Two more flags catch bugs that `strict` alone misses:
+
+```ts
+// noUncheckedIndexedAccess: true
+const arr = [1, 2, 3];
+const x = arr[10]; // type is now `number | undefined`, not `number`
+x.toFixed(); // ❌ Object is possibly 'undefined' — exactly the bug you want caught
+```
+
+- **`noUncheckedIndexedAccess`** — indexing an array or record can return `undefined` (index 10 of a 3-element array does), so the type reflects that. Enormously effective against out-of-bounds bugs.
+- **`exactOptionalPropertyTypes`** — distinguishes a property set to `undefined` from a property that is absent, so an optional `name?: string` no longer silently accepts `name: undefined`.
+
+<Callout title="The one-line takeaway">
+Turn on `strict: true` from day one — it bundles a family of checks, and `strictNullChecks` alone eliminates the most common class of JavaScript crashes. Set `target`, `module`, and `lib` to match your runtime, then add `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` to catch the bugs strict does not.
+</Callout>
+
+export const quizTsconfig = [
+  {
+    q: 'What is `strict: true`?',
+    options: [
+      'A single check for null values',
+      'A shorthand that enables a whole family of strict checks at once',
+      'A flag that disables type-checking',
+      'A performance optimization',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `strictNullChecks` change?',
+    options: [
+      'It makes the build faster',
+      '`null` and `undefined` become distinct types you must handle, instead of being silently in every type',
+      'It forbids using null entirely',
+      'It only affects arrays',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'With `noUncheckedIndexedAccess`, what is the type of `arr[i]` for `const arr: number[]`?',
+    options: [
+      '`number`',
+      '`number | undefined`',
+      '`any`',
+      '`never`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why should you enable `strict` at the start of a project rather than later?',
+    options: [
+      'It cannot be enabled later at all',
+      'Adopting it later on a large codebase means fixing hundreds of accumulated errors at once',
+      'It changes the runtime behavior',
+      'It is only free on new projects',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/tsconfig-deep" questions={quizTsconfig} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/tsconfig-deep" />

@@ -1,0 +1,82 @@
+---
+title: 'Type-Level Programming'
+description: 'Types are a language you can compute in — mapped types, keyof, template literals, the utility types, and recursion. Where TypeScript stops describing data and starts transforming it.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Types are a language
+
+So far types have *described* data. In this module they start to *compute* over it. Given one type you can derive another: make every field optional, pick a subset of keys, extract the return type of a function, or parse a string into a union — all at the type level, evaluated by the compiler before your code runs.
+
+This is real programming. The type system has variables (type parameters), branching (conditional types), iteration (mapped types and recursion), and functions (generic type aliases). People have implemented arithmetic and even parsers purely in types. You will not do that at work — but understanding the machinery is what lets you *read* library types and write the handful of clever types that genuinely pay off.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Mapped types | Iterate over a type's keys to transform it — build `Partial` and `Readonly` yourself |
+| keyof & indexed access | `keyof T` and `T[K]` — the lookups that power everything else |
+| Template literal types | Compute string types, and pattern-match strings with `infer` |
+| The utility types | The built-ins, and how they are actually implemented |
+| Recursive types | Types that call themselves — and where the compiler draws the line |
+
+## The building blocks fit together
+
+<Mermaid title="How the type-level tools compose" code={composeDiagram} />
+
+export const composeDiagram = `flowchart TB
+  keyof["keyof T\n(get the keys)"] --> mapped["Mapped types\n(iterate the keys)"]
+  indexed["T[K]\n(look up value types)"] --> mapped
+  cond["Conditional types + infer\n(branch and capture)"] --> util["Utility types\n(Pick, Exclude, ReturnType)"]
+  mapped --> util
+  tmpl["Template literals\n(compute strings)"] --> util
+  util --> rec["Recursion\n(repeat until done)"]`;
+
+Almost every advanced type in the wild is a combination of five primitives: `keyof` to get keys, indexed access to look up value types, mapped types to iterate, conditional types with `infer` to branch and capture, and recursion to repeat. Learn these five and library `.d.ts` files stop being hieroglyphics.
+
+<Callout title="The mental shift">
+A generic like `Box<T>` is a type-level *function* — it takes a type and returns a type. This module is about writing richer such functions: ones that loop over keys, branch on conditions, and call themselves. The compiler is your interpreter, and a red squiggle is a failed evaluation.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What does "type-level programming" mean?',
+    options: [
+      'Writing runtime functions that check types',
+      'Computing new types from existing ones — the compiler evaluates it before runtime',
+      'A faster way to run JavaScript',
+      'Generating documentation from types',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which five primitives compose into most advanced types?',
+    options: [
+      'Classes, interfaces, enums, namespaces, modules',
+      'keyof, indexed access, mapped types, conditional types with infer, and recursion',
+      'Promises, async, await, generators, iterators',
+      'let, const, var, function, return',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A generic type like `Box<T>` is best understood as:',
+    options: [
+      'A runtime container class',
+      'A type-level function that takes a type and returns a type',
+      'A JavaScript object',
+      'A compiler flag',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="type-level-programming/index" />

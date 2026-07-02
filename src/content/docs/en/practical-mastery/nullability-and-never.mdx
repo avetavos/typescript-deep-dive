@@ -1,0 +1,156 @@
+---
+title: 'Nullability & never'
+description: 'strictNullChecks, optional chaining and nullish coalescing in the type system, the danger of the non-null assertion, Result types, and exhaustiveness with never.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## strictNullChecks: the setting that matters most
+
+The single most valuable compiler flag is `strictNullChecks` (part of `strict`). Without it, `null` and `undefined` are assignable to *every* type — the billion-dollar mistake, fully armed. With it, they are their own types you must handle explicitly.
+
+```ts
+// with strictNullChecks on:
+function len(s: string) { return s.length; }
+
+let maybe: string | undefined;
+len(maybe); // ❌ Argument of type 'string | undefined' is not assignable to 'string'
+```
+
+The error is the point: the compiler forces you to deal with the `undefined` case *before* you dereference. Turn this on. If you inherit a codebase without it, turning it on is the highest-leverage migration you can do.
+
+## `?.` and `??` are type-aware
+
+Two operators make nullability ergonomic, and the type system understands both:
+
+```ts
+type User = { profile?: { avatar?: string } };
+
+function avatar(u: User) {
+  const url = u.profile?.avatar; // type: string | undefined
+  return url ?? "default.png";   // type: string  (?? supplied a fallback)
+}
+```
+
+`?.` short-circuits to `undefined` if the left side is nullish, and the *type* reflects that (the result includes `undefined`). `??` supplies a fallback only for `null`/`undefined` (unlike `||`, which also triggers on `0` and `""`), and narrows the type by removing the nullish part.
+
+## The non-null assertion `!` — a loaded gun
+
+The postfix `!` tells the compiler "trust me, this isn't null":
+
+```ts
+const el = document.getElementById("app")!; // asserts non-null
+el.innerHTML = "hi"; // no error — but crashes if #app doesn't exist
+```
+
+It **erases** a real check with zero runtime verification. Sometimes you genuinely know more than the compiler — but every `!` is a place you've overridden the safety net, and a place a future change can silently break. Prefer a real check (`if (!el) throw ...`) that narrows honestly; reserve `!` for cases you can prove.
+
+## Modeling errors: Result vs throwing
+
+Thrown exceptions are invisible to the type system — a function's signature never says what it might throw. A **Result type** makes failure explicit and type-checked:
+
+```ts
+type Result<T, E> =
+  | { ok: true; value: T }
+  | { ok: false; error: E };
+
+function parsePort(s: string): Result<number, string> {
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < 0) return { ok: false, error: "invalid port" };
+  return { ok: true, value: n };
+}
+
+const r = parsePort(input);
+if (r.ok) r.value; // narrowed to number
+else r.error;      // narrowed to string
+```
+
+Now the caller *must* handle both branches — the compiler won't let them forget. It is a discriminated union (the `ok` field is the tag), which brings us to the final tool.
+
+## Exhaustiveness with `never`
+
+When you switch over a discriminated union, `never` guarantees you handled every case. Assign the value to `never` in the `default` branch: if a new variant is ever added, that assignment fails to compile.
+
+```ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.r ** 2;
+    case "square": return s.side ** 2;
+    default:
+      const _exhaustive: never = s; // ✅ s is never here — all cases handled
+      return _exhaustive;
+  }
+}
+```
+
+Add a `triangle` variant later and the `default` line errors: `Type '{ kind: "triangle" ... }' is not assignable to type 'never'`. The compiler just turned "did I update every switch?" from a manual hunt into a build error.
+
+<Mermaid title="never as an exhaustiveness proof" code={neverDiagram} />
+
+export const neverDiagram = `flowchart TB
+  u["Shape = circle or square"] --> c1["case circle: handled"]
+  u --> c2["case square: handled"]
+  c1 --> d["default: assign s to never"]
+  c2 --> d
+  d --> ok["compiles = all cases covered"]
+  d --> err["new variant unhandled = compile error"]`;
+
+<Callout title="The one-line takeaway">
+Turn on `strictNullChecks` so `null` and `undefined` must be handled, not ignored. Use `?.` and `??` (which the types understand) for ergonomic null handling, and treat every non-null `!` as an overridden safety check. Model failure with **Result** discriminated unions instead of invisible throws, and use the `never` **exhaustiveness** trick so adding a new union variant becomes a compile error, not a silent gap.
+</Callout>
+
+export const quizNull = [
+  {
+    q: 'What does `strictNullChecks` change?',
+    options: [
+      'It makes null faster',
+      'null and undefined stop being assignable to every type — you must handle them explicitly',
+      'It removes null from the language',
+      'It only affects arrays',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does `??` differ from `||` for supplying a fallback?',
+    options: [
+      'They are identical',
+      '?? only falls back on null/undefined; || also falls back on falsy values like 0 and ""',
+      '|| is type-aware and ?? is not',
+      '?? works only on strings',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the risk of the non-null assertion `!`?',
+    options: [
+      'It slows down the code',
+      'It erases a null check with no runtime verification, so it can crash if you are wrong',
+      'It only works in strict mode',
+      'It changes the runtime value',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does the `never` exhaustiveness trick help when a new union variant is added?',
+    options: [
+      'It handles the new case automatically',
+      'The unhandled variant is no longer assignable to never, so the default branch fails to compile',
+      'It logs a runtime warning',
+      'It has no effect',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/nullability-and-never" questions={quizNull} />
+
+<ProgressTracker client:visible id="practical-mastery/nullability-and-never" />

@@ -1,0 +1,108 @@
+---
+title: 'Migration Strategy'
+description: 'Moving a JavaScript codebase to TypeScript without a big-bang rewrite — allowJs, ratcheting strictness, taming any, and authoring libraries.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Migrate gradually, never all at once
+
+A big-bang rewrite of a real JS codebase to TypeScript is how migrations die. The whole point of TypeScript is that it's a *gradual* type system: JS and TS can coexist file by file, so you convert incrementally while shipping the whole time.
+
+## The phased path
+
+<Mermaid title="A gradual migration ratchet" code={migrateDiagram} />
+
+export const migrateDiagram = `flowchart LR
+  js["allowJs: TS builds\nalongside JS"] --> checkjs["checkJs: type-check\nthe JS too"]
+  checkjs --> convert["rename .js to .ts\nfile by file"]
+  convert --> strict["ratchet strict flags\none at a time"]`;
+
+1. **Turn on `allowJs`.** Now TypeScript compiles a mixed project — your `.js` files build unchanged, and you can start adding `.ts` files next to them.
+2. **Add `checkJs` (and `// @ts-check`).** TypeScript type-checks your *JavaScript* using inference and JSDoc. You get real errors before converting a single file — a free first pass.
+3. **Convert file by file.** Rename `.js` to `.ts`, fix the errors that surface, commit. Start at the leaves (utilities with few dependencies) and work toward the core.
+4. **Ratchet strictness.** Don't start with full `strict`. Turn on flags one at a time — `noImplicitAny`, then `strictNullChecks`, then the rest — fixing each wave before enabling the next.
+
+Each step is shippable. You are never in a broken half-migrated state for long.
+
+## `any` is a tool, then a debt
+
+During migration, `any` is a legitimate way to say "not yet typed — keep moving." The danger is leaving it. Two disciplines keep it honest:
+
+- **Make it explicit and greppable.** Prefer an explicit `any` (or a `// TODO: type this` alias) over an implicit one, so you can find and burn them down later.
+- **Ratchet with `noImplicitAny`.** Once on, the compiler stops silently inserting `any` — new code must be typed, so the debt can only shrink.
+
+## `@ts-expect-error` beats `@ts-ignore`
+
+When you must suppress an error, use `@ts-expect-error`, not `@ts-ignore`:
+
+```ts
+// @ts-expect-error — legacy shape, tracked in TICKET-123
+legacyCall(weirdValue);
+```
+
+Both silence the error on the next line, but `@ts-expect-error` **also errors if the line stops having an error**. So when you later fix the underlying type, the now-unnecessary suppression fails the build and tells you to remove it. `@ts-ignore` just rots silently.
+
+## Authoring libraries
+
+If you publish a package, a few extra rules apply:
+
+- **Ship declaration files (`.d.ts`).** Set `"declaration": true` so consumers get your types. Point `"types"` in `package.json` at the entry `.d.ts`.
+- **Don't leak internal types.** Only your public API's types are a contract; keep implementation types un-exported so you can change them freely.
+- **Treat types as semver.** A change that breaks consumers' *type checking* is a breaking change, even if the runtime behavior is identical. Widening a parameter is usually safe; narrowing it, or changing a return type, can break builds downstream.
+
+<Callout title="The one-line takeaway">
+Migrate gradually: `allowJs` to coexist, `checkJs` to type-check JS for free, then convert file by file from the leaves inward, ratcheting `strict` flags one at a time. Treat `any` as tracked debt (make it explicit, enable `noImplicitAny`), prefer `@ts-expect-error` (which self-removes when fixed) over `@ts-ignore`, and if you publish a library, ship `.d.ts`, hide internal types, and version your types under semver.
+</Callout>
+
+export const quizMigrate = [
+  {
+    q: 'What is the recommended way to migrate a JS codebase to TypeScript?',
+    options: [
+      'A single big-bang rewrite',
+      'Gradually — allowJs to coexist, then convert file by file and ratchet strictness',
+      'Rewrite in another language first',
+      'Enable full strict mode on day one',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `checkJs` (with @ts-check) give you before converting files?',
+    options: [
+      'It converts .js to .ts automatically',
+      'It type-checks your JavaScript using inference and JSDoc, surfacing errors early',
+      'It removes all any types',
+      'It disables the build',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why prefer `@ts-expect-error` over `@ts-ignore`?',
+    options: [
+      'It is shorter',
+      'It also errors if the line no longer has an error, so stale suppressions get flagged when the type is fixed',
+      'It suppresses more errors',
+      'It works at runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'For a published library, why treat types as part of semver?',
+    options: [
+      'Types have no versioning implications',
+      'A change that breaks consumers\' type checking is a breaking change, even if runtime behavior is unchanged',
+      'Because the runtime always changes with types',
+      'To make the package larger',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/migration-strategy" questions={quizMigrate} />
+
+<ProgressTracker client:visible id="practical-mastery/migration-strategy" />

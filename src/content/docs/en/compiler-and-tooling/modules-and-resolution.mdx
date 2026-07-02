@@ -1,0 +1,105 @@
+---
+title: 'Modules & Resolution'
+description: 'ESM versus CommonJS, how tsc finds the files you import, the resolution modes, and why import extensions and esModuleInterop cause so much confusion.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two module systems, still
+
+JavaScript has two module formats, and TypeScript has to serve both:
+
+- **CommonJS (CJS)** — the older Node format: `require()` and `module.exports`. Synchronous, loaded by resolving files on disk.
+- **ES Modules (ESM)** — the standard: `import` and `export`. Used natively in browsers and modern Node, statically analyzable.
+
+Most confusion in a TypeScript project traces back to a mismatch between the module format you *wrote*, the format `tsc` *emits*, and the format your *runtime* expects. The `module` and `moduleResolution` options are how you keep those aligned.
+
+## How resolution works
+
+When you write `import { x } from "./util"`, `tsc` has to turn `"./util"` into an actual file. The strategy it uses depends on `moduleResolution`:
+
+<Mermaid title="Choosing a moduleResolution mode" code={resolveDiagram} />
+
+export const resolveDiagram = `flowchart TB
+  q["How is your code loaded?"] --> node["Runs in Node directly"]
+  q --> bundled["Goes through a bundler"]
+  node --> nodenext["moduleResolution: NodeNext\nrespects package.json type + exports"]
+  bundled --> bundler["moduleResolution: Bundler\nlets the bundler resolve"]`;
+
+- **`NodeNext` / `Node16`** — models modern Node exactly: it reads `"type": "module"` in `package.json`, honors the `"exports"` field, and enforces ESM rules (including that you write file extensions in relative imports: `import "./util.js"`).
+- **`Bundler`** — for code that goes through Vite, esbuild, or webpack. It relaxes the extension requirement and lets the bundler handle the actual file lookup, matching how those tools behave.
+- **`Node10`** (formerly `Node`) — the legacy CommonJS algorithm. Avoid it for new projects; it does not understand the `"exports"` field.
+
+The key mental model: **`moduleResolution` should describe how your code is *actually loaded*.** Node runs it? Use `NodeNext`. A bundler processes it? Use `Bundler`.
+
+## The extension surprise
+
+Under `NodeNext`, native ESM requires the extension in the import, and — confusingly — you write the `.js` extension even though the file on disk is `.ts`:
+
+```ts
+// util.ts exists on disk, but the emitted import must point at the emitted .js
+import { helper } from "./util.js"; // ✅ correct under NodeNext ESM
+import { helper } from "./util";    // ❌ ESM needs the extension
+```
+
+This trips up everyone once. The reason: `tsc` does not rewrite your import paths, and at runtime the file will be `util.js`, so the source must already name the runtime file.
+
+## esModuleInterop
+
+CJS and ESM disagree about default exports, which historically made `import express from "express"` fail against CommonJS modules. `esModuleInterop: true` inserts the small interop shim that makes default and namespace imports of CommonJS modules behave the way you expect. It is on by default in the recommended configs and you almost always want it — turning it off is a source of avoidable import errors.
+
+<Callout title="The one-line takeaway">
+Set `moduleResolution` to match how your code is actually loaded — `NodeNext` when Node runs it (respecting `package.json` `type` and `exports`, and requiring `.js` extensions in imports), or `Bundler` when a bundler resolves for you. Keep `esModuleInterop` on so CommonJS default imports behave, and remember that most module errors are a mismatch between what you wrote, what `tsc` emits, and what the runtime expects.
+</Callout>
+
+export const quizModules = [
+  {
+    q: 'What should `moduleResolution` be set to describe?',
+    options: [
+      'The editor you use',
+      'How your code is actually loaded at runtime (Node directly vs through a bundler)',
+      'The TypeScript version',
+      'The number of files in the project',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Under `NodeNext` ESM, what extension do you write when importing `./util.ts`?',
+    options: [
+      '`./util.ts`',
+      '`./util.js` — you name the emitted runtime file, and tsc does not rewrite the path',
+      '`./util` with no extension',
+      '`./util.mjs` always',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `esModuleInterop` do?',
+    options: [
+      'It converts all code to ESM',
+      'It adds an interop shim so default and namespace imports of CommonJS modules work as expected',
+      'It disables CommonJS',
+      'It speeds up resolution',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which `moduleResolution` mode understands the `package.json` `exports` field?',
+    options: [
+      '`Node10` (legacy)',
+      '`NodeNext` / `Node16`',
+      'None of them',
+      'Only `Classic`',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/modules-and-resolution" questions={quizModules} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/modules-and-resolution" />

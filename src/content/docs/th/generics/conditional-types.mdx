@@ -1,0 +1,147 @@
+---
+title: 'Conditional Types'
+description: 'type ที่แตกกิ่ง — T extends U ? X : Y, การซ้อน condition, การ distribute ผ่าน union และวิธีปิด distribution'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## if-statement สำหรับ type
+
+**conditional type** เลือกหนึ่งในสอง type ตามความสัมพันธ์ ใช้ syntax ternary ที่คุณรู้จักอยู่แล้ว — แต่ในระดับ type:
+
+```ts
+type IsString<T> = T extends string ? "yes" : "no";
+
+type A = IsString<string>;  // "yes"
+type B = IsString<number>;  // "no"
+type C = IsString<"hi">;    // "yes"  ("hi" extends string)
+```
+
+อ่าน `T extends U ? X : Y` ว่า "ถ้า `T` assignable ให้ `U` type จะเป็น `X` ไม่งั้นเป็น `Y`" `extends` ตรงนี้คือการทดสอบ subset แบบเดียวกับในโมดูล foundations — ไม่ใช่ inheritance
+
+## การซ้อน: decision tree เล็ก ๆ
+
+conditional ซ้อนกันได้เพื่อสร้างการแตกกิ่งหลายทาง:
+
+```ts
+type TypeName<T> =
+  T extends string ? "string" :
+  T extends number ? "number" :
+  T extends boolean ? "boolean" :
+  T extends undefined ? "undefined" :
+  T extends Function ? "function" :
+  "object";
+
+type T1 = TypeName<string>;   // "string"
+type T2 = TypeName<() => void>; // "function"
+type T3 = TypeName<number[]>; // "object"
+```
+
+แต่ละ condition ถูกลองตามลำดับ เหมือน chain ของ `else if`
+
+## การ distribute ผ่าน union
+
+นี่คือพฤติกรรมที่ทำทุกคนงง เมื่อ type ที่ถูกตรวจเป็น **naked type parameter** และคุณส่ง **union** ให้ conditional จะ distribute ไปทีละ member แล้ว union ผลลัพธ์เข้าด้วยกัน:
+
+```ts
+type ToArray<T> = T extends any ? T[] : never;
+
+type R = ToArray<string | number>;
+//   ^? string[] | number[]
+```
+
+มัน **ไม่** ได้ให้ `(string | number)[]` แต่ conditional รันแยกกันสำหรับ `string` (ได้ `string[]`) และ `number` (ได้ `number[]`) แล้ว union กัน นี่คือพฤติกรรม *distributive conditional type*
+
+<Mermaid title="A conditional distributes over each union member" code={distDiagram} />
+
+export const distDiagram = `flowchart TB
+  input["ToArray ของ string หรือ number"] --> split["distribute ไปทีละ member"]
+  split --> s["กิ่ง string: string array"]
+  split --> n["กิ่ง number: number array"]
+  s --> out["union ผลลัพธ์:\nstring array หรือ number array"]
+  n --> out`;
+
+การใช้จริงที่พบบ่อยคือการ filter union `Exclude` (built-in) คือสิ่งนี้เป๊ะ:
+
+```ts
+type MyExclude<T, U> = T extends U ? never : T;
+
+type Colors = "red" | "green" | "blue";
+type NoRed = MyExclude<Colors, "red">;
+//   ^? "green" | "blue"
+```
+
+member ที่ match `U` จะกลายเป็น `never` (และ `never` หายไปจาก union) ดังนั้นเหลือแค่ member ที่ไม่ match
+
+## ปิด distribution
+
+บางครั้งคุณอยากตรวจ union *ทั้งก้อน* ไม่ใช่ทีละ member ห่อทั้งสองฝั่งด้วย tuple หนึ่งช่องเพื่อหยุด distribution — type parameter จะไม่ "naked" อีกต่อไป:
+
+```ts
+type IsUnionOfStrings<T> = [T] extends [string] ? true : false;
+
+type D1 = IsUnionOfStrings<"a" | "b">; // true  (tested as a whole)
+
+// compare with the distributive version:
+type Bad<T> = T extends string ? true : false;
+type D2 = Bad<"a" | number>; // boolean  (true | false — distributed!)
+type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string)
+```
+
+ทริก `[T] extends [U]` เป็น idiom มาตรฐาน — หยิบมาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่ามัน distribute แล้ว union `true | false` เข้าด้วยกัน)
+
+<Callout title="The one-line takeaway">
+conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type ใช้การทดสอบ subset แบบเดียวกับ `extends` ที่อื่น พฤติกรรมเด่นของมันคือ **distribution**: naked type parameter ที่ตรวจกับ union จะรันทีละ member แล้ว union ผลลัพธ์ (ซึ่งเป็นวิธีที่ `Exclude` และ `Extract` ทำงาน) ห่อทั้งสองฝั่งเป็น `[T] extends [U]` เพื่อตรวจ union ทั้งก้อนและปิด distribution
+</Callout>
+
+export const quizConditional = [
+  {
+    q: 'อ่าน `T extends U ? X : Y` อย่างไร?',
+    options: [
+      '`T` สืบทอดจาก `U`',
+      'ถ้า `T` assignable ให้ `U` type จะเป็น `X` ไม่งั้นเป็น `Y`',
+      '`T` กับ `U` ถูกรวมกัน',
+      'มันคือ if-statement ตอน runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`ToArray<string | number>` สำหรับ `type ToArray<T> = T extends any ? T[] : never` ได้อะไร?',
+    options: [
+      '(string | number)[]',
+      'string[] | number[] — conditional distribute ไปทีละ member ของ union',
+      'never',
+      'any[]',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'built-in `Exclude<T, U>` เอา member ออกจาก union อย่างไร?',
+    options: [
+      'ลบมันตอน runtime',
+      'ผ่าน `T extends U ? never : T` — member ที่ match กลายเป็น `never` แล้วหลุดจาก union',
+      'sort union',
+      'มันเอา member ออกจาก union ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมต้องห่อทั้งสองฝั่งเป็น `[T] extends [U]`?',
+    options: [
+      'เพื่อให้รันเร็วขึ้น',
+      'เพื่อหยุด distribution และตรวจ union ทั้งก้อนแทนที่จะทีละ member',
+      'เพื่อแปลง `T` เป็น array',
+      'เป็น syntax ที่จำเป็นสำหรับ conditional ทุกตัว',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/conditional-types" questions={quizConditional} />
+
+<ProgressTracker client:visible id="generics/conditional-types" />

@@ -1,0 +1,138 @@
+---
+title: 'Objects, Arrays & Tuples'
+description: 'object type แบบเจาะลึก — optional และ readonly property, index signature — พร้อมความต่างจริง ๆ ระหว่าง array กับ tuple'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## object type และ modifier ของมัน
+
+object type อธิบาย shape ด้วยการ list property modifier สองตัวสื่อความหมายเยอะ:
+
+```ts
+interface User {
+  readonly id: string;   // reassign ไม่ได้หลังสร้าง
+  name: string;          // required
+  email?: string;        // optional — string | undefined
+}
+```
+
+- **`readonly`** บล็อกการ reassign property มันเป็น compile-time เท่านั้น (runtime ไม่ได้กันการ mutate) แต่มันสื่อและ enforce เจตนา
+- **`?` (optional)** หมายถึง property อาจไม่มี สำคัญคือ optional property มี type `T | undefined` คุณจึงต้อง handle case `undefined`:
+
+```ts
+function greet(u: User) {
+  u.email.toLowerCase();
+  // ❌ Object is possibly 'undefined'.
+  u.email?.toLowerCase(); // ✅ optional chaining จัดการกรณีไม่มี
+}
+```
+
+`interface` กับ `type` แทบใช้แทนกันได้สำหรับ object shape; `interface` เปิดต่อได้ (declaration merging) และ idiomatic สำหรับ public object contract ส่วน `type` ยังเขียน union, tuple และ mapped type ได้ ใช้ `type` เมื่อต้องการพวกนั้น สำหรับ object ธรรมดาใช้อันไหนก็ได้
+
+## index signature: object เป็น map
+
+เมื่อยังไม่รู้ key ล่วงหน้า **index signature** type มันแบบ uniform:
+
+```ts
+interface Scores {
+  [player: string]: number;
+}
+
+const s: Scores = { ada: 10, alan: 12 };
+s.grace = 9; // ✅ key เป็น string ใด ๆ, value เป็น number
+```
+
+ราคาที่ต้องจ่ายคือความซื่อสัตย์เรื่องการไม่มีค่า: `s.someone` มี type `number` แต่จริง ๆ เป็น `undefined` ตอน runtime ด้วย option `noUncheckedIndexedAccess` TypeScript จะทำให้เรื่องนี้เป็นจริง โดย type ทุก index access เป็น `number | undefined` — เป็น setting ที่แนะนำอย่างยิ่ง
+
+## array เทียบ tuple
+
+**array** คือ list ที่ homogeneous และยาวเท่าไรก็ได้: `number[]` คือ "number กี่ตัวก็ได้" **tuple** คือ list ความยาวคงที่ที่แต่ละตำแหน่งมี type ของตัวเอง:
+
+```ts
+let list: number[] = [1, 2, 3, 4];         // ยาวเท่าไรก็ได้ เป็น number หมด
+let point: [number, number] = [10, 20];    // number สองตัวพอดี
+let pair: [string, number] = ["age", 36];  // ตำแหน่ง 0 string, ตำแหน่ง 1 number
+```
+
+tuple ขับเคลื่อน pattern อย่าง return ของ `useState` ใน React (`[value, setter]`) และพิกัดแบบมีชื่อกลาย ๆ มันยังรองรับ **label** (เป็น documentation ไม่มีผล runtime) และ rest element:
+
+```ts
+type HttpResult = [status: number, body: string];
+type Args = [first: string, ...rest: number[]];
+```
+
+<Mermaid title="array homogeneous และยืดหยุ่น; tuple positional และคงที่" code={arrTupDiagram} />
+
+export const arrTupDiagram = `flowchart TB
+  arr["number[]\nany length · all same type"] --> arrEx["[1, 2, 3, 4, ...]"]
+  tup["[string, number]\nfixed length · per-position type"] --> tupEx["['age', 36]"]`;
+
+## `readonly` array และ tuple
+
+`readonly number[]` (หรือ `ReadonlyArray<number>`) ห้าม method ที่ mutate อย่าง `push` และการ assign ที่ index — เหมาะกับ parameter ที่คุณสัญญาว่าจะไม่แก้ และจำจากบทที่แล้ว: `as const` บน array literal ให้ `readonly` tuple ของ literal พอดี:
+
+```ts
+const rgb = [255, 128, 0] as const;
+// type: readonly [255, 128, 0]
+
+function paint(color: readonly number[]) { /* mutate color ไม่ได้ */ }
+```
+
+การเลือกใช้ `readonly` array parameter เป็นนิสัยราคาถูกที่ได้ค่ามาก: กันบั๊ก mutate โดยไม่ตั้งใจทั้งชุด และสื่อเรื่อง ownership
+
+<Callout title="สรุปหนึ่งบรรทัด">
+object type คือ shape ที่มี modifier `readonly` และ optional (`?`) — จำว่า optional property เป็น `T \| undefined` และต้อง handle index signature type key ที่ยังไม่รู้แบบ uniform (เปิด `noUncheckedIndexedAccess` เพื่อให้ key ที่ไม่มีอ่านได้เป็น `T \| undefined`) **array** ยืดหยุ่นและ homogeneous; **tuple** ความยาวคงที่ มี type ต่อตำแหน่ง เลือกใช้ `readonly` array สำหรับ parameter ที่จะไม่ mutate
+</Callout>
+
+export const quizOAT = [
+  {
+    q: 'type ของ optional property `email?: string` คืออะไร?',
+    options: [
+      'string',
+      'string | undefined',
+      'string | null',
+      'any',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'option `noUncheckedIndexedAccess` เปลี่ยนอะไร?',
+    options: [
+      'ปิด index signature',
+      'type ทุก index access เป็น `T | undefined` สะท้อนว่า key อาจไม่มี',
+      'ทำให้ทุก property เป็น readonly',
+      'ทำให้ compile เร็วขึ้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ความต่างระหว่าง `number[]` กับ `[number, number]` คืออะไร?',
+    options: [
+      'เหมือนกัน',
+      '`number[]` เป็น number ยาวเท่าไรก็ได้; `[number, number]` เป็น tuple ความยาวคงที่สองตัวพอดี',
+      '`[number, number]` ยาวเท่าไรก็ได้',
+      '`number[]` เก็บได้แค่สอง element',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`[255, 128, 0] as const` ให้ type อะไร?',
+    options: [
+      'number[]',
+      'readonly [255, 128, 0] — readonly tuple ของ literal',
+      '[number, number, number]',
+      'any[]',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/objects-arrays-tuples" questions={quizOAT} />
+
+<ProgressTracker client:visible id="everyday-types/objects-arrays-tuples" />

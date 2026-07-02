@@ -1,0 +1,123 @@
+---
+title: 'The Type-System Mindset'
+description: 'Types as sets of values — the single mental model that makes unions, subtyping, never, and unknown obvious instead of mysterious.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A type is a set of values
+
+Here is the reframe that unlocks TypeScript. Stop thinking of a type as a *label* and start thinking of it as a **set** — the collection of every value that legally belongs to it.
+
+- `boolean` is the set `{ true, false }` — exactly two members.
+- `undefined` is a set with **one** member: `{ undefined }`.
+- `string` is the (infinite) set of all strings.
+- `42` — yes, a literal — is a set with **one** member: `{ 42 }`. This is a *literal type*.
+
+Once types are sets, the operations you already know from math explain the whole system.
+
+## Assignability is the subset relationship
+
+`a` is assignable to `b` **if and only if** the set `a` is a subset of the set `b`. That's the entire rule.
+
+```ts
+let x: 42 = 42;
+let y: number = x; // ✅ {42} ⊆ all numbers
+
+let a: number = 42;
+let b: 42 = a;     // ❌ all numbers ⊄ {42}
+//  Error: Type 'number' is not assignable to type '42'.
+```
+
+The literal `42` fits into `number` because `{42}` is a subset of all numbers. The reverse fails because most numbers aren't `42`. You never have to memorize assignability rules — you just ask "is this set inside that set?"
+
+## Unions are set union; intersections are set intersection
+
+<Mermaid title="Types as sets: union widens, intersection narrows" code={setDiagram} />
+
+export const setDiagram = `flowchart TB
+  subgraph u["A | B  (union = OR)"]
+    ua["string"] --- ub["number"]
+    note1["a value in EITHER set\n→ more values, wider"]
+  end
+  subgraph i["A & B  (intersection = AND)"]
+    note2["a value in BOTH sets\n→ fewer values, narrower"]
+  end`;
+
+- `string | number` is the **union** of the two sets — a value that's in *either*. Unions are *wider* (more members).
+- `A & B` is the **intersection** — a value that's in *both*. For object types this means "has all properties of both," which is why intersections *narrow*.
+
+A common surprise falls right out of this: `string & number` is the empty set. No value is both a string and a number — so its type is `never`.
+
+## The two ends: `never` and `unknown`
+
+Sets have a smallest and largest, and TypeScript names them:
+
+- **`never`** is the **empty set** `{ }` — no values at all. Nothing is assignable *to* `never` (you can't produce a member of an empty set), but `never` is assignable to *everything* (the empty set is a subset of every set). It's what a function that never returns is typed as, and the signal that a branch is unreachable.
+- **`unknown`** is the **set of all values** — the top type. Everything is assignable *to* `unknown`, but `unknown` is assignable to almost nothing until you narrow it. It's the type-safe version of `any`.
+
+```ts
+let n: never;
+let u: unknown = "anything goes";
+
+let s: string = u; // ❌ unknown is too wide — narrow it first
+let x: unknown = 42; // ✅ everything fits into unknown
+```
+
+`any` breaks this model on purpose: it opts *out* of set-checking entirely, which is why it's dangerous. `unknown` keeps the model and forces you to narrow.
+
+<Callout title="The one-line takeaway">
+Think of every type as the **set of values it allows**. Then: assignability is the subset relation, `|` is set union (wider), `&` is set intersection (narrower), `never` is the empty set (bottom), and `unknown` is the set of all values (top). This one model makes the rest of TypeScript feel derived rather than memorized.
+</Callout>
+
+export const quizMindset = [
+  {
+    q: 'In the "types as sets" model, when is type A assignable to type B?',
+    options: [
+      'When A and B have the same name',
+      'When the set of values A is a subset of the set of values B',
+      'When B was declared before A',
+      'When A is a class and B is an interface',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the type of `string & number`, and why?',
+    options: [
+      '`string | number`, because & combines them',
+      '`never`, because no value is in both sets — the intersection is empty',
+      '`unknown`, because the compiler gives up',
+      '`any`, because it can\'t decide',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What set does `never` represent?',
+    options: [
+      'The set of all values',
+      'The empty set — no values at all',
+      'The set of nullish values',
+      'The set of primitive values',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does `unknown` differ from `any`?',
+    options: [
+      'They are identical',
+      '`unknown` is the set of all values but keeps type-checking (you must narrow); `any` opts out of checking entirely',
+      '`unknown` is faster at runtime',
+      '`any` is the empty set',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/type-system-mindset" questions={quizMindset} />
+
+<ProgressTracker client:visible id="foundations/type-system-mindset" />

@@ -1,0 +1,161 @@
+---
+title: 'Classes, Deep'
+description: 'Access modifiers versus hard private, readonly, parameter properties, static members, abstract classes, and what implements really checks.'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two kinds of private
+
+TypeScript has two ways to make a member private, and they are not the same.
+
+```ts
+class Account {
+  private balance = 0;   // compile-time only — erased
+  #pin = "1234";         // truly private — enforced at runtime
+
+  check() {
+    return this.balance + Number(this.#pin);
+  }
+}
+
+const a = new Account();
+// a.balance; // ❌ compile error, but...
+// (a as any).balance; // ✅ reachable at runtime — private was erased
+// a.#pin;    // ❌ SyntaxError even at runtime — hard private
+```
+
+- `private` (and `protected`) are **compile-time** access checks. They are erased on emit, so a determined caller can reach the field at runtime via `any` or bracket access. They document intent and catch honest mistakes.
+- `#name` fields are **ECMAScript private fields** — genuinely inaccessible outside the class, enforced by the JavaScript engine itself. Reach for `#` when privacy must hold at runtime.
+
+`protected` sits between: accessible in the class and its subclasses, but not from outside.
+
+## `readonly` fields
+
+`readonly` allows assignment only in the declaration or constructor, then locks the field. Like `private`, it is a compile-time guarantee — erased at runtime.
+
+```ts
+class Point {
+  readonly x: number;
+  constructor(x: number) {
+    this.x = x; // ✅ allowed in the constructor
+  }
+  move() {
+    // this.x = 5; // ❌ Cannot assign to 'x' because it is read-only.
+  }
+}
+```
+
+## Parameter properties: the constructor shorthand
+
+Declaring a field and assigning it from a constructor parameter is so common that TypeScript has a shorthand: put an access modifier on the constructor parameter and it becomes a field automatically.
+
+```ts
+class User {
+  constructor(
+    public readonly id: string,
+    private name: string,
+  ) {}
+  // No separate field declarations, no `this.id = id` — the modifiers do it.
+}
+```
+
+This is equivalent to declaring `id` and `name` as fields and assigning them in the body. It is purely a convenience, but a widely used one.
+
+## `static` members
+
+`static` members belong to the **class itself**, not to instances. They exist at runtime as properties on the constructor function.
+
+```ts
+class Circle {
+  static readonly PI = 3.14159;
+  static area(r: number) { return Circle.PI * r * r; }
+}
+
+Circle.area(2); // called on the class, not an instance
+```
+
+## `abstract` classes
+
+An `abstract` class cannot be instantiated directly; it exists to be extended. `abstract` methods declare a signature that subclasses must implement. The `abstract` markers are compile-time only.
+
+```ts
+abstract class Shape {
+  abstract area(): number;      // no body — subclasses must provide one
+  describe() { return `area is ${this.area()}`; } // concrete method
+}
+
+// new Shape(); // ❌ Cannot create an instance of an abstract class.
+
+class Square extends Shape {
+  constructor(private side: number) { super(); }
+  area() { return this.side * this.side; } // required
+}
+```
+
+## `implements` is a check, not inheritance
+
+A class can `implements` an interface. This does **not** copy anything in — it is a compile-time *assertion* that the class structurally satisfies the interface. Because TypeScript is structural, a class can match an interface *without* `implements`; the clause just makes the intent explicit and turns a mismatch into an error at the class definition rather than at the use site.
+
+```ts
+interface Named { name: string; }
+
+class Product implements Named {
+  name = "widget"; // if this were missing, the error points HERE
+}
+```
+
+<Callout title="The one-line takeaway">
+`private`, `protected`, `readonly`, `abstract`, and `implements` are **compile-time** guarantees that erase on emit — helpful for correctness, not enforced at runtime. `#private` fields and `static` members are **real runtime** constructs. Use parameter properties to cut boilerplate, and remember `implements` only *checks* structural conformance; it copies nothing.
+</Callout>
+
+export const quizDeep = [
+  {
+    q: 'What is the key difference between `private balance` and `#pin`?',
+    options: [
+      'They are identical',
+      '`private` is a compile-time check that erases; `#pin` is a real runtime-private field enforced by the JS engine',
+      '`#pin` is slower',
+      '`private` works only on methods',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a parameter property (e.g. `constructor(public id: string)`) do?',
+    options: [
+      'Nothing — it is a syntax error',
+      'It declares a field and assigns it from the parameter automatically',
+      'It makes the parameter global',
+      'It marks the class abstract',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Where do `static` members live?',
+    options: [
+      'On every instance',
+      'On the class itself (the constructor), not on instances',
+      'In a separate module',
+      'They are erased at compile time',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `implements Named` actually do?',
+    options: [
+      'Copies the interface members into the class',
+      'Asserts at compile time that the class structurally satisfies the interface, reporting a mismatch at the class definition',
+      'Creates runtime inheritance',
+      'Makes the class abstract',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/classes-deep" questions={quizDeep} />
+
+<ProgressTracker client:visible id="classes-and-oop/classes-deep" />

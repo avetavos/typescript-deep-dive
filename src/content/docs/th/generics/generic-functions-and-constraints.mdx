@@ -1,0 +1,147 @@
+---
+title: 'Generic Functions & Constraints'
+description: 'type parameter, การ constrain ด้วย extends, default type parameter, หลาย parameter และการเลี่ยงไม่ให้ generic เกินจำเป็น'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type parameter ส่วนใหญ่ถูก infer ไม่ใช่เขียนเอง
+
+ส่วนใหญ่คุณไม่ต้องเขียน type argument เลย — inference เติมให้จาก value ที่คุณส่งเข้าไป:
+
+```ts
+function first<T>(arr: T[]): T | undefined {
+  return arr[0];
+}
+
+const a = first([1, 2, 3]);
+//    ^? number | undefined   — T inferred as number
+const b = first(["x", "y"]);
+//    ^? string | undefined   — T inferred as string
+```
+
+คุณ *ส่ง* มันตรง ๆ ได้ (`first<number>([1, 2, 3])`) แต่แทบไม่จำเป็น type parameter ไหลมาจากจุดที่เรียก
+
+## constraint: `extends` จำกัดว่า `T` เป็นอะไรได้บ้าง
+
+`T` ที่ไม่มี constraint เป็นอะไรก็ได้ ดังนั้นคุณจะสมมติว่ามัน property อะไรไม่ได้เลย เมื่อ function ต้องการให้ `T` มี shape บางอย่าง ให้ constrain ด้วย `extends`:
+
+```ts
+// ❌ without a constraint, T might not have .length
+function longest<T>(a: T, b: T) {
+  return a.length > b.length ? a : b; // Error: Property 'length' does not exist on type 'T'
+}
+
+// ✅ constrain T to things that have a numeric length
+function longest<T extends { length: number }>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest([1, 2], [1, 2, 3]); // ✅ arrays have length → returns number[]
+longest("ab", "abc");        // ✅ strings have length → returns string
+longest(1, 2);               // ❌ number has no length
+```
+
+อ่าน `T extends { length: number }` ว่า "`T` ต้อง assignable ให้ `{ length: number }`" — คือ `T` เป็น subtype อะไรก็ได้ที่มี `length` เป็น number อย่างน้อย ที่สำคัญคือ return type ยังเป็น `T` อยู่ ดังนั้นคุณยังได้ type ที่ *เฉพาะเจาะจง* (`number[]`, `string`) ไม่ได้ widen ไปเป็น constraint
+
+## constraint แบบ `keyof`: getter ที่ปลอดภัย
+
+constraint อ้างถึง type parameter อีกตัวได้ ตัวอย่างคลาสสิกคือ `get` ที่ type-safe:
+
+```ts
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const user = { name: "Ada", age: 36 };
+const name = getProp(user, "name");
+//    ^? string
+const age = getProp(user, "age");
+//    ^? number
+getProp(user, "email"); // ❌ "email" is not a key of user
+```
+
+`K extends keyof T` บอกว่า key ต้องเป็นหนึ่งใน key จริง ๆ ของ `T` และ return type `T[K]` คือ type *ของ property ตัวนั้นเป๊ะ ๆ* นี่คือกระดูกสันหลังของ utility เกี่ยวกับ object ที่ type-safe
+
+## default type parameter
+
+เหมือน default argument ของ function — type parameter มี default ได้ ซึ่งจะถูกใช้เมื่อ infer ไม่ได้และไม่ได้ส่งมา:
+
+```ts
+interface Container<T = string> {
+  value: T;
+}
+
+const c1: Container = { value: "hi" };     // T defaults to string
+const c2: Container<number> = { value: 1 }; // T explicitly number
+```
+
+default พบบ่อยกับ generic class และ interface ที่มีค่า fallback ที่สมเหตุสมผล
+
+## อย่า generic เกินจำเป็น
+
+generics เป็นเครื่องมือ ไม่ใช่เป้าหมาย type parameter ที่ปรากฏ **แค่ครั้งเดียว** ใน signature มักเป็นความผิดพลาด — มันไม่ได้เชื่อมอะไรเลย ก็เลยควรเป็น type ตรง ๆ หรือ `unknown` ไปเลย:
+
+```ts
+// pointless generic: T is used once, links nothing
+function log<T>(x: T): void { console.log(x); }
+// just write:
+function log(x: unknown): void { console.log(x); }
+```
+
+generic จะคุ้มค่าก็ต่อเมื่อ type parameter เชื่อมตำแหน่งตั้งแต่สองที่ขึ้นไป (input ไป output, หรือ parameter ตัวหนึ่งไปอีกตัว) ถ้ามันไม่ได้สร้าง *ความสัมพันธ์* ก็ตัดทิ้ง
+
+<Callout title="The one-line takeaway">
+type parameter ส่วนใหญ่ถูก **infer** จาก argument ไม่ใช่เขียนเอง constrain ด้วย `extends` เมื่อต้องการให้ `T` มี shape บางอย่าง (`T extends { length: number }`) หรือเป็น key ของ type อื่น (`K extends keyof T` คืน `T[K]`) ใส่ default ตรงที่มี fallback สมเหตุสมผล และตัด type parameter ที่ปรากฏแค่ครั้งเดียวทิ้ง — generic ควรเชื่อมตำแหน่ง ไม่ใช่ตกแต่งตำแหน่งเดียว
+</Callout>
+
+export const quizConstraints = [
+  {
+    q: 'ทำไมต้อง constrain type parameter ด้วย `extends`?',
+    options: [
+      'เพื่อให้ function รันเร็วขึ้น',
+      'เพื่อให้ function พึ่งพาได้ว่า `T` มี shape บางอย่าง (เช่นมี property `length`)',
+      'เพื่อแปลง `T` เป็น `any`',
+      'มันจำเป็นสำหรับ generic ทุกตัว',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน `function getProp<T, K extends keyof T>(obj: T, key: K): T[K]` return type `T[K]` แทนอะไร?',
+    options: [
+      '`any` เสมอ',
+      'type ของ property ตัวที่ระบุด้วย `key`',
+      'type ของทั้ง object',
+      'union ของ type ทุก property',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'type parameter ที่ปรากฏแค่ครั้งเดียวใน signature มักจะ:',
+    options: [
+      'เป็น generic ที่ทรงพลังที่สุด',
+      'เป็นสัญญาณว่า generic นั้นไร้ประโยชน์ — ไม่ได้เชื่อมอะไร ควรใช้ type ตรง ๆ หรือ `unknown`',
+      'จำเป็นสำหรับ compiler',
+      'เร็วกว่าแบบมี constraint',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'default type parameter อย่าง `<T = string>` ทำอะไร?',
+    options: [
+      'บังคับให้ผู้เรียกทุกคนส่ง `string`',
+      'ให้ type fallback ที่ใช้เมื่อ `T` ไม่ถูก infer หรือไม่ได้ส่งมา',
+      'ทำให้ `T` เป็น read-only',
+      'ปิด inference',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/generic-functions-and-constraints" questions={quizConstraints} />
+
+<ProgressTracker client:visible id="generics/generic-functions-and-constraints" />

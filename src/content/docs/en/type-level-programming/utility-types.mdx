@@ -1,0 +1,130 @@
+---
+title: 'The Utility Types'
+description: 'A tour of the built-in utility types — and how several of them are actually implemented with mapped types, conditional types, and infer.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## You already know how these are built
+
+TypeScript ships a standard library of **utility types**. By now you have seen every technique they use — so instead of memorizing them, you can *read* them. That is the goal of this lesson: recognize each utility and know the primitive behind it.
+
+| Utility | What it does | How it is built |
+|---------|--------------|-----------------|
+| `Partial<T>` | All properties optional | Mapped type with `?` |
+| `Required<T>` | All properties required | Mapped type with `-?` |
+| `Readonly<T>` | All properties readonly | Mapped type with `readonly` |
+| `Pick<T, K>` | Keep only keys `K` | Mapped type over `K` + `T[K]` |
+| `Omit<T, K>` | Drop keys `K` | `Pick` of `Exclude<keyof T, K>` |
+| `Record<K, V>` | Object with keys `K`, values `V` | Mapped type over `K` |
+| `Exclude<T, U>` | Remove `U` from union `T` | Distributive conditional |
+| `Extract<T, U>` | Keep only `U` from union `T` | Distributive conditional |
+| `NonNullable<T>` | Remove `null`/`undefined` | Conditional type |
+| `ReturnType<F>` | The return type of `F` | Conditional with `infer` |
+| `Parameters<F>` | The parameter tuple of `F` | Conditional with `infer` |
+| `Awaited<T>` | Unwrap a Promise | Recursive conditional with `infer` |
+
+## The mapped-type family
+
+`Partial`, `Required`, `Readonly`, `Pick`, and `Record` are all one-line mapped types:
+
+```ts
+type Partial<T>  = { [K in keyof T]?: T[K] };
+type Required<T> = { [K in keyof T]-?: T[K] };
+type Readonly<T> = { readonly [K in keyof T]: T[K] };
+type Pick<T, K extends keyof T> = { [P in K]: T[P] };
+type Record<K extends keyof any, V> = { [P in K]: V };
+```
+
+Nothing exotic — a loop over keys, sometimes changing a modifier, sometimes looking up `T[K]`. Once you see this, `Pick<User, "id" | "name">` is obviously "iterate those two keys, copy their value types."
+
+## The distributive-conditional family
+
+`Exclude`, `Extract`, and `NonNullable` operate on **unions** using a conditional type that distributes over each member:
+
+```ts
+type Exclude<T, U> = T extends U ? never : T;
+type Extract<T, U> = T extends U ? T : never;
+type NonNullable<T> = T extends null | undefined ? never : T;
+
+type A = Exclude<"a" | "b" | "c", "b">; // "a" | "c"
+```
+
+When the checked type is a naked type parameter and you pass a union, the conditional runs **once per member** and unions the results. So `Exclude` maps each member to either `never` (drop it) or itself (keep it) — and `never` disappears from a union. `Omit` then falls out as `Pick<T, Exclude<keyof T, K>>`.
+
+## The `infer` family
+
+`ReturnType`, `Parameters`, and `Awaited` **capture** a type out of a structure with `infer`:
+
+```ts
+type ReturnType<F> = F extends (...args: any[]) => infer R ? R : never;
+type Parameters<F> = F extends (...args: infer P) => any ? P : never;
+
+type R = ReturnType<() => number>;        // number
+type P = Parameters<(a: string, b: number) => void>; // [string, number]
+```
+
+`infer R` matches the function return position and binds it to `R`; `infer P` matches the whole parameter list as a tuple. `Awaited` adds recursion to peel nested promises.
+
+<Mermaid title="Each utility maps to one primitive you already know" code={utilDiagram} />
+
+export const utilDiagram = `flowchart TB
+  mapped["Mapped types"] --> f1["Partial, Required, Readonly, Pick, Record"]
+  cond["Distributive conditionals"] --> f2["Exclude, Extract, NonNullable, Omit"]
+  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
+
+<Callout title="The one-line takeaway">
+The utility types are not magic — they are short expressions in the primitives you have learned. The **mapped-type** family (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) loops over keys; the **distributive-conditional** family (`Exclude`, `Extract`, `NonNullable`, and `Omit`) filters union members; the **`infer`** family (`ReturnType`, `Parameters`, `Awaited`) captures a type out of a function or promise. Reading the standard library is the fastest way to internalize all five techniques.
+</Callout>
+
+export const quizUtility = [
+  {
+    q: 'How is `Partial<T>` implemented?',
+    options: [
+      'A runtime function that clones the object',
+      'A mapped type that adds `?` to every property: `{ [K in keyof T]?: T[K] }`',
+      'A conditional type with infer',
+      'A class decorator',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What technique powers `Exclude<T, U>`?',
+    options: [
+      'A mapped type',
+      'A distributive conditional that maps each union member to never or itself',
+      'A template literal',
+      'Recursion only',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does `ReturnType<F>` extract the return type?',
+    options: [
+      'It runs the function',
+      'A conditional type with `infer R` in the return position: `F extends (...a: any[]) => infer R ? R : never`',
+      'It reads a runtime property',
+      'A mapped type over the parameters',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How is `Omit<T, K>` typically defined?',
+    options: [
+      'As a brand-new mapped type unrelated to Pick',
+      'As `Pick<T, Exclude<keyof T, K>>` — pick the keys that are not K',
+      'As `Partial<T>`',
+      'As a decorator',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/utility-types" questions={quizUtility} />
+
+<ProgressTracker client:visible id="type-level-programming/utility-types" />

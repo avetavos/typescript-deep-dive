@@ -1,0 +1,69 @@
+---
+title: 'Everyday Types, Deep'
+description: 'type ที่ใช้ตลอดเวลา — literal, union, intersection, object, tuple, function และ narrowing — เจาะลึกกว่าใน handbook'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type ที่คุณใช้อยู่แล้ว — แบบเข้าใจจริง
+
+คุณหยิบพวกนี้มาใช้ทุกวัน: string literal, union, object shape, tuple, function โมดูลนี้จะค่อย ๆ เจาะจุดที่คนมักสะดุด — widening, `as const`, ความต่างระหว่าง union กับ intersection และ control-flow narrowing ที่ทำให้ union ใช้งานได้จริง
+
+ทุกอย่างในนี้ตั้งอยู่บน model จาก Foundations: **type คือเซตของ value** ถือ lens นี้ไว้ แล้วแต่ละ feature ก็แค่วิธีอธิบายหรือย่อเซตให้เล็กลง
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียนรู้ |
+|--------|-------------------|
+| Literals & widening | literal type, มันจะ widen เมื่อไร และ `as const` |
+| Unions & intersections | `A \| B` (กว้างกว่า) เทียบ `A & B` (แคบกว่า) และวิธีทำงานกับแต่ละแบบ |
+| Objects, arrays & tuples | property แบบ optional/`readonly`, index signature, tuple |
+| Functions | overload, `this` typing, rest param, ประเด็น `void` |
+| Narrowing | เปลี่ยน union ให้เป็น type เฉพาะด้วย control flow |
+
+## เส้นเรื่องหลัก: describe แล้วค่อย narrow
+
+<Mermaid title="everyday typing คือ describe แล้ว narrow" code={arcDiagram} />
+
+export const arcDiagram = `flowchart LR
+  describe["Describe the shape\n(literals, unions, objects)"] --> hold["Hold a wide type\n(a union of possibilities)"]
+  hold --> narrow["Narrow with control flow\n(typeof, in, discriminants)"]
+  narrow --> use["Use the specific type\nsafely"]`;
+
+คุณ describe ข้อมูลด้วย union และ object type ซึ่งทำให้คุณถือ type ที่ *กว้าง* อยู่ (มีหลายความเป็นไปได้) จากนั้นก็ **narrow** — ด้วย `typeof`, `in`, discriminant field — ลงมาเหลือ case เฉพาะตัวเดียว แล้ว TypeScript ก็ยอมให้ใช้งานอย่างปลอดภัย เข้าใจ loop นี้แล้วคุณก็เข้าใจ TypeScript ในชีวิตประจำวัน
+
+<Callout title="สรุปหนึ่งบรรทัด">
+everyday type ทั้งหมดคือวิธี **อธิบายเซตของ value** (literal, union, object, tuple) — ส่วน narrowing คือวิธี **ย่อเซตนั้น** ณ จุดใดจุดหนึ่งในโค้ด เพื่อให้ compiler รู้แน่ชัดว่าคุณมีอะไรอยู่ในมือ describe ให้กว้าง narrow ให้แม่น: นั่นคือจังหวะของ TypeScript จริง ๆ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'จังหวะที่เกิดซ้ำ ๆ ของ TypeScript ในชีวิตประจำวันคืออะไร?',
+    options: [
+      'cast ทุกอย่างเป็น any แล้วภาวนา',
+      'describe ข้อมูลด้วย type กว้าง (union) แล้ว narrow ลงมาเหลือ case เฉพาะด้วย control flow',
+      'annotate ทุกตัวแปรอย่างชัดเจน',
+      'เลี่ยง union ทั้งหมด',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'model พื้นฐานอันไหนที่ร้อยโมดูลนี้เข้าด้วยกัน?',
+    options: [
+      'type คือ runtime class',
+      'type คือเซตของ value',
+      'type เป็นแค่ documentation',
+      'ทุก type เป็น nominal',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="everyday-types/index" />

@@ -1,0 +1,123 @@
+---
+title: 'The Type-System Mindset'
+description: 'type คือเซตของ value — mental model เดียวที่ทำให้ union, subtyping, never และ unknown ชัดเจนแทนที่จะลึกลับ'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type คือเซตของ value
+
+นี่คือการปรับมุมมองที่ปลดล็อก TypeScript เลิกคิดว่า type เป็น *ป้ายชื่อ* แล้วเริ่มคิดว่ามันเป็น **เซต** — คือกลุ่มของ value ทุกตัวที่เป็นสมาชิกของมันอย่างถูกต้อง
+
+- `boolean` คือเซต `{ true, false }` — มีสมาชิกสองตัวพอดี
+- `undefined` คือเซตที่มีสมาชิก **หนึ่ง** ตัว: `{ undefined }`
+- `string` คือเซต (อนันต์) ของ string ทั้งหมด
+- `42` — ใช่ literal — คือเซตที่มีสมาชิก **หนึ่ง** ตัว: `{ 42 }` นี่คือ *literal type*
+
+พอ type กลายเป็นเซต operation ที่คุณรู้จากคณิตศาสตร์อยู่แล้วก็อธิบายทั้ง system ได้
+
+## Assignability คือความสัมพันธ์แบบ subset
+
+`a` assign ให้ `b` ได้ **ก็ต่อเมื่อ** เซต `a` เป็น subset ของเซต `b` นั่นคือกฎทั้งหมด
+
+```ts
+let x: 42 = 42;
+let y: number = x; // ✅ {42} ⊆ all numbers
+
+let a: number = 42;
+let b: 42 = a;     // ❌ all numbers ⊄ {42}
+//  Error: Type 'number' is not assignable to type '42'.
+```
+
+literal `42` พอดีเข้าไปใน `number` ได้เพราะ `{42}` เป็น subset ของทุกจำนวน ทางกลับกันพังเพราะจำนวนส่วนใหญ่ไม่ใช่ `42` คุณไม่ต้องท่องกฎ assignability เลย — แค่ถามว่า "เซตนี้อยู่ในเซตนั้นไหม"
+
+## union คือ set union; intersection คือ set intersection
+
+<Mermaid title="type ในฐานะเซต: union ทำให้กว้างขึ้น intersection ทำให้แคบลง" code={setDiagram} />
+
+export const setDiagram = `flowchart TB
+  subgraph u["A หรือ B  (union = OR)"]
+    ua["string"] --- ub["number"]
+    note1["value ที่อยู่ในเซตใดเซตหนึ่ง\nยิ่งมี value เยอะ ยิ่งกว้าง"]
+  end
+  subgraph i["A และ B  (intersection = AND)"]
+    note2["value ที่อยู่ในทั้งสองเซต\nยิ่งมี value น้อย ยิ่งแคบ"]
+  end`;
+
+- `string | number` คือ **union** ของสองเซต — value ที่อยู่ใน *เซตใดเซตหนึ่ง* union จะ *กว้างกว่า* (สมาชิกเยอะกว่า)
+- `A & B` คือ **intersection** — value ที่อยู่ใน *ทั้งสอง* สำหรับ object type แปลว่า "มี property ของทั้งสองครบ" ซึ่งเป็นเหตุผลที่ intersection ทำให้ *แคบลง*
+
+เรื่องน่าประหลาดใจที่พบบ่อยหลุดออกมาจากตรงนี้: `string & number` คือเซตว่าง ไม่มี value ไหนเป็นทั้ง string และ number — type ของมันจึงเป็น `never`
+
+## สองปลายสุด: `never` และ `unknown`
+
+เซตมีตัวเล็กสุดและใหญ่สุด และ TypeScript ตั้งชื่อให้:
+
+- **`never`** คือ **เซตว่าง** `{ }` — ไม่มี value เลย ไม่มีอะไร assign ให้ `never` ได้ (คุณสร้างสมาชิกของเซตว่างไม่ได้) แต่ `never` assign ให้ *ทุกอย่าง* ได้ (เซตว่างเป็น subset ของทุกเซต) มันคือ type ของ function ที่ไม่มีทาง return และเป็นสัญญาณว่า branch นั้นไปไม่ถึง
+- **`unknown`** คือ **เซตของ value ทั้งหมด** — top type ทุกอย่าง assign ให้ `unknown` ได้ แต่ `unknown` assign ให้แทบไม่มีอะไรได้จนกว่าคุณจะ narrow มัน มันคือ `any` เวอร์ชันที่ปลอดภัยเรื่อง type
+
+```ts
+let n: never;
+let u: unknown = "anything goes";
+
+let s: string = u; // ❌ unknown is too wide — narrow it first
+let x: unknown = 42; // ✅ everything fits into unknown
+```
+
+`any` ทำลาย model นี้โดยตั้งใจ: มันขอ *ออก* จากการเช็คเซตทั้งหมด ซึ่งเป็นเหตุผลที่มันอันตราย ส่วน `unknown` รักษา model ไว้และบังคับให้คุณ narrow
+
+<Callout title="สรุปบรรทัดเดียว">
+มองทุก type เป็น **เซตของ value ที่มันอนุญาต** แล้ว: assignability คือความสัมพันธ์แบบ subset, `|` คือ set union (กว้างกว่า), `&` คือ set intersection (แคบกว่า), `never` คือเซตว่าง (bottom) และ `unknown` คือเซตของ value ทั้งหมด (top) model เดียวนี้ทำให้ส่วนที่เหลือของ TypeScript รู้สึกเหมือนอนุมานได้เอง แทนที่จะต้องท่องจำ
+</Callout>
+
+export const quizMindset = [
+  {
+    q: 'ใน model "type คือเซต" เมื่อไรที่ type A assign ให้ type B ได้?',
+    options: [
+      'เมื่อ A กับ B มีชื่อเดียวกัน',
+      'เมื่อเซตของ value A เป็น subset ของเซตของ value B',
+      'เมื่อ B ถูกประกาศก่อน A',
+      'เมื่อ A เป็น class และ B เป็น interface',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'type ของ `string & number` คืออะไร และเพราะอะไร?',
+    options: [
+      '`string | number` เพราะ & รวมมันเข้าด้วยกัน',
+      '`never` เพราะไม่มี value ไหนอยู่ในทั้งสองเซต — intersection เป็นเซตว่าง',
+      '`unknown` เพราะ compiler ยอมแพ้',
+      '`any` เพราะมันตัดสินใจไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`never` แทนเซตอะไร?',
+    options: [
+      'เซตของ value ทั้งหมด',
+      'เซตว่าง — ไม่มี value เลย',
+      'เซตของ value ที่เป็น nullish',
+      'เซตของ value ที่เป็น primitive',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`unknown` ต่างจาก `any` อย่างไร?',
+    options: [
+      'เหมือนกันทุกอย่าง',
+      '`unknown` คือเซตของ value ทั้งหมดแต่ยังเช็ค type อยู่ (คุณต้อง narrow); ส่วน `any` ขอออกจากการเช็คทั้งหมด',
+      '`unknown` เร็วกว่าตอน runtime',
+      '`any` คือเซตว่าง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/type-system-mindset" questions={quizMindset} />
+
+<ProgressTracker client:visible id="foundations/type-system-mindset" />

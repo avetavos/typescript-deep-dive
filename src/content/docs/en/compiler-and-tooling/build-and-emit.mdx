@@ -1,0 +1,113 @@
+---
+title: 'Build & Emit'
+description: 'tsc as type-checker versus bundlers that strip types, isolatedModules, type-only imports, and project references for monorepos.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Checking and emitting are different tools' jobs
+
+The module opened with the idea that `tsc` does two jobs — check and emit. In a modern setup those jobs are usually done by **different tools**, and understanding why makes the config obvious.
+
+<Mermaid title="The two-track build" code={trackDiagram} />
+
+export const trackDiagram = `flowchart LR
+  src["source .ts"] --> bundler["bundler (esbuild/swc/vite)\nstrips types, emits JS fast"]
+  src --> tsc["tsc --noEmit\nchecks types"]
+  bundler --> out["shipped JavaScript"]
+  tsc --> ci["pass/fail in CI"]`;
+
+- The **bundler** (esbuild, swc, Vite) transpiles each file, stripping types. It is extremely fast because it never checks anything — it looks at one file at a time and deletes the types.
+- **`tsc --noEmit`** does the whole-program type check and produces no output. This is what actually catches your bugs, and you run it in CI (and your editor runs it continuously).
+
+Ship what the bundler emits; trust what `tsc` reports. `noEmit` tells `tsc` to be a pure checker.
+
+## isolatedModules: making single-file transpilation safe
+
+Because bundlers transpile **one file at a time**, they cannot see types from other files. A few TypeScript constructs are ambiguous under single-file transpilation — most importantly, re-exporting a type looks identical to re-exporting a value. `isolatedModules: true` makes `tsc` flag anything a single-file transpiler could get wrong, so your code stays compatible with esbuild and swc.
+
+```ts
+// with isolatedModules, tsc forces you to be explicit here:
+export type { User } from "./user"; // ✅ clearly a type re-export
+export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
+```
+
+## Type-only imports
+
+The fix above is part of a broader feature: **type-only imports and exports**. Marking an import as type-only tells the compiler it exists purely for type information and must be erased — never emitted as a runtime import.
+
+```ts
+import type { User } from "./user";     // erased entirely at emit
+import { type User, save } from "./db"; // User erased, save kept
+```
+
+`verbatimModuleSyntax: true` enforces this discipline: any import that is *not* marked `type` is emitted verbatim as a runtime import. It removes a whole category of surprises where the compiler silently dropped or kept an import, and it is the recommended setting for new projects.
+
+## Project references for monorepos
+
+In a large repo with several packages, type-checking everything from scratch on every change is slow. **Project references** let you split the codebase into independently buildable projects with declared dependencies:
+
+```json
+{
+  "references": [{ "path": "../core" }],
+  "compilerOptions": { "composite": true }
+}
+```
+
+With `composite: true`, `tsc --build` checks each referenced project once, caches the result, and only rechecks what changed. It turns an O(whole-repo) check into an incremental one — the standard way to keep type-checking fast as a monorepo grows.
+
+<Callout title="The one-line takeaway">
+Split the build: let a fast bundler strip types and emit JavaScript, and run `tsc --noEmit` separately to actually check. Turn on `isolatedModules` and `verbatimModuleSyntax` so your code is safe for single-file transpilers and your type-only imports are explicit. In a monorepo, project references with `composite: true` make `tsc --build` incremental.
+</Callout>
+
+export const quizBuild = [
+  {
+    q: 'In a modern setup, which tool actually catches type errors?',
+    options: [
+      'The bundler (esbuild/swc)',
+      '`tsc` running as a checker (for example `tsc --noEmit`)',
+      'The package manager',
+      'The runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is `isolatedModules` recommended when using a bundler?',
+    options: [
+      'It makes types run at runtime',
+      'Bundlers transpile one file at a time, and `isolatedModules` flags constructs a single-file transpiler could get wrong',
+      'It disables strict mode',
+      'It bundles faster',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `import type { User }` guarantee?',
+    options: [
+      'That User is a class',
+      'That the import is erased at emit and never becomes a runtime import',
+      'That User is loaded lazily',
+      'That User is validated at runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What problem do project references with `composite: true` solve?',
+    options: [
+      'They shrink the output bundle',
+      'They make type-checking a large monorepo incremental instead of rechecking everything each time',
+      'They add runtime type checks',
+      'They replace the bundler',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/build-and-emit" questions={quizBuild} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/build-and-emit" />

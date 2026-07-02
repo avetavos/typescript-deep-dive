@@ -1,0 +1,159 @@
+---
+title: 'Generic Classes & Interfaces'
+description: 'การ parameterize class, interface และ type alias และความต่างระหว่าง type parameter ที่ fix ตอน construct กับที่เลือกใหม่ต่อ method call'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## generic interface และ type alias
+
+interface หรือ type alias รับ type parameter ได้เหมือน function เป๊ะ ตัวคลาสสิกคือ container ที่ type แล้ว:
+
+```ts
+interface Box<T> {
+  value: T;
+}
+
+const numBox: Box<number> = { value: 42 };
+const strBox: Box<string> = { value: "hi" };
+numBox.value.toFixed(2); // ✅ value is number
+```
+
+type alias ทำงานเหมือนกัน และมักดีกว่าสำหรับ union และ function:
+
+```ts
+type Pair<A, B> = { first: A; second: B };
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const r: Result<number> = { ok: true, value: 10 };
+```
+
+`Result<T>` คือ generic **discriminated union** — หนึ่งใน pattern ที่มีประโยชน์ที่สุดใน TypeScript และเป็นสิ่งที่เราจะกลับมาพูดในบท error-handling
+
+## generic class: parameter fix ต่อ instance
+
+เมื่อ class เป็น generic type parameter ของมันจะถูกเลือก **ตอนที่คุณ construct instance** และทุก method ของ instance นั้นใช้ร่วมกัน:
+
+```ts
+class Stack<T> {
+  private items: T[] = [];
+
+  push(item: T): void {
+    this.items.push(item);
+  }
+  pop(): T | undefined {
+    return this.items.pop();
+  }
+  peek(): T | undefined {
+    return this.items[this.items.length - 1];
+  }
+}
+
+const numbers = new Stack<number>();
+numbers.push(1);
+numbers.push("two"); // ❌ Argument of type 'string' is not assignable to 'number'
+const top = numbers.pop();
+//    ^? number | undefined
+```
+
+พอเขียน `new Stack<number>()` `T` ก็เป็น `number` ตลอดอายุของ object นั้น หลายครั้งคุณไม่ต้องเขียนด้วยซ้ำ — `new Stack()` แล้ว `push(1)` ครั้งแรก infer ไม่ได้ แต่หลาย design ให้ inference เติม `T` จาก argument ของ constructor
+
+## type parameter ต่อ method
+
+type parameter ที่ประกาศบน **method** (ไม่ใช่บน class) จะถูกเลือกใหม่ทุกครั้งที่เรียก อิสระจาก parameter ของ class:
+
+```ts
+class Collection<T> {
+  constructor(private items: T[]) {}
+
+  // T is the class parameter (fixed per instance)
+  first(): T | undefined {
+    return this.items[0];
+  }
+
+  // U is a method parameter (fresh per call)
+  map<U>(fn: (item: T) => U): U[] {
+    return this.items.map(fn);
+  }
+}
+
+const c = new Collection([1, 2, 3]); // T = number
+const lengths = c.map((n) => n.toString().length);
+//    ^? number[]   — U inferred as number, per this call
+const labels = c.map((n) => `item-${n}`);
+//    ^? string[]   — U inferred as string, a different call
+```
+
+`T` ถูกตัดสินครั้งเดียว (ตอน construct) ส่วน `U` ถูกตัดสินทุกครั้งที่เรียก `map` การรู้ว่า parameter ตัวไหนเป็นของ class และตัวไหนเป็นของ method คือกุญแจในการอ่าน signature ของ generic class
+
+## implement generic interface
+
+class จะ implement generic interface ได้โดย fix parameter หรือคงความ generic ไว้เอง:
+
+```ts
+interface Repository<T> {
+  getById(id: string): T | undefined;
+  save(entity: T): void;
+}
+
+// fix the parameter to a concrete type
+class UserRepository implements Repository<User> {
+  getById(id: string): User | undefined { /* ... */ return undefined; }
+  save(entity: User): void { /* ... */ }
+}
+```
+
+<Callout title="The one-line takeaway">
+interface, type alias และ class รับ type parameter ได้หมด บน **class** parameter (`Stack<T>`) ถูก fix ตอน construct instance และทุก method ใช้ร่วมกัน parameter ที่ประกาศบน **method** (`map<U>`) ถูกเลือกใหม่ทุกครั้งที่เรียก การอ่าน generic class คือการถามแต่ละ parameter ว่า: fix ต่อ instance หรือต่อ call?
+</Callout>
+
+export const quizClasses = [
+  {
+    q: 'สำหรับ `class Stack<T>` type parameter `T` ถูกตัดสินเมื่อไร?',
+    options: [
+      'ครั้งเดียวต่อการเรียก method',
+      'ตอน construct instance (เช่น `new Stack<number>()`) และทุก method ใช้ร่วมกัน',
+      'ตอนจบการ compile',
+      'เป็น `any` เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน class `Collection<T>` ที่มี method `map<U>(...)` `T` กับ `U` ต่างกันอย่างไร?',
+    options: [
+      'เป็น parameter เดียวกัน',
+      '`T` fix ต่อ instance ส่วน `U` ถูกเลือกใหม่ทุกครั้งที่เรียก `map`',
+      '`U` fix ต่อ instance ส่วน `T` ต่อ call',
+      'ทั้งคู่ infer ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`type Result<T> = { ok: true; value: T } | { ok: false; error: string }` เป็นตัวอย่างของอะไร?',
+    options: [
+      'generic discriminated union',
+      'mapped type',
+      'class',
+      'enum',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'class จะทำตาม `Repository<T>` สำหรับ entity หนึ่ง ๆ ได้อย่างไร?',
+    options: [
+      'มัน implement generic interface ไม่ได้',
+      'implement `Repository<User>` โดย fix parameter เป็น type ตรง ๆ',
+      'ใส่ `any` ให้ทุก method',
+      'extends `T`',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/generic-classes-and-interfaces" questions={quizClasses} />
+
+<ProgressTracker client:visible id="generics/generic-classes-and-interfaces" />

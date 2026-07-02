@@ -1,0 +1,139 @@
+---
+title: 'Typing APIs & Boundaries'
+description: 'unknown vs any ตรง edge, การ validate ข้อมูลภายนอกให้เป็น type ที่เชื่อถือได้ และ branded type สำหรับ nominal ID'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ทุก bug เข้ามาที่ boundary
+
+ภายใน code ของคุณเอง compiler คอยดูแลให้ bug แอบเข้ามาตรงที่ typed code เจอกับโลกที่ไม่มี type: response จาก network, `localStorage`, form, third-party library, `JSON.parse` ตรง edge เหล่านั้น การการันตีของ TypeScript ดีได้แค่เท่าที่คุณจัดการกับข้อมูลที่เข้ามา
+
+การตัดสินใจแรกคือจะเลือก "ไม่รู้ type นี้" แบบไหน: `any` หรือ `unknown`
+
+## `any` ปิด checker; `unknown` เก็บมันไว้
+
+```ts
+const a: any = JSON.parse(input);
+a.user.name.toUpperCase(); // compile ผ่าน — และอาจระเบิดตอน runtime
+
+const u: unknown = JSON.parse(input);
+u.user.name; // ❌ Error: 'u' is of type 'unknown'.
+```
+
+`any` opts *out* จากการ type check — เข้าถึงอะไรก็ได้ และการการันตีทั้งหมดถูกปิด `unknown` คือ top type ที่ซื่อสัตย์: มันเก็บ value อะไรก็ได้ แต่ห้ามคุณทำอะไรกับมันจนกว่าจะ **พิสูจน์** ว่ามันเป็นอะไร เลือก `unknown` ที่ทุก boundary และมอง `any` เป็น code smell ที่คุณกำลังกำจัดออกไป
+
+สังเกตว่า `JSON.parse` ถูก type ให้ return `any` — ผลลัพธ์จึงแอบวางยา downstream ทั้งหมด เว้นแต่คุณจะ assign เป็น `unknown` ทันทีแล้ว validate
+
+## เปลี่ยน `unknown` ให้เป็น type ที่เชื่อถือได้
+
+การ narrow `unknown` ต้องใช้ runtime check ที่ compiler เข้าใจ สำหรับ shape ง่าย ๆ ใช้ **type guard** ที่เขียนเอง:
+
+```ts
+type User = { id: number; name: string };
+
+function isUser(v: unknown): v is User {
+  return (
+    typeof v === "object" && v !== null &&
+    "id" in v && typeof (v as any).id === "number" &&
+    "name" in v && typeof (v as any).name === "string"
+  );
+}
+
+const data: unknown = JSON.parse(input);
+if (isUser(data)) {
+  data.name.toUpperCase(); // ✅ data เป็น User ตรงนี้
+}
+```
+
+พอเป็นของจริง type guard ที่เขียนเองเริ่มน่าเบื่อและ drift ออกจาก type คำตอบมาตรฐานคือ **schema/parser library** (zod, valibot และเพื่อน ๆ) ที่ declaration เดียวเป็น *ทั้ง* runtime validator และ static type:
+
+```ts
+import { z } from "zod";
+
+const User = z.object({ id: z.number(), name: z.string() });
+type User = z.infer<typeof User>; // static type ที่ derive จาก schema
+
+const data = User.parse(JSON.parse(input));
+// data ถูก type เป็น User และถูก check ตอน runtime — throw ถ้า invalid
+```
+
+source of truth เดียว, check ตอน runtime, infer ตอน compile time นี่คือ boundary ที่ทำถูก
+
+<Mermaid title="validate ที่ edge, เชื่อภายใน" code={validateDiagram} />
+
+export const validateDiagram = `flowchart LR
+  raw["unknown\n(JSON, network, storage)"] -->|schema.parse / type guard| typed["trusted type\n(User)"]
+  typed --> use["use freely\nno more checks needed"]`;
+
+## Branded type สำหรับ nominal ID
+
+structural typing หมายความว่า `UserId` กับ `OrderId` ที่เป็น `string` ทั้งคู่ใช้แทนกันได้ — คุณจึงส่งตัวหนึ่งไปที่ที่คาดหวังอีกตัวได้ เมื่อเรื่องนี้สำคัญ ให้ **brand** มันด้วย marker แบบ phantom:
+
+```ts
+type UserId = string & { readonly __brand: "UserId" };
+
+function getUser(id: UserId) { /* ... */ }
+
+const raw = "u_123";
+getUser(raw); // ❌ string ธรรมดาไม่ใช่ UserId
+getUser(raw as UserId); // ✅ คุณ assert มันอย่างตั้งใจตรง boundary
+```
+
+brand มีอยู่แค่ตอน compile time (มันถูก erase), ไม่มี cost ตอน runtime และบังคับให้ทุก `UserId` ถูก *สร้างอย่างตั้งใจ* — โดยปกติคือทันทีหลัง validate นี่คือวิธีได้ nominal safety ในระบบที่เป็น structural
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ทุก bug เข้ามาตรงที่ typed code เจอกับข้อมูลที่ไม่มี type เลือก `unknown` ไม่ใช่ `any` ตรง edge เหล่านั้น แล้วแปลงเป็น type ที่เชื่อถือได้ด้วย type guard หรือ (ดีกว่า) schema library อย่าง zod ที่ declaration เดียวเป็นทั้ง validator และ type สำหรับ ID ที่ห้ามปนกัน ใช้ **branded type** กฎคือเสมอ: validate ที่ edge, เชื่อภายใน
+</Callout>
+
+export const quizBoundaries = [
+  {
+    q: 'ทำไมควรเลือก `unknown` มากกว่า `any` สำหรับ value จาก `JSON.parse`?',
+    options: [
+      'unknown เร็วกว่าตอน runtime',
+      'unknown เก็บ value อะไรก็ได้แต่ห้ามใช้จนกว่าจะพิสูจน์ type; any ปิดการ check ทั้งหมด',
+      'ทั้งคู่เหมือนกัน',
+      'any เก็บ object ไม่ได้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อดีของ schema library อย่าง zod ตรง boundary คืออะไร?',
+    options: [
+      'มันทำให้ไม่ต้องใช้ TypeScript',
+      'declaration เดียวเป็นทั้ง runtime validator และ static type — source of truth เดียว',
+      'มันทำให้ JSON.parse เร็วขึ้น',
+      'มันปิด strict mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'branded type แก้ปัญหาอะไร?',
+    options: [
+      'ทำให้ compile เร็วขึ้น',
+      'ให้ nominal distinctness เพื่อให้ string ที่เป็น `UserId` ใช้แทน string อื่นไม่ได้',
+      'เพิ่ม runtime validation อัตโนมัติ',
+      'แทนที่ interface',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'type guard function มี return type เป็น `v is User` มันทำอะไร?',
+    options: [
+      'return object User',
+      'บอก compiler ว่าถ้า function return true จะ narrow argument เป็น User ได้',
+      'throw ถ้า v ไม่ใช่ User',
+      'แปลง v เป็น User ตอน runtime',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/typing-apis-and-boundaries" questions={quizBoundaries} />
+
+<ProgressTracker client:visible id="practical-mastery/typing-apis-and-boundaries" />

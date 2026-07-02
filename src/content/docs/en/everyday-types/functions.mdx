@@ -1,0 +1,141 @@
+---
+title: 'Functions'
+description: 'Function types in depth — parameters, overloads and why unions often beat them, this typing, and the surprising void return rule.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Typing a function
+
+A function type describes parameters and a return type. You can write it inline or as a named type:
+
+```ts
+type BinaryOp = (a: number, b: number) => number;
+
+const add: BinaryOp = (a, b) => a + b;
+// a and b are inferred as number from the context — no annotations needed
+```
+
+Parameters support optional (`?`), default values, and rest:
+
+```ts
+function make(name: string, count = 1, ...tags: string[]): void {
+  // count defaults to 1; tags collects the rest into string[]
+}
+```
+
+An optional parameter `x?: number` is `number | undefined`; a defaulted parameter `count = 1` is simply `number` from the callee's view, but callers may omit it.
+
+## Overloads — and why a union is often better
+
+**Overloads** let one function present multiple call signatures. You write several signature lines followed by one implementation:
+
+```ts
+function len(x: string): number;
+function len(x: unknown[]): number;
+function len(x: string | unknown[]): number {
+  return x.length;
+}
+
+len("hi");     // ✅ 2
+len([1, 2, 3]); // ✅ 3
+```
+
+Overloads are powerful but easy to overuse. When the signatures differ only in a parameter type — not in the *relationship* between parameters and return — a single **union parameter** is simpler and clearer:
+
+```ts
+// Simpler than two overloads:
+function len(x: string | unknown[]): number {
+  return x.length;
+}
+```
+
+Reach for real overloads only when the return type genuinely depends on which input shape you got in a way a union can't express.
+
+## Typing `this`
+
+In a standalone function, `this` can be typed with a special first parameter that **disappears at the call site** (it's compile-time only):
+
+```ts
+interface Button { label: string; }
+
+function handleClick(this: Button, event: Event): void {
+  console.log(this.label); // this is typed as Button
+}
+```
+
+This catches the classic bug of a method losing its `this` when passed as a bare callback. It's most useful in older `this`-based APIs; with arrow functions and modern patterns you'll need it less.
+
+## The `void` return rule that surprises everyone
+
+A function type that returns `void` does **not** mean "the function must return nothing." It means "the caller will ignore any return value." So a function that *does* return something is still assignable to a `void`-returning type:
+
+```ts
+type Callback = () => void;
+
+const cb: Callback = () => 42; // ✅ allowed! the 42 is just ignored
+```
+
+<Mermaid title="void means the return is ignored, not forbidden" code={voidDiagram} />
+
+export const voidDiagram = `flowchart LR
+  fn["() => number\n(returns 42)"] -->|assignable to| target["() => void\n(caller ignores return)"]
+  target --> use["callers treat result\nas void — safe"]`;
+
+This is exactly why `array.forEach(x => arr.push(x))` type-checks even though `push` returns a number: `forEach` wants a `void` callback and simply ignores whatever comes back. Once you know the rule it stops being mysterious — but almost everyone hits it confused first.
+
+<Callout title="The one-line takeaway">
+Type functions with parameter and return types; parameters can be optional, defaulted, or rest. Prefer a **union parameter** over **overloads** unless the return type truly depends on the input shape. A `this` parameter types `this` and vanishes at the call site. And the big gotcha: a `void` return type means "the caller ignores the return," so functions returning a value are still assignable to it — which is why `forEach` callbacks work.
+</Callout>
+
+export const quizFn = [
+  {
+    q: 'When should you use overloads instead of a single union parameter?',
+    options: [
+      'Always — overloads are more modern',
+      'Only when the return type genuinely depends on which input shape was passed',
+      'Never — overloads are deprecated',
+      'When the function has more than two parameters',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a `this` parameter (`function f(this: T, ...)`) do at the call site?',
+    options: [
+      'It must be passed as the first argument',
+      'It disappears — it only types `this` at compile time',
+      'It becomes undefined',
+      'It is passed automatically as null',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Is `const cb: () => void = () => 42` allowed?',
+    options: [
+      'No — a void function must return nothing',
+      'Yes — void means the caller ignores the return, so returning 42 is fine',
+      'No — it is a type error',
+      'Only with a cast',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does `arr.forEach(x => other.push(x))` type-check even though push returns a number?',
+    options: [
+      'forEach ignores errors',
+      'forEach expects a void callback, and a value-returning function is assignable to a void return type',
+      'push actually returns void',
+      'It does not type-check',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/functions" questions={quizFn} />
+
+<ProgressTracker client:visible id="everyday-types/functions" />

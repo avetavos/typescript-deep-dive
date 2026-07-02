@@ -1,0 +1,127 @@
+---
+title: 'Decorators'
+description: 'The modern stage-3 decorators in TypeScript 5 — class, method, accessor, and field decorators, their context object, and decorator factories.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Two decorators eras — use the new one
+
+A **decorator** is a function that wraps or observes a class or a class member, letting you add behavior declaratively with `@name` syntax. There are two incompatible designs, and it matters which you mean:
+
+- **Legacy decorators** — the old, experimental design enabled by `experimentalDecorators` in `tsconfig`. Used heavily by older Angular and NestJS. Different signatures, relies on `reflect-metadata`.
+- **Stage-3 decorators** — the standardized ECMAScript design, supported natively since **TypeScript 5.0** with no special flag. This is the one to learn for new code.
+
+This lesson covers **stage-3** decorators.
+
+## A method decorator
+
+A method decorator receives the original method and a **context** object, and returns a replacement (or nothing). Here is a `@logged` decorator that wraps a method to log its calls:
+
+```ts
+function logged(originalMethod: any, context: ClassMethodDecoratorContext) {
+  const name = String(context.name);
+  function replacement(this: any, ...args: any[]) {
+    console.log(`calling ${name}`);
+    return originalMethod.call(this, ...args);
+  }
+  return replacement;
+}
+
+class Service {
+  @logged
+  fetch(id: number) {
+    return `item ${id}`;
+  }
+}
+
+new Service().fetch(1); // logs "calling fetch", then returns "item 1"
+```
+
+The `context` object is the heart of the new design. It tells the decorator what it is decorating — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private`, and an `addInitializer` hook for setup work.
+
+## The four things you can decorate
+
+| Decorator kind | Receives | Typical use |
+|----------------|----------|-------------|
+| Class | the class, context | register it, wrap the constructor |
+| Method | the method, context | wrap/replace behavior (logging, timing) |
+| Accessor | the getter/setter, context | intercept reads/writes |
+| Field | `undefined`, context | return an initializer to transform the initial value |
+
+A **field** decorator is a little different — it does not receive a value to wrap; it can return an initializer function that transforms the field's initial value when an instance is created.
+
+## Decorator factories
+
+To make a decorator configurable, write a function that *returns* a decorator — a **decorator factory**. The `@name(args)` call runs the factory, and its return value is the actual decorator.
+
+```ts
+function logged(label: string) {           // factory: takes config
+  return function (originalMethod: any, context: ClassMethodDecoratorContext) {
+    return function (this: any, ...args: any[]) {
+      console.log(`[${label}] ${String(context.name)}`);
+      return originalMethod.call(this, ...args);
+    };
+  };
+}
+
+class Api {
+  @logged("http")
+  get() { /* ... */ }
+}
+```
+
+<Callout title="The one-line takeaway">
+Prefer **stage-3 decorators** (native since TypeScript 5, no `experimentalDecorators` flag) over the legacy experimental design. A decorator is a function taking the decorated thing plus a **context** object (`kind`, `name`, `static`, `private`, `addInitializer`); it can wrap or replace behavior. Wrap the decorator in another function — a **factory** — when you need to pass configuration with `@name(args)`.
+</Callout>
+
+export const quizDecorators = [
+  {
+    q: 'Which decorator design should new TypeScript code use?',
+    options: [
+      'Legacy decorators via `experimentalDecorators`',
+      'Stage-3 (standard ECMAScript) decorators, native since TypeScript 5',
+      'JSX decorators',
+      'There are no decorators in TypeScript',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does the second argument to a stage-3 decorator (the context) provide?',
+    options: [
+      'The runtime value of the field only',
+      'Metadata about what is decorated — kind, name, static, private, and an addInitializer hook',
+      'The tsconfig options',
+      'Nothing useful',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is a decorator factory?',
+    options: [
+      'A class that builds decorators at runtime',
+      'A function that returns a decorator, so you can pass configuration with `@name(args)`',
+      'A special tsconfig setting',
+      'A decorator applied to a factory function',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does a field decorator differ from a method decorator?',
+    options: [
+      'It cannot exist',
+      'It does not receive a value to wrap; it can return an initializer that transforms the field initial value',
+      'It runs only once per class',
+      'It must be static',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/decorators" questions={quizDecorators} />
+
+<ProgressTracker client:visible id="classes-and-oop/decorators" />

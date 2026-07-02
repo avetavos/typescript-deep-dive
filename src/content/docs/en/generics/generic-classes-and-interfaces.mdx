@@ -1,0 +1,159 @@
+---
+title: 'Generic Classes & Interfaces'
+description: 'Parameterizing classes, interfaces, and type aliases — and the difference between a type parameter fixed at construction and one chosen per method call.'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Generic interfaces and type aliases
+
+An interface or type alias can take type parameters exactly like a function. The classic is a typed container:
+
+```ts
+interface Box<T> {
+  value: T;
+}
+
+const numBox: Box<number> = { value: 42 };
+const strBox: Box<string> = { value: "hi" };
+numBox.value.toFixed(2); // ✅ value is number
+```
+
+Type aliases work the same way and are often better for unions and functions:
+
+```ts
+type Pair<A, B> = { first: A; second: B };
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+const r: Result<number> = { ok: true, value: 10 };
+```
+
+`Result<T>` is a generic **discriminated union** — one of the most useful patterns in TypeScript, and something we return to in the error-handling lesson.
+
+## Generic classes: the parameter is fixed per instance
+
+When a class is generic, its type parameter is chosen **when you construct an instance**, and every method of that instance shares it:
+
+```ts
+class Stack<T> {
+  private items: T[] = [];
+
+  push(item: T): void {
+    this.items.push(item);
+  }
+  pop(): T | undefined {
+    return this.items.pop();
+  }
+  peek(): T | undefined {
+    return this.items[this.items.length - 1];
+  }
+}
+
+const numbers = new Stack<number>();
+numbers.push(1);
+numbers.push("two"); // ❌ Argument of type 'string' is not assignable to 'number'
+const top = numbers.pop();
+//    ^? number | undefined
+```
+
+Once you write `new Stack<number>()`, `T` is `number` for the life of that object. Often you don't even write it — `new Stack()` with a first `push(1)` can't infer, but many designs let inference fill `T` from a constructor argument.
+
+## Per-method type parameters
+
+A type parameter declared on a **method** (not the class) is chosen fresh on each call, independent of the class parameter:
+
+```ts
+class Collection<T> {
+  constructor(private items: T[]) {}
+
+  // T is the class parameter (fixed per instance)
+  first(): T | undefined {
+    return this.items[0];
+  }
+
+  // U is a method parameter (fresh per call)
+  map<U>(fn: (item: T) => U): U[] {
+    return this.items.map(fn);
+  }
+}
+
+const c = new Collection([1, 2, 3]); // T = number
+const lengths = c.map((n) => n.toString().length);
+//    ^? number[]   — U inferred as number, per this call
+const labels = c.map((n) => `item-${n}`);
+//    ^? string[]   — U inferred as string, a different call
+```
+
+`T` is decided once (at construction); `U` is decided every time you call `map`. Knowing which parameter belongs to the class and which to the method is the key to reading generic class signatures.
+
+## Implementing a generic interface
+
+A class can implement a generic interface either by fixing the parameter or by staying generic itself:
+
+```ts
+interface Repository<T> {
+  getById(id: string): T | undefined;
+  save(entity: T): void;
+}
+
+// fix the parameter to a concrete type
+class UserRepository implements Repository<User> {
+  getById(id: string): User | undefined { /* ... */ return undefined; }
+  save(entity: User): void { /* ... */ }
+}
+```
+
+<Callout title="The one-line takeaway">
+Interfaces, type aliases, and classes can all take type parameters. On a **class**, the parameter (`Stack<T>`) is fixed when you construct the instance and shared by every method. A parameter declared on a **method** (`map<U>`) is chosen fresh on each call. Reading a generic class means asking, for each parameter: is this fixed per instance, or per call?
+</Callout>
+
+export const quizClasses = [
+  {
+    q: 'For `class Stack<T>`, when is the type parameter `T` decided?',
+    options: [
+      'Once per method call',
+      'When you construct the instance (e.g. `new Stack<number>()`), and it is shared by all methods',
+      'At compile end',
+      'It is always `any`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In a class `Collection<T>` with a method `map<U>(...)`, how do `T` and `U` differ?',
+    options: [
+      'They are the same parameter',
+      '`T` is fixed per instance; `U` is chosen fresh on each `map` call',
+      '`U` is fixed per instance; `T` is per call',
+      'Neither can be inferred',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is `type Result<T> = { ok: true; value: T } | { ok: false; error: string }` an example of?',
+    options: [
+      'A generic discriminated union',
+      'A mapped type',
+      'A class',
+      'An enum',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'How can a class satisfy `Repository<T>` for a specific entity?',
+    options: [
+      'It cannot implement generic interfaces',
+      'By implementing `Repository<User>`, fixing the parameter to a concrete type',
+      'By marking every method `any`',
+      'By extending `T`',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/generic-classes-and-interfaces" questions={quizClasses} />
+
+<ProgressTracker client:visible id="generics/generic-classes-and-interfaces" />

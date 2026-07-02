@@ -1,0 +1,69 @@
+---
+title: 'Everyday Types, Deep'
+description: 'The types you use constantly — literals, unions, intersections, objects, tuples, functions, and narrowing — taken deeper than the handbook.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The types you already use — properly understood
+
+You reach for these every day: string literals, unions, object shapes, tuples, functions. This module slows down on the parts that trip people up — widening, `as const`, the difference between a union and an intersection, and the control-flow narrowing that makes unions actually usable.
+
+Everything here rests on the foundations model: **a type is a set of values**. Keep that lens and each feature is just a way of describing or shrinking a set.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Literals & widening | Literal types, when they widen, and `as const` |
+| Unions & intersections | `A \| B` (wider) vs `A & B` (narrower), and how to work with each |
+| Objects, arrays & tuples | Optional/`readonly` properties, index signatures, tuples |
+| Functions | Overloads, `this` typing, rest params, the `void` nuance |
+| Narrowing | Turning a union into a specific type with control flow |
+
+## The through-line: describe, then narrow
+
+<Mermaid title="Everyday typing is describe then narrow" code={arcDiagram} />
+
+export const arcDiagram = `flowchart LR
+  describe["Describe the shape\n(literals, unions, objects)"] --> hold["Hold a wide type\n(a union of possibilities)"]
+  hold --> narrow["Narrow with control flow\n(typeof, in, discriminants)"]
+  narrow --> use["Use the specific type\nsafely"]`;
+
+You describe data with unions and object types, which leaves you holding a *wide* type (several possibilities). Then you **narrow** — with `typeof`, `in`, a discriminant field — down to the one specific case, and TypeScript lets you use it safely. Master that loop and you've mastered day-to-day TypeScript.
+
+<Callout title="The one-line takeaway">
+The everyday types are all ways to **describe a set of values** (literals, unions, objects, tuples) — and narrowing is how you **shrink that set** at a specific point in your code so the compiler knows exactly what you have. Describe wide, narrow to precise: that's the rhythm of real TypeScript.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What is the recurring rhythm of everyday TypeScript?',
+    options: [
+      'Cast everything to any, then hope',
+      'Describe data with wide types (unions), then narrow to a specific case with control flow',
+      'Annotate every single variable explicitly',
+      'Avoid unions entirely',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which underlying model ties this whole module together?',
+    options: [
+      'Types are runtime classes',
+      'A type is a set of values',
+      'Types are just documentation',
+      'Every type is nominal',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="everyday-types/index" />

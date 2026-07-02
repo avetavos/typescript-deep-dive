@@ -1,0 +1,137 @@
+---
+title: 'Recursive Types'
+description: 'Types that reference themselves — recursive aliases, recursion over tuples with infer, the instantiation-depth limit, and knowing when to stop.'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A type that refers to itself
+
+Recursion at the type level looks exactly like recursion in code: a type alias that mentions itself. The classic example is a JSON value — data nested to any depth:
+
+```ts
+type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | Json[]
+  | { [key: string]: Json };
+
+const ok: Json = { name: "Ada", tags: ["x", "y"], meta: { n: 1 } }; // ✅
+const bad: Json = { fn: () => 1 }; // ❌ functions are not Json
+```
+
+`Json` appears in its own definition twice — inside the array and inside the object — which is what lets it describe arbitrarily deep data. Recursive aliases like this are common and completely idiomatic.
+
+## Recursion over tuples with `infer`
+
+The more powerful pattern is recursing over a **tuple type**, peeling one element at a time with `infer` — the type-level equivalent of processing a list head/tail.
+
+```ts
+// Reverse a tuple type
+type Reverse<T extends unknown[]> =
+  T extends [infer Head, ...infer Rest]
+    ? [...Reverse<Rest>, Head]
+    : [];
+
+type R = Reverse<[1, 2, 3]>;
+//   ^? [3, 2, 1]
+
+// Length of a tuple
+type Length<T extends unknown[]> = T["length"];
+type L = Length<[1, 2, 3]>; // 3
+```
+
+`[infer Head, ...infer Rest]` splits a tuple into its first element and the rest; the type calls itself on `Rest` until it hits the empty tuple base case. This is how typed path builders, deep `Get<Obj, "a.b.c">` lookups, and tuple math are written.
+
+<Mermaid title="Recursion peels one element per step until the base case" code={recDiagram} />
+
+export const recDiagram = `flowchart LR
+  a["[1, 2, 3]"] --> b["head 1, rest [2, 3]"]
+  b --> c["head 2, rest [3]"]
+  c --> d["head 3, rest []"]
+  d --> e["base case: stop"]`;
+
+## The instantiation-depth limit
+
+Type-level recursion is not unbounded. The compiler caps recursive instantiation to protect itself from infinite loops, and you will hit the ceiling on large inputs:
+
+```ts
+// Error on deep recursion:
+// "Type instantiation is excessively deep and possibly infinite."
+```
+
+The historical limit was around **50** levels of naive recursion, later relaxed for **tail-recursive** conditional types (where the recursive call is the entire result), which can go much deeper — roughly a few thousand. Writing a recursion tail-recursively (accumulate into an extra type parameter, return it at the base case) is the standard trick to push the limit:
+
+```ts
+// Tail-recursive: accumulate results, so the compiler can optimize it
+type BuildTuple<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
+```
+
+## Knowing when to stop
+
+Recursive types are the sharpest tool in the type-level box, and the easiest to misuse. Before writing one, ask:
+
+- **Will a teammate be able to read it?** A clever type that no one dares touch is a liability, not an asset.
+- **Is the error message tolerable?** Deep recursive types produce dreadful errors when they fail — sometimes worse than the bug they prevent.
+- **Would a simpler type or a runtime check do?** Often the honest answer is a plain type plus validation at the boundary (the Practical Mastery module).
+
+The best type-level engineers write *less* of it than they could, reserving recursion for the few cases — deep key paths, precise builder APIs — where it genuinely earns its keep.
+
+<Callout title="The one-line takeaway">
+Types can reference themselves: recursive **aliases** describe deep data (a `Json` type), and recursion over **tuples** with `[infer Head, ...infer Rest]` processes lists one element at a time. The compiler caps recursion depth (roughly 50 naive, far more for **tail-recursive** conditionals that accumulate into a parameter). Recursion is powerful and hard to read — reach for it only when a simpler type or a runtime check will not do.
+</Callout>
+
+export const quizRecursive = [
+  {
+    q: 'What makes the `Json` type able to describe arbitrarily deep data?',
+    options: [
+      'It uses a runtime parser',
+      'It references itself in its own definition (inside the array and object)',
+      'It is marked recursive with a keyword',
+      'It has no limit flag',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `[infer Head, ...infer Rest]` do in a recursive tuple type?',
+    options: [
+      'Reverses the whole tuple at once',
+      'Splits the tuple into its first element (Head) and the remaining elements (Rest)',
+      'Counts the elements',
+      'Converts the tuple to an array',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does the compiler limit type instantiation depth?',
+    options: [
+      'To save disk space',
+      'To protect itself from infinite or excessively deep recursion',
+      'Because recursion is not allowed at all',
+      'To make builds slower on purpose',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the standard trick to push recursion deeper?',
+    options: [
+      'Add more union members',
+      'Write it tail-recursively — accumulate into an extra type parameter and return it at the base case',
+      'Disable strict mode',
+      'Use classes instead',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/recursive-types" questions={quizRecursive} />
+
+<ProgressTracker client:visible id="type-level-programming/recursive-types" />

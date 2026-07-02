@@ -1,0 +1,130 @@
+---
+title: 'The Utility Types'
+description: 'ทัวร์ utility type ที่ built-in มา — และวิธีที่หลายตัวถูก implement จริงด้วย mapped type, conditional type และ infer'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## คุณรู้อยู่แล้วว่าพวกนี้ถูกสร้างยังไง
+
+TypeScript มี standard library ของ **utility type** มาให้ ถึงตอนนี้คุณเห็นทุกเทคนิคที่มันใช้แล้ว — แทนที่จะท่องจำ คุณจึง *อ่าน* มันออก นั่นคือเป้าหมายของบทเรียนนี้: จำแต่ละ utility ได้และรู้ primitive เบื้องหลัง
+
+| Utility | ทำอะไร | สร้างอย่างไร |
+|---------|--------|-----------------|
+| `Partial<T>` | ทุก property เป็น optional | mapped type กับ `?` |
+| `Required<T>` | ทุก property required | mapped type กับ `-?` |
+| `Readonly<T>` | ทุก property readonly | mapped type กับ `readonly` |
+| `Pick<T, K>` | เก็บเฉพาะ key `K` | mapped type บน `K` + `T[K]` |
+| `Omit<T, K>` | drop key `K` | `Pick` ของ `Exclude<keyof T, K>` |
+| `Record<K, V>` | object ที่ key เป็น `K`, value เป็น `V` | mapped type บน `K` |
+| `Exclude<T, U>` | ลบ `U` ออกจาก union `T` | distributive conditional |
+| `Extract<T, U>` | เก็บเฉพาะ `U` จาก union `T` | distributive conditional |
+| `NonNullable<T>` | ลบ `null`/`undefined` | conditional type |
+| `ReturnType<F>` | return type ของ `F` | conditional กับ `infer` |
+| `Parameters<F>` | tuple ของ parameter ของ `F` | conditional กับ `infer` |
+| `Awaited<T>` | unwrap Promise | recursive conditional กับ `infer` |
+
+## ตระกูล mapped-type
+
+`Partial`, `Required`, `Readonly`, `Pick` และ `Record` ล้วนเป็น mapped type บรรทัดเดียว:
+
+```ts
+type Partial<T>  = { [K in keyof T]?: T[K] };
+type Required<T> = { [K in keyof T]-?: T[K] };
+type Readonly<T> = { readonly [K in keyof T]: T[K] };
+type Pick<T, K extends keyof T> = { [P in K]: T[P] };
+type Record<K extends keyof any, V> = { [P in K]: V };
+```
+
+ไม่มีอะไรพิสดาร — loop บน key บางทีเปลี่ยน modifier บางที lookup `T[K]` พอเห็นแบบนี้ `Pick<User, "id" | "name">` ก็ชัดว่าคือ "วนซ้ำสอง key นั้น copy value type ของมัน"
+
+## ตระกูล distributive-conditional
+
+`Exclude`, `Extract` และ `NonNullable` ทำงานบน **union** ด้วย conditional type ที่ distribute บนแต่ละ member:
+
+```ts
+type Exclude<T, U> = T extends U ? never : T;
+type Extract<T, U> = T extends U ? T : never;
+type NonNullable<T> = T extends null | undefined ? never : T;
+
+type A = Exclude<"a" | "b" | "c", "b">; // "a" | "c"
+```
+
+เมื่อ type ที่ถูกเช็คเป็น naked type parameter และคุณส่ง union เข้าไป conditional จะรัน **ทีละ member** แล้ว union ผลลัพธ์ ดังนั้น `Exclude` map แต่ละ member เป็น `never` (drop) หรือตัวมันเอง (เก็บ) — และ `never` หายไปจาก union `Omit` จึงตกมาเป็น `Pick<T, Exclude<keyof T, K>>`
+
+## ตระกูล `infer`
+
+`ReturnType`, `Parameters` และ `Awaited` **capture** type ออกมาจาก structure ด้วย `infer`:
+
+```ts
+type ReturnType<F> = F extends (...args: any[]) => infer R ? R : never;
+type Parameters<F> = F extends (...args: infer P) => any ? P : never;
+
+type R = ReturnType<() => number>;        // number
+type P = Parameters<(a: string, b: number) => void>; // [string, number]
+```
+
+`infer R` match ตำแหน่ง return ของ function แล้ว bind เข้า `R`; `infer P` match parameter list ทั้งหมดเป็น tuple `Awaited` เพิ่ม recursion เพื่อลอก promise ที่ซ้อนกัน
+
+<Mermaid title="แต่ละ utility map ไปยัง primitive ที่คุณรู้แล้ว" code={utilDiagram} />
+
+export const utilDiagram = `flowchart TB
+  mapped["Mapped types"] --> f1["Partial, Required, Readonly, Pick, Record"]
+  cond["Distributive conditionals"] --> f2["Exclude, Extract, NonNullable, Omit"]
+  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
+
+<Callout title="สรุปบรรทัดเดียว">
+utility type ไม่ใช่เวทมนตร์ — มันคือ expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract`, `NonNullable` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับทั้ง 5 เทคนิค
+</Callout>
+
+export const quizUtility = [
+  {
+    q: '`Partial<T>` ถูก implement อย่างไร?',
+    options: [
+      'runtime function ที่ clone object',
+      'mapped type ที่เพิ่ม `?` ให้ทุก property: `{ [K in keyof T]?: T[K] }`',
+      'conditional type กับ infer',
+      'class decorator',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เทคนิคใดที่เป็นพลังของ `Exclude<T, U>`?',
+    options: [
+      'mapped type',
+      'distributive conditional ที่ map แต่ละ member ของ union เป็น never หรือตัวมันเอง',
+      'template literal',
+      'recursion อย่างเดียว',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`ReturnType<F>` ดึง return type อย่างไร?',
+    options: [
+      'มันรัน function',
+      'conditional type กับ `infer R` ที่ตำแหน่ง return: `F extends (...a: any[]) => infer R ? R : never`',
+      'อ่าน runtime property',
+      'mapped type บน parameter',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`Omit<T, K>` มักถูก define อย่างไร?',
+    options: [
+      'เป็น mapped type ใหม่ที่ไม่เกี่ยวกับ Pick',
+      'เป็น `Pick<T, Exclude<keyof T, K>>` — pick key ที่ไม่ใช่ K',
+      'เป็น `Partial<T>`',
+      'เป็น decorator',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/utility-types" questions={quizUtility} />
+
+<ProgressTracker client:visible id="type-level-programming/utility-types" />

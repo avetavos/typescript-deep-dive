@@ -1,0 +1,121 @@
+---
+title: 'tsconfig, Deep'
+description: 'compiler option ที่เปลี่ยนความปลอดภัยและ output ของคุณจริง ๆ — strict และครอบครัวของมัน, target, module และ flag ข้าง ๆ strict ที่ควรเปิด'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## เริ่มจาก strict
+
+`tsconfig.json` มี option เป็นสิบ ๆ ตัว แต่มีไม่กี่ตัวที่ตัดสินว่า TypeScript ปกป้องคุณจริงหรือเปล่า ตัวสำคัญที่สุดคือ `strict` มันไม่ใช่ check ตัวเดียว — มันคือชุดที่เปิด flag ทั้งครอบครัวพร้อมกัน และทุกตัวจับ bug จริงได้
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true
+  }
+}
+```
+
+เปิด `strict` ตั้งแต่วันแรก การมาเปิดทีหลังบน codebase ใหญ่ ๆ แปลว่าต้องแก้ error เป็นร้อยพร้อมกัน — ยากกว่าการไม่ปล่อยให้มันสะสมตั้งแต่แรกมาก
+
+## `strict` เปิดอะไรให้จริง ๆ
+
+`strict: true` เป็นตัวย่อของครอบครัวนี้ทั้งหมด:
+
+| Flag (อยู่ใน `strict`) | สิ่งที่มันจับได้ |
+|------------------------|-----------------|
+| `strictNullChecks` | `null` และ `undefined` ไม่แอบอยู่ในทุก type อีกต่อไป — คุ้มที่สุด |
+| `noImplicitAny` | value ที่จะ fall back เป็น `any` กลายเป็น error ที่คุณต้องแก้ |
+| `strictFunctionTypes` | parameter ของ function ถูก check แบบ contravariant — callback ที่ไม่ปลอดภัยถูกจับ |
+| `strictBindCallApply` | `bind`, `call` และ `apply` ถูก type-check กับ signature ของ function |
+| `strictPropertyInitialization` | field ของ class ต้องถูก assign ใน constructor (หรือ mark เป็น optional) |
+| `useUnknownInCatchVariables` | `catch (e)` ให้ `unknown` ไม่ใช่ `any` บังคับให้คุณ narrow |
+| `alwaysStrict` | emit `"use strict"` และ parse ใน strict mode |
+
+พระเอกคือ `strictNullChecks` ถ้าไม่มีมัน `string` จะแอบรวม `null` และ `undefined` ไว้ด้วย และ compiler เตือนคุณเรื่อง runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย พอเปิดมัน `null` และ `undefined` กลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างตั้งใจ
+
+## `target`, `module` และ `lib`
+
+สาม option นี้อธิบายโลกที่ code ของคุณรันอยู่:
+
+- **`target`** — JavaScript version ที่ `tsc` emit ออกมา `ES2022` เป็น default สมัยใหม่ที่ปลอดภัย ถ้า target ต่ำกว่าจะ down-level syntax ใหม่ ๆ ให้เป็นของเทียบเท่าเวอร์ชันเก่า
+- **`module`** — module format ของ output (`NodeNext`, `ESNext`, `CommonJS`, ...) ควรตรงกับวิธีที่ code ถูกโหลดจริง
+- **`lib`** — type declaration built-in ตัวไหนที่ใช้ได้ (เช่น `DOM` สำหรับ global ของ browser, `ES2022` สำหรับ method ใหม่ ๆ ของ runtime) ถ้าคุณใช้ `structuredClone` หรือ `Array.prototype.at` ตัว `lib` ต้องรวมเวอร์ชันที่ declare พวกมันไว้
+
+## flag ข้าง ๆ strict ที่ควรเพิ่ม
+
+`strict` เป็นพื้น ไม่ใช่เพดาน อีกสอง flag จับ bug ที่ `strict` อย่างเดียวพลาด:
+
+```ts
+// noUncheckedIndexedAccess: true
+const arr = [1, 2, 3];
+const x = arr[10]; // type is now `number | undefined`, not `number`
+x.toFixed(); // ❌ Object is possibly 'undefined' — exactly the bug you want caught
+```
+
+- **`noUncheckedIndexedAccess`** — การ index array หรือ record อาจ return `undefined` ได้ (index 10 ของ array 3 ตัวก็ return) type จึงสะท้อนความจริงนั้น มีประสิทธิภาพมากในการกัน bug out-of-bounds
+- **`exactOptionalPropertyTypes`** — แยกความต่างระหว่าง property ที่ set เป็น `undefined` กับ property ที่หายไปเลย ทำให้ optional `name?: string` ไม่แอบรับ `name: undefined` อีกต่อไป
+
+<Callout title="The one-line takeaway">
+เปิด `strict: true` ตั้งแต่วันแรก — มันรวมชุดของ check ไว้ และแค่ `strictNullChecks` ตัวเดียวก็กำจัด class ของ JavaScript crash ที่พบบ่อยที่สุดได้ ตั้ง `target`, `module` และ `lib` ให้ตรงกับ runtime ของคุณ แล้วเพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` เพื่อจับ bug ที่ strict ไม่จับ
+</Callout>
+
+export const quizTsconfig = [
+  {
+    q: '`strict: true` คืออะไร?',
+    options: [
+      'check ตัวเดียวสำหรับค่า null',
+      'ตัวย่อที่เปิดครอบครัวของ strict check ทั้งชุดพร้อมกัน',
+      'flag ที่ปิด type-checking',
+      'การ optimize performance',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`strictNullChecks` เปลี่ยนอะไร?',
+    options: [
+      'ทำให้ build เร็วขึ้น',
+      '`null` และ `undefined` กลายเป็น type แยกที่คุณต้องจัดการ แทนที่จะแอบอยู่ในทุก type',
+      'ห้ามใช้ null เลย',
+      'มีผลกับ array เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'เมื่อเปิด `noUncheckedIndexedAccess` แล้ว type ของ `arr[i]` สำหรับ `const arr: number[]` คืออะไร?',
+    options: [
+      '`number`',
+      '`number | undefined`',
+      '`any`',
+      '`never`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมควรเปิด `strict` ตั้งแต่เริ่มโปรเจกต์ ไม่ใช่มาเปิดทีหลัง?',
+    options: [
+      'มันเปิดทีหลังไม่ได้เลย',
+      'การมาเปิดทีหลังบน codebase ใหญ่แปลว่าต้องแก้ error ที่สะสมไว้เป็นร้อยพร้อมกัน',
+      'มันเปลี่ยน behavior ตอน runtime',
+      'มันฟรีเฉพาะโปรเจกต์ใหม่',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/tsconfig-deep" questions={quizTsconfig} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/tsconfig-deep" />

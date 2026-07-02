@@ -1,0 +1,147 @@
+---
+title: 'Generic Functions & Constraints'
+description: 'Type parameters, constraining them with extends, default type parameters, multiple parameters, and how to avoid over-generalizing.'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A type parameter is inferred, not usually written
+
+Most of the time you never write the type argument — inference fills it in from the value you pass:
+
+```ts
+function first<T>(arr: T[]): T | undefined {
+  return arr[0];
+}
+
+const a = first([1, 2, 3]);
+//    ^? number | undefined   — T inferred as number
+const b = first(["x", "y"]);
+//    ^? string | undefined   — T inferred as string
+```
+
+You *can* pass it explicitly (`first<number>([1, 2, 3])`), but you rarely need to. The type parameter flows from the call site.
+
+## Constraints: `extends` limits what `T` can be
+
+An unconstrained `T` can be *anything*, so you can't assume it has any properties. When your function needs `T` to have some shape, constrain it with `extends`:
+
+```ts
+// ❌ without a constraint, T might not have .length
+function longest<T>(a: T, b: T) {
+  return a.length > b.length ? a : b; // Error: Property 'length' does not exist on type 'T'
+}
+
+// ✅ constrain T to things that have a numeric length
+function longest<T extends { length: number }>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest([1, 2], [1, 2, 3]); // ✅ arrays have length → returns number[]
+longest("ab", "abc");        // ✅ strings have length → returns string
+longest(1, 2);               // ❌ number has no length
+```
+
+Read `T extends { length: number }` as "`T` must be assignable to `{ length: number }`" — i.e. `T` is some subtype that has at least a numeric `length`. Crucially, the return type is still `T`, so you keep the *specific* type (`number[]`, `string`) rather than widening to the constraint.
+
+## `keyof` constraints: a safe property getter
+
+A constraint can reference another type parameter. The classic example is a type-safe `get`:
+
+```ts
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const user = { name: "Ada", age: 36 };
+const name = getProp(user, "name");
+//    ^? string
+const age = getProp(user, "age");
+//    ^? number
+getProp(user, "email"); // ❌ "email" is not a key of user
+```
+
+`K extends keyof T` says the key must be one of `T`'s actual keys, and the return type `T[K]` is the type *of that specific property*. This is the backbone of typed object utilities.
+
+## Default type parameters
+
+Like default function arguments, a type parameter can have a default that's used when it can't be inferred and isn't supplied:
+
+```ts
+interface Container<T = string> {
+  value: T;
+}
+
+const c1: Container = { value: "hi" };     // T defaults to string
+const c2: Container<number> = { value: 1 }; // T explicitly number
+```
+
+Defaults are common on generic classes and interfaces where a sensible fallback exists.
+
+## Don't over-generalize
+
+Generics are a tool, not a goal. A type parameter that appears **only once** in a signature is usually a mistake — it's not linking anything, so it might as well be a concrete type or `unknown`:
+
+```ts
+// pointless generic: T is used once, links nothing
+function log<T>(x: T): void { console.log(x); }
+// just write:
+function log(x: unknown): void { console.log(x); }
+```
+
+A generic earns its keep when the type parameter connects two or more positions (input to output, or one parameter to another). If it doesn't create a *relationship*, drop it.
+
+<Callout title="The one-line takeaway">
+Type parameters are usually **inferred** from arguments, not written. Constrain them with `extends` when you need `T` to have a certain shape (`T extends { length: number }`) or to be a key of another type (`K extends keyof T`, returning `T[K]`). Give defaults where a sensible fallback exists. And drop any type parameter that appears only once — a generic should link positions, not decorate one.
+</Callout>
+
+export const quizConstraints = [
+  {
+    q: 'Why constrain a type parameter with `extends`?',
+    options: [
+      'To make the function run faster',
+      'So the function can rely on `T` having a certain shape (e.g. a `length` property)',
+      'To convert `T` to `any`',
+      'It is required for all generics',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In `function getProp<T, K extends keyof T>(obj: T, key: K): T[K]`, what does the return type `T[K]` represent?',
+    options: [
+      'Always `any`',
+      'The type of the specific property named by `key`',
+      'The whole object type',
+      'A union of all property types',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A type parameter that appears only once in a signature is usually:',
+    options: [
+      'The most powerful kind of generic',
+      'A sign the generic is pointless — it links nothing, so use a concrete type or `unknown`',
+      'Required by the compiler',
+      'Faster than a constrained one',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a default type parameter like `<T = string>` do?',
+    options: [
+      'Forces every caller to pass `string`',
+      'Supplies a fallback type used when `T` is not inferred or provided',
+      'Makes `T` read-only',
+      'Disables inference',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/generic-functions-and-constraints" questions={quizConstraints} />
+
+<ProgressTracker client:visible id="generics/generic-functions-and-constraints" />

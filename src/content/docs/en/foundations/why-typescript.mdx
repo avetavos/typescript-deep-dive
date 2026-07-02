@@ -1,0 +1,142 @@
+---
+title: 'Why TypeScript?'
+description: 'What a static type system actually buys you, the compile-time vs runtime split, type erasure, and the honest costs.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The bug TypeScript is designed to catch
+
+Here is plain JavaScript that looks fine and fails at runtime:
+
+```js
+function greet(user) {
+  return "Hello, " + user.name.toUpperCase();
+}
+
+greet({ nam: "Ada" }); // typo: `nam` not `name`
+// 💥 TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+The typo isn't found until that line executes — maybe in production, maybe for one unlucky user. TypeScript moves that discovery to **compile time**:
+
+```ts
+function greet(user: { name: string }) {
+  return "Hello, " + user.name.toUpperCase();
+}
+
+greet({ nam: "Ada" });
+// ❌ Error: Object literal may only specify known properties,
+//    and 'nam' does not exist in type '{ name: string }'.
+```
+
+You find out the instant you write it, in the editor, before anything runs. That shift — from "fails later, somewhere" to "fails now, right here" — is the whole value proposition.
+
+## Compile time vs runtime: the crucial split
+
+TypeScript has two completely separate phases, and confusing them is the source of most beginner mistakes.
+
+<Mermaid title="Types are checked, then erased" code={phaseDiagram} />
+
+export const phaseDiagram = `flowchart LR
+  ts[".ts source\n(types + logic)"] -->|tsc: type-check| check["Type checking\n(errors reported here)"]
+  ts -->|tsc: emit| js[".js output\n(types ERASED)"]
+  js --> run["Runtime\n(no types exist)"]`;
+
+- **Compile time** — the type checker reads your annotations and inferred types and reports errors. This is where all the safety happens.
+- **Runtime** — the emitted JavaScript runs. **The types are gone.** They were erased during compilation.
+
+This is why you cannot do this:
+
+```ts
+function isString(x: unknown) {
+  return x is string; // ❌ not a thing — types don't exist at runtime
+}
+```
+
+At runtime there is no `string` type to check against — only the JavaScript value. To narrow types at runtime you use real JavaScript operations (`typeof x === "string"`) that the compiler *understands*. More on that in the narrowing lesson.
+
+## Type erasure, concretely
+
+Compile this:
+
+```ts
+interface User { name: string; age: number; }
+const u: User = { name: "Ada", age: 36 };
+function older(u: User): number { return u.age + 1; }
+```
+
+The emitted JavaScript is:
+
+```js
+const u = { name: "Ada", age: 36 };
+function older(u) { return u.age + 1; }
+```
+
+The `interface` vanished entirely; the annotations are stripped. Types add **zero** runtime cost and zero runtime behavior — they are a conversation between you and the compiler that ends before the program runs.
+
+## The honest costs
+
+TypeScript is not free, and pretending otherwise does you a disservice:
+
+- **A build step.** You need `tsc` or a bundler that strips types. Plain `.ts` doesn't run in Node or the browser directly (though runtimes are increasingly adding type-stripping).
+- **A learning curve.** The type system is a language of its own — this whole course exists because of that.
+- **Type/runtime gap.** The compiler can be *wrong* about runtime reality — an `any`, a bad cast, or unvalidated external data can lie to it. Types are a model, not a guarantee about the outside world (the Practical Mastery module is largely about this).
+
+The trade is almost always worth it for anything beyond a throwaway script: you pay a fixed tax and get a large, compounding return in caught bugs, safe refactoring, and editor intelligence.
+
+<Callout title="The one-line takeaway">
+TypeScript checks types at **compile time** and then **erases** them — the emitted JavaScript has no types and zero type-related runtime cost. Its job is to move bugs from "discovered later in production" to "discovered now in your editor." The price is a build step and a real learning curve; the payoff is safe refactoring and whole categories of bugs that simply can't compile.
+</Callout>
+
+export const quizWhy = [
+  {
+    q: 'What happens to TypeScript types when the code is compiled to JavaScript?',
+    options: [
+      'They become runtime classes',
+      'They are erased — the output JavaScript has no types',
+      'They are stored in a separate metadata file used at runtime',
+      'They are converted to runtime assertions',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the core value proposition of TypeScript?',
+    options: [
+      'It makes JavaScript run faster',
+      'It moves bug discovery from runtime to compile time',
+      'It replaces the need for tests',
+      'It shrinks bundle size',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why can\'t you check a TypeScript type directly at runtime?',
+    options: [
+      'Runtime checks are too slow',
+      'The types have been erased — only JavaScript values exist at runtime',
+      'It requires a special flag',
+      'You actually can, with the `is` operator',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which is a genuine cost of adopting TypeScript?',
+    options: [
+      'It adds runtime overhead to every function',
+      'It requires a build/compile step and has a real learning curve',
+      'It prevents using any JavaScript libraries',
+      'It makes the code larger at runtime',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/why-typescript" questions={quizWhy} />
+
+<ProgressTracker client:visible id="foundations/why-typescript" />

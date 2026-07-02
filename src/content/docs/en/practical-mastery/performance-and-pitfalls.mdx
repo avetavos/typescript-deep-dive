@@ -1,0 +1,102 @@
+---
+title: 'Performance & Pitfalls'
+description: 'Why the type checker gets slow, the common footguns that bite real codebases, and how to diagnose and simplify when types get too clever.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Types have a compile-time cost
+
+Type checking is real computation, and clever types can make `tsc` crawl or your editor lag. The type system is (famously) powerful enough to be a programming language of its own — and just like runtime code, it can be written in ways that are expensive to evaluate.
+
+The usual culprits:
+
+- **Huge unions.** A union of thousands of string literals (often generated) multiplies work everywhere it's used.
+- **Deep recursion.** Recursive conditional/mapped types that walk long tuples or strings hit exponential blow-ups and the instantiation-depth limit.
+- **Distributive conditionals over big unions.** A conditional type distributes over every member — over a large union that's a lot of instantiations.
+- **Over-eager inference.** Very generic APIs force the checker to solve for many type arguments at every call.
+
+You rarely notice until a file takes seconds to check or the editor's red squiggles lag behind your typing. That's the signal to look at your types, not just your code.
+
+## The common footguns
+
+Beyond performance, these bite real teams:
+
+- **Over-clever types nobody can read.** A 40-line conditional type that saves three lines of duplication is usually a net loss. Cleverness is a cost paid by every future reader.
+- **`any` leaks.** One `any` spreads: `any.foo` is `any`, so it silently disables checking across everything it touches. Ban it with `noImplicitAny` and lint rules.
+- **Casts that lie.** `x as Foo` tells the compiler to stop checking — if `x` isn't really a `Foo`, you've just hidden a bug. Double casts (`x as unknown as Foo`) are a giant red flag.
+- **Enum surprises.** Numeric `enum`s allow any number as a value and emit runtime code; a `const` object with `as const` or a string-literal union is usually clearer and cheaper.
+- **`as` overuse.** Reaching for `as` to silence an error usually means you've stopped modeling the problem and started arguing with the compiler.
+
+<Mermaid title="How one any leaks through a codebase" code={anyDiagram} />
+
+export const anyDiagram = `flowchart LR
+  src["one any\n(bad cast / JSON.parse)"] --> a1["any.user"]
+  a1 --> a2["any.user.name"]
+  a2 --> a3["passed to typed fn\nchecks silently skipped"]`;
+
+## Diagnosing it
+
+When checks feel slow, measure instead of guessing:
+
+- `tsc --extendedDiagnostics` prints where time and memory go (check time, instantiation counts, memory).
+- `tsc --generateTrace traceDir` produces a trace you can open in a profiler to find the expensive types.
+- Bisect: comment out suspect types and watch the numbers move.
+
+The fix is almost always **simplify**: replace a heroic conditional type with a plain union, break a giant type into smaller named pieces, or accept a slightly looser type that's 10× cheaper and just as safe in practice.
+
+<Callout title="The one-line takeaway">
+Type checking is computation, so huge unions, deep recursion, and distributive conditionals can make `tsc` and your editor slow. The everyday footguns — leaking `any`, lying casts, over-clever unreadable types, and numeric enums — cost you correctness and clarity. When something is slow, measure with `--extendedDiagnostics` / `--generateTrace`, then **simplify**: the readable type that's slightly looser usually beats the brilliant one nobody can maintain.
+</Callout>
+
+export const quizPerf = [
+  {
+    q: 'Which of these commonly makes the type checker slow?',
+    options: [
+      'Using const instead of let',
+      'Huge unions, deep recursive types, and distributive conditionals over large unions',
+      'Adding return type annotations',
+      'Naming your variables clearly',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is a single `any` dangerous?',
+    options: [
+      'It throws at runtime',
+      'It leaks — accessing anything on an any is still any, silently disabling checks downstream',
+      'It doubles compile time',
+      'It cannot be assigned',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `x as Foo` actually do?',
+    options: [
+      'Validates at runtime that x is a Foo',
+      'Tells the compiler to treat x as Foo without checking — hiding a bug if it is wrong',
+      'Converts x into a Foo instance',
+      'Creates a copy of x',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When a type is both clever and slow, what is usually the right move?',
+    options: [
+      'Add more type parameters',
+      'Simplify — a readable, slightly looser type usually beats a brilliant unmaintainable one',
+      'Disable type checking for the file',
+      'Cast everything to any',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/performance-and-pitfalls" questions={quizPerf} />
+
+<ProgressTracker client:visible id="practical-mastery/performance-and-pitfalls" />

@@ -1,0 +1,156 @@
+---
+title: 'Nullability & never'
+description: 'strictNullChecks, optional chaining และ nullish coalescing ใน type system, อันตรายของ non-null assertion, Result type และ exhaustiveness ด้วย never'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## strictNullChecks: setting ที่สำคัญที่สุด
+
+flag ที่มีค่ามากที่สุดตัวเดียวคือ `strictNullChecks` (เป็นส่วนหนึ่งของ `strict`) ถ้าไม่มีมัน `null` และ `undefined` assign เข้า *ทุก* type ได้ — billion-dollar mistake แบบเต็มพิกัด พอเปิด มันจะกลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างชัดเจน
+
+```ts
+// เมื่อเปิด strictNullChecks:
+function len(s: string) { return s.length; }
+
+let maybe: string | undefined;
+len(maybe); // ❌ Argument of type 'string | undefined' is not assignable to 'string'
+```
+
+error นี่แหละคือประเด็น: compiler บังคับให้คุณจัดการเคส `undefined` *ก่อน* จะ dereference เปิดมันไว้ ถ้าคุณรับ codebase ที่ไม่มีมันมา การเปิดมันคือ migration ที่ให้ผลตอบแทนสูงสุดที่คุณทำได้
+
+## `?.` และ `??` เข้าใจ type
+
+operator สองตัวทำให้ nullability ใช้ง่ายขึ้น และ type system เข้าใจทั้งคู่:
+
+```ts
+type User = { profile?: { avatar?: string } };
+
+function avatar(u: User) {
+  const url = u.profile?.avatar; // type: string | undefined
+  return url ?? "default.png";   // type: string  (?? ให้ fallback มา)
+}
+```
+
+`?.` short-circuit เป็น `undefined` ถ้าฝั่งซ้าย nullish และ *type* ก็สะท้อนสิ่งนั้น (ผลลัพธ์รวม `undefined`) `??` ให้ fallback เฉพาะกรณี `null`/`undefined` (ต่างจาก `||` ที่ trigger กับ `0` และ `""` ด้วย) และ narrow type โดยตัดส่วน nullish ออก
+
+## non-null assertion `!` — ปืนที่บรรจุกระสุน
+
+`!` แบบ postfix บอก compiler ว่า "เชื่อฉัน อันนี้ไม่ null":
+
+```ts
+const el = document.getElementById("app")!; // assert ว่าไม่ null
+el.innerHTML = "hi"; // ไม่ error — แต่ crash ถ้า #app ไม่มีอยู่
+```
+
+มัน **ลบ** check จริงทิ้งโดยไม่มีการ verify ตอน runtime เลย บางครั้งคุณรู้มากกว่า compiler จริง ๆ — แต่ทุก `!` คือจุดที่คุณ override safety net ไว้ และเป็นจุดที่การเปลี่ยนแปลงในอนาคตทำให้พังเงียบ ๆ ได้ เลือก check จริง (`if (!el) throw ...`) ที่ narrow อย่างซื่อสัตย์ดีกว่า เก็บ `!` ไว้สำหรับเคสที่พิสูจน์ได้
+
+## การ model error: Result vs throw
+
+exception ที่ throw มองไม่เห็นจาก type system — signature ของ function ไม่เคยบอกว่ามันอาจ throw อะไร **Result type** ทำให้ failure ชัดเจนและ type-checked:
+
+```ts
+type Result<T, E> =
+  | { ok: true; value: T }
+  | { ok: false; error: E };
+
+function parsePort(s: string): Result<number, string> {
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < 0) return { ok: false, error: "invalid port" };
+  return { ok: true, value: n };
+}
+
+const r = parsePort(input);
+if (r.ok) r.value; // narrow เป็น number
+else r.error;      // narrow เป็น string
+```
+
+ตอนนี้ caller *ต้อง* จัดการทั้งสอง branch — compiler ไม่ยอมให้ลืม มันคือ discriminated union (field `ok` เป็น tag) ซึ่งพาเราไปสู่เครื่องมือสุดท้าย
+
+## Exhaustiveness ด้วย `never`
+
+เมื่อคุณ switch บน discriminated union `never` การันตีว่าคุณจัดการครบทุกเคส assign value เป็น `never` ใน branch `default`: ถ้ามีการเพิ่ม variant ใหม่ การ assign นั้นจะ compile ไม่ผ่าน
+
+```ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.r ** 2;
+    case "square": return s.side ** 2;
+    default:
+      const _exhaustive: never = s; // ✅ s เป็น never ตรงนี้ — ครบทุกเคสแล้ว
+      return _exhaustive;
+  }
+}
+```
+
+เพิ่ม variant `triangle` ทีหลังแล้วบรรทัด `default` จะ error: `Type '{ kind: "triangle" ... }' is not assignable to type 'never'` compiler เพิ่งเปลี่ยน "ฉัน update ทุก switch แล้วหรือยัง?" จากการไล่หาด้วยมือให้เป็น build error
+
+<Mermaid title="never เป็นหลักฐาน exhaustiveness" code={neverDiagram} />
+
+export const neverDiagram = `flowchart TB
+  u["Shape = circle or square"] --> c1["case circle: handled"]
+  u --> c2["case square: handled"]
+  c1 --> d["default: assign s to never"]
+  c2 --> d
+  d --> ok["compiles = all cases covered"]
+  d --> err["new variant unhandled = compile error"]`;
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เปิด `strictNullChecks` เพื่อให้ `null` และ `undefined` ต้องถูกจัดการ ไม่ใช่ถูกเมิน ใช้ `?.` และ `??` (ที่ type เข้าใจ) เพื่อจัดการ null อย่างสะดวก และมองทุก `!` ว่าเป็น safety check ที่ถูก override model failure ด้วย **Result** discriminated union แทน throw ที่มองไม่เห็น และใช้ทริก exhaustiveness ของ `never` เพื่อให้การเพิ่ม variant ใหม่กลายเป็น compile error ไม่ใช่ช่องโหว่ที่เงียบหาย
+</Callout>
+
+export const quizNull = [
+  {
+    q: '`strictNullChecks` เปลี่ยนอะไร?',
+    options: [
+      'ทำให้ null เร็วขึ้น',
+      'null และ undefined เลิก assign เข้าทุก type — คุณต้องจัดการมันอย่างชัดเจน',
+      'ลบ null ออกจากภาษา',
+      'มีผลกับ array เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`??` ต่างจาก `||` อย่างไรในการให้ fallback?',
+    options: [
+      'เหมือนกัน',
+      '?? fallback เฉพาะ null/undefined; || fallback กับ falsy value อย่าง 0 และ "" ด้วย',
+      '|| เข้าใจ type แต่ ?? ไม่',
+      '?? ใช้ได้แค่กับ string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ความเสี่ยงของ non-null assertion `!` คืออะไร?',
+    options: [
+      'ทำให้ code ช้าลง',
+      'มันลบ null check ทิ้งโดยไม่มีการ verify ตอน runtime จึง crash ได้ถ้าคุณคิดผิด',
+      'ใช้ได้แค่ใน strict mode',
+      'มันเปลี่ยน value ตอน runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทริก exhaustiveness ของ `never` ช่วยอย่างไรเมื่อเพิ่ม variant ใหม่?',
+    options: [
+      'มันจัดการเคสใหม่ให้อัตโนมัติ',
+      'variant ที่ยังไม่ได้จัดการจะ assign เข้า never ไม่ได้ branch default จึง compile ไม่ผ่าน',
+      'มัน log warning ตอน runtime',
+      'ไม่มีผลอะไร',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/nullability-and-never" questions={quizNull} />
+
+<ProgressTracker client:visible id="practical-mastery/nullability-and-never" />

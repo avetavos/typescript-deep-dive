@@ -1,0 +1,115 @@
+---
+title: 'Structural Typing'
+description: 'Why TypeScript compares shapes, not names — structural compatibility, excess property checks, and the surprises that follow.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Shape, not name
+
+Many languages (Java, C#) use **nominal** typing: two types are compatible only if they share a declared name or inheritance link. TypeScript uses **structural** typing: two types are compatible if their *shapes* match, regardless of names.
+
+```ts
+interface Point { x: number; y: number; }
+interface Coord { x: number; y: number; }
+
+let p: Point = { x: 1, y: 2 };
+let c: Coord = p; // ✅ different names, identical shape — compatible
+```
+
+`Point` and `Coord` were never declared to be related, but TypeScript doesn't care. A value that has an `x: number` and a `y: number` satisfies both. This is sometimes called "duck typing" — if it walks like a `Point` and quacks like a `Point`, it *is* a `Point`, as far as the type checker is concerned.
+
+## More properties is fine — it's a subset relationship
+
+A value can have **extra** properties and still be assignable to a type that asks for fewer. This follows directly from the sets model: the set of "objects with x, y, and z" is a subset of "objects with x, y."
+
+```ts
+interface Named { name: string; }
+
+const user = { name: "Ada", age: 36 };
+const n: Named = user; // ✅ user has name (plus extra) — that's fine
+```
+
+`user` has everything `Named` requires (a `name`), so it fits. The extra `age` is invisible to anyone holding it as a `Named`.
+
+<Mermaid title="Structural compatibility is about required shape" code={structDiagram} />
+
+export const structDiagram = `flowchart LR
+  val["value:\n{ name, age, email }"] -->|has everything\nNamed requires| target["target type:\nNamed { name }"]
+  target -->|assignable ✅| ok["accepted"]`;
+
+## The exception: excess property checks on object literals
+
+There's one place TypeScript tightens up. When you assign an **object literal directly**, it flags properties the target doesn't know about — because a literal with unexpected keys is almost always a typo or mistake.
+
+```ts
+interface Options { width: number; }
+
+const a: Options = { width: 10, height: 20 };
+// ❌ Error: 'height' does not exist in type 'Options'.
+
+const raw = { width: 10, height: 20 };
+const b: Options = raw; // ✅ no error — not a fresh literal
+```
+
+Assign the *same object* through a variable and it's allowed, because now it's the ordinary structural rule (extra properties are fine). Excess property checking is a deliberate, narrow safety net for the common "I typed the option name wrong" bug — not a change to the underlying model.
+
+## Why this matters
+
+Structural typing is why TypeScript feels so fluid with plain objects and why you rarely need to declare that one type "implements" another. It's also why two libraries with their own `Point` types just work together. The cost is that unrelated types with the same shape are interchangeable — occasionally you *want* nominal distinctness (a `UserId` that isn't just any `string`), which you fake with **branded types** (covered later in Practical Mastery).
+
+<Callout title="The one-line takeaway">
+TypeScript is **structural**: compatibility depends on shape, not declared names, and a value with extra properties still fits a type that asks for fewer (it's a subset). The one exception is **excess property checks** — a fresh object literal assigned directly is flagged for unknown keys, as a targeted defense against typos. Assign through a variable and the ordinary structural rule applies.
+</Callout>
+
+export const quizStructural = [
+  {
+    q: 'What does "structural typing" mean?',
+    options: [
+      'Types are compatible only if they share a declared name or inheritance',
+      'Types are compatible when their shapes match, regardless of names',
+      'Every type must be a class',
+      'Types are checked at runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Can a value with extra properties be assigned to a type that requires fewer?',
+    options: [
+      'No, the properties must match exactly',
+      'Yes — it has everything the target requires, so it\'s a valid subset',
+      'Only if the extra properties are optional',
+      'Only for arrays',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does assigning `{ width: 10, height: 20 }` directly to `Options { width: number }` error, but assigning it via a variable does not?',
+    options: [
+      'Variables are always typed as any',
+      'Excess property checks flag unknown keys on fresh object literals as a typo defense; the structural rule applies once it\'s a variable',
+      'Object literals cannot be assigned at all',
+      'It\'s a compiler bug',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What technique gives you nominal-style distinctness in a structural system?',
+    options: [
+      'Marking types as `nominal`',
+      'Branded types (adding a phantom marker property)',
+      'Using classes only',
+      'It\'s impossible in TypeScript',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/structural-typing" questions={quizStructural} />
+
+<ProgressTracker client:visible id="foundations/structural-typing" />

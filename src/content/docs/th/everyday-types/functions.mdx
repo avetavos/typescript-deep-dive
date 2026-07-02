@@ -1,0 +1,141 @@
+---
+title: 'Functions'
+description: 'function type แบบเจาะลึก — parameter, overload และทำไม union มักดีกว่า, this typing และกฎ void return ที่ทำให้คนงง'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## การ type function
+
+function type อธิบาย parameter และ return type เขียน inline หรือเป็น named type ก็ได้:
+
+```ts
+type BinaryOp = (a: number, b: number) => number;
+
+const add: BinaryOp = (a, b) => a + b;
+// a และ b ถูก infer เป็น number จาก context — ไม่ต้อง annotate
+```
+
+parameter รองรับ optional (`?`), default value และ rest:
+
+```ts
+function make(name: string, count = 1, ...tags: string[]): void {
+  // count default เป็น 1; tags เก็บที่เหลือเข้า string[]
+}
+```
+
+optional parameter `x?: number` เป็น `number | undefined`; defaulted parameter `count = 1` มองจากฝั่งภายในเป็น `number` เฉย ๆ แต่ผู้เรียกละไว้ได้
+
+## Overload — และทำไม union มักดีกว่า
+
+**overload** ให้ function หนึ่งตัวแสดง call signature หลายแบบ เขียน signature หลายบรรทัดตามด้วย implementation หนึ่งอัน:
+
+```ts
+function len(x: string): number;
+function len(x: unknown[]): number;
+function len(x: string | unknown[]): number {
+  return x.length;
+}
+
+len("hi");     // ✅ 2
+len([1, 2, 3]); // ✅ 3
+```
+
+overload ทรงพลังแต่ใช้เกินง่าย เมื่อ signature ต่างกันแค่ที่ type ของ parameter — ไม่ใช่ที่ *ความสัมพันธ์* ระหว่าง parameter กับ return — **union parameter** ตัวเดียวเรียบง่ายและชัดกว่า:
+
+```ts
+// เรียบง่ายกว่า overload สองตัว:
+function len(x: string | unknown[]): number {
+  return x.length;
+}
+```
+
+หยิบ overload จริง ๆ มาใช้เฉพาะเมื่อ return type ขึ้นกับ input shape ที่รับเข้ามาในแบบที่ union แสดงไม่ได้
+
+## การ type `this`
+
+ใน standalone function `this` type ได้ด้วย parameter ตัวแรกพิเศษที่ **หายไปที่ call site** (เป็น compile-time เท่านั้น):
+
+```ts
+interface Button { label: string; }
+
+function handleClick(this: Button, event: Event): void {
+  console.log(this.label); // this เป็น Button
+}
+```
+
+มันจับบั๊กคลาสสิกที่ method เสีย `this` เมื่อถูกส่งเป็น callback เปล่า ๆ มีประโยชน์สุดกับ API แบบเก่าที่พึ่ง `this`; กับ arrow function และ pattern สมัยใหม่คุณจะใช้มันน้อยลง
+
+## กฎ `void` return ที่ทำทุกคนงง
+
+function type ที่ return `void` **ไม่ได้** แปลว่า "function ต้องไม่ return อะไร" แต่แปลว่า "ผู้เรียกจะเมิน return value" function ที่ *return* อะไรบางอย่างจึงยัง assign ให้ type ที่ return `void` ได้:
+
+```ts
+type Callback = () => void;
+
+const cb: Callback = () => 42; // ✅ ได้! ค่า 42 แค่ถูกเมิน
+```
+
+<Mermaid title="void แปลว่า return ถูกเมิน ไม่ใช่ห้าม return" code={voidDiagram} />
+
+export const voidDiagram = `flowchart LR
+  fn["() => number\n(returns 42)"] -->|assignable to| target["() => void\n(caller ignores return)"]
+  target --> use["callers treat result\nas void — safe"]`;
+
+นี่แหละคือเหตุผลว่าทำไม `array.forEach(x => arr.push(x))` ถึง type-check ผ่านทั้งที่ `push` return number: `forEach` ต้องการ callback แบบ `void` และเมินสิ่งที่ return กลับมา พอรู้กฎแล้วมันเลิกลึกลับ — แต่แทบทุกคนเจอมันแบบงงก่อน
+
+<Callout title="สรุปหนึ่งบรรทัด">
+type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ `this` parameter type `this` และหายไปที่ call site และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้มันได้ — ซึ่งเป็นเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้
+</Callout>
+
+export const quizFn = [
+  {
+    q: 'ควรใช้ overload แทน union parameter ตัวเดียวเมื่อไร?',
+    options: [
+      'เสมอ — overload ทันสมัยกว่า',
+      'เฉพาะเมื่อ return type ขึ้นกับ input shape ที่ส่งเข้ามาจริง ๆ',
+      'ไม่เคย — overload ถูก deprecate แล้ว',
+      'เมื่อ function มี parameter เกินสองตัว',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`this` parameter (`function f(this: T, ...)`) ทำอะไรที่ call site?',
+    options: [
+      'ต้องส่งเป็น argument ตัวแรก',
+      'มันหายไป — type แค่ `this` ตอน compile',
+      'มันกลายเป็น undefined',
+      'ถูกส่งเป็น null อัตโนมัติ',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`const cb: () => void = () => 42` ทำได้ไหม?',
+    options: [
+      'ไม่ได้ — function void ต้องไม่ return อะไร',
+      'ได้ — void แปลว่าผู้เรียกเมิน return การ return 42 จึงโอเค',
+      'ไม่ได้ — เป็น type error',
+      'ได้ก็ต่อเมื่อ cast',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม `arr.forEach(x => other.push(x))` ถึง type-check ผ่านทั้งที่ push return number?',
+    options: [
+      'forEach เมิน error',
+      'forEach ต้องการ callback แบบ void และ function ที่ return ค่า assign ให้ void return type ได้',
+      'push จริง ๆ return void',
+      'มันไม่ type-check',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/functions" questions={quizFn} />
+
+<ProgressTracker client:visible id="everyday-types/functions" />

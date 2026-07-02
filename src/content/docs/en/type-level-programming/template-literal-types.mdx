@@ -1,0 +1,131 @@
+---
+title: 'Template Literal Types'
+description: 'Compute string types with template literals, distribute over unions, use the intrinsic string manipulators, and pattern-match strings with infer.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Strings you can compute
+
+Template literal types look like JavaScript template strings, but they build **types**. You interpolate other types into a string-shaped type:
+
+```ts
+type Greeting = `Hello, ${string}`;
+
+const a: Greeting = "Hello, Ada"; // ✅
+const b: Greeting = "Hi, Ada";    // ❌ must start with "Hello, "
+```
+
+Interpolate a literal union and the template **distributes** over it — producing every combination as a union of literal types:
+
+```ts
+type Lang = "en" | "th";
+type Kind = "page" | "post";
+
+type Key = `${Lang}-${Kind}`;
+//   ^? "en-page" | "en-post" | "th-page" | "th-post"
+```
+
+Two unions of two members give four literal types. This is how libraries generate exact string keys — CSS properties, event names, i18n keys — with zero runtime code.
+
+## The intrinsic string manipulators
+
+TypeScript ships four built-in types that transform string literal types: `Uppercase`, `Lowercase`, `Capitalize`, and `Uncapitalize`.
+
+```ts
+type Loud = Uppercase<"hello">;      // "HELLO"
+type Cap = Capitalize<"name">;        // "Name"
+
+// Combine with a template to build event handler names
+type Handler<E extends string> = `on${Capitalize<E>}`;
+type ClickHandler = Handler<"click">; // "onClick"
+```
+
+<Mermaid title="A union distributes across a template literal type" code={distDiagram} />
+
+export const distDiagram = `flowchart LR
+  u["union: en or th"] -->|"interpolate into 'X-page'"| out["en-page or th-page"]`;
+
+## Pattern matching with `infer`
+
+The real power arrives when you combine template literals with a conditional type and `infer`: you can **destructure a string type**, capturing part of it into a new type variable.
+
+```ts
+// Capture the event name after the "on" prefix
+type EventName<T> = T extends `on${infer E}` ? E : never;
+
+type E1 = EventName<"onClick">; // "Click"
+type E2 = EventName<"onHover">; // "Hover"
+type E3 = EventName<"click">;   // never — no "on" prefix
+
+// Split a route into its parts
+type Method<T> = T extends `${infer M} ${string}` ? M : never;
+type M = Method<"GET /users">; // "GET"
+```
+
+`infer E` says "match anything here and call it `E`." This is genuine parsing at the type level — the technique behind typed routers that extract `:id` params from a path string and libraries that validate format strings.
+
+## Where this shows up
+
+- **Typed keys**: `` `${Theme}-${Shade}` `` for a design-token type.
+- **Event maps**: turning `"click"` into `"onClick"` for prop types.
+- **Route params**: extracting `id` from `"/users/:id"` into `{ id: string }`.
+- **ORM/query builders**: parsing a column string into a typed shape.
+
+Use it where a string genuinely encodes structure. Reach for it too eagerly and you get types no teammate can read — the recurring trade-off of type-level programming.
+
+<Callout title="The one-line takeaway">
+Template literal types build string types by interpolation, and they **distribute** over unions — turning small unions into every literal combination. The intrinsics `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform them, and combining a template with a conditional type plus `infer` lets you **pattern-match and parse** string types (capturing pieces into new type variables). It is real string parsing, evaluated by the compiler.
+</Callout>
+
+export const quizTemplate = [
+  {
+    q: 'What is the type `${Lang}-${Kind}` where `Lang = "en" | "th"` and `Kind = "a" | "b"`?',
+    options: [
+      'string',
+      '"en-a" | "en-b" | "th-a" | "th-b" — the union distributes',
+      '"en-th-a-b"',
+      'never',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `Capitalize<"click">` produce?',
+    options: [
+      '"CLICK"',
+      '"Click"',
+      '"click"',
+      'string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In `T extends \\`on${infer E}\\` ? E : never`, what is `infer E` doing?',
+    options: [
+      'Uppercasing the string',
+      'Capturing the part of the string after "on" into a new type variable E',
+      'Checking the string length',
+      'Converting the string to a number',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `EventName<"click">` return if `EventName<T> = T extends \\`on${infer E}\\` ? E : never`?',
+    options: [
+      '"click"',
+      '"Click"',
+      'never — there is no "on" prefix to match',
+      'string',
+    ],
+    answer: 2,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/template-literal-types" questions={quizTemplate} />
+
+<ProgressTracker client:visible id="type-level-programming/template-literal-types" />

@@ -1,0 +1,147 @@
+---
+title: 'Conditional Types'
+description: 'Types that branch — T extends U ? X : Y, nested conditions, distribution over unions, and how to turn distribution off.'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## An if-statement for types
+
+A **conditional type** chooses one of two types based on a relationship, using the ternary syntax you already know — but at the type level:
+
+```ts
+type IsString<T> = T extends string ? "yes" : "no";
+
+type A = IsString<string>;  // "yes"
+type B = IsString<number>;  // "no"
+type C = IsString<"hi">;    // "yes"  ("hi" extends string)
+```
+
+Read `T extends U ? X : Y` as "if `T` is assignable to `U`, the type is `X`, otherwise `Y`." The `extends` here is the same subset test from the foundations module — not inheritance.
+
+## Nesting: a small decision tree
+
+Conditionals nest to form multi-way branches:
+
+```ts
+type TypeName<T> =
+  T extends string ? "string" :
+  T extends number ? "number" :
+  T extends boolean ? "boolean" :
+  T extends undefined ? "undefined" :
+  T extends Function ? "function" :
+  "object";
+
+type T1 = TypeName<string>;   // "string"
+type T2 = TypeName<() => void>; // "function"
+type T3 = TypeName<number[]>; // "object"
+```
+
+Each condition is tried in order, exactly like a chain of `else if`.
+
+## Distribution over unions
+
+Here is the behavior that surprises everyone. When the checked type is a **naked type parameter** and you hand it a **union**, the conditional distributes over each member and unions the results:
+
+```ts
+type ToArray<T> = T extends any ? T[] : never;
+
+type R = ToArray<string | number>;
+//   ^? string[] | number[]
+```
+
+It did **not** produce `(string | number)[]`. Instead the conditional ran separately for `string` (giving `string[]`) and for `number` (giving `number[]`), then unioned them. This is *distributive conditional type* behavior.
+
+<Mermaid title="A conditional distributes over each union member" code={distDiagram} />
+
+export const distDiagram = `flowchart TB
+  input["ToArray of string or number"] --> split["distribute over each member"]
+  split --> s["string branch: string array"]
+  split --> n["number branch: number array"]
+  s --> out["union the results:\nstring array or number array"]
+  n --> out`;
+
+A practical use is filtering a union. `Exclude` (a built-in) is exactly this:
+
+```ts
+type MyExclude<T, U> = T extends U ? never : T;
+
+type Colors = "red" | "green" | "blue";
+type NoRed = MyExclude<Colors, "red">;
+//   ^? "green" | "blue"
+```
+
+Each member that matches `U` becomes `never` (and `never` vanishes from a union), so only the non-matching members survive.
+
+## Turning distribution off
+
+Sometimes you want to test the union *as a whole*, not member by member. Wrap both sides in a one-element tuple to stop distribution — the type parameter is no longer "naked":
+
+```ts
+type IsUnionOfStrings<T> = [T] extends [string] ? true : false;
+
+type D1 = IsUnionOfStrings<"a" | "b">; // true  (tested as a whole)
+
+// compare with the distributive version:
+type Bad<T> = T extends string ? true : false;
+type D2 = Bad<"a" | number>; // boolean  (true | false — distributed!)
+type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string)
+```
+
+The `[T] extends [U]` trick is a standard idiom: reach for it whenever a conditional over a union gives you a surprising `boolean` (a sign it distributed and unioned `true | false`).
+
+<Callout title="The one-line takeaway">
+A conditional type `T extends U ? X : Y` is an if-statement at the type level, using the same subset test as `extends` elsewhere. Its signature behavior is **distribution**: a naked type parameter checked against a union runs once per member and unions the results (which is how `Exclude` and `Extract` work). Wrap both sides in `[T] extends [U]` to test the union as a whole and switch distribution off.
+</Callout>
+
+export const quizConditional = [
+  {
+    q: 'How do you read `T extends U ? X : Y`?',
+    options: [
+      '`T` inherits from `U`',
+      'If `T` is assignable to `U`, the type is `X`, otherwise `Y`',
+      '`T` and `U` are merged',
+      'It is a runtime if-statement',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is `ToArray<string | number>` for `type ToArray<T> = T extends any ? T[] : never`?',
+    options: [
+      '(string | number)[]',
+      'string[] | number[] — the conditional distributes over each union member',
+      'never',
+      'any[]',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'How does the built-in `Exclude<T, U>` remove members from a union?',
+    options: [
+      'It deletes them at runtime',
+      'Via `T extends U ? never : T` — matching members become `never` and drop out of the union',
+      'By sorting the union',
+      'It cannot remove union members',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why wrap both sides as `[T] extends [U]`?',
+    options: [
+      'To make it run faster',
+      'To stop distribution and test the union as a whole instead of member by member',
+      'To convert `T` to an array',
+      'It is required syntax for all conditionals',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/conditional-types" questions={quizConditional} />
+
+<ProgressTracker client:visible id="generics/conditional-types" />

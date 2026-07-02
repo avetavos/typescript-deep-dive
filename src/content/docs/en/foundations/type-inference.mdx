@@ -1,0 +1,143 @@
+---
+title: 'Type Inference'
+description: 'How the compiler figures out types you never wrote — let vs const widening, contextual typing, best common type, and when to annotate.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## You write fewer types than you think
+
+Good TypeScript is not covered in annotations. The compiler *infers* most types, and fighting it with redundant annotations is a beginner tell. The skill is knowing **what** it infers and **where** you actually need to help.
+
+```ts
+let count = 5;        // inferred: number
+const name = "Ada";   // inferred: "Ada"  (a literal type!)
+const items = [1, 2]; // inferred: number[]
+```
+
+Note that `count` and `name` are inferred differently, and that difference is one of the most important rules in the language.
+
+## `let` widens, `const` keeps the literal
+
+A `const` can never be reassigned, so the compiler keeps its **narrowest** type — the literal. A `let` can be reassigned, so the compiler **widens** to the general type.
+
+```ts
+const a = "hello"; // type: "hello"   (literal — it can't change)
+let   b = "hello"; // type: string    (widened — b might become any string)
+```
+
+This is why literal types "appear and disappear." It matters constantly:
+
+```ts
+const method = "GET";        // type: "GET"
+let   method2 = "GET";       // type: string
+
+function req(m: "GET" | "POST") {}
+req(method);  // ✅ "GET" fits the union
+req(method2); // ❌ string is too wide for "GET" | "POST"
+```
+
+<Mermaid title="const keeps the literal; let widens" code={widenDiagram} />
+
+export const widenDiagram = `flowchart LR
+  lit["literal value\n\"GET\""] -->|const: can't change| keep["type: \"GET\"\n(narrow)"]
+  lit -->|let: might change| wide["type: string\n(widened)"]`;
+
+When you want a literal type from a `let` or an object property, use a **const assertion** (`as const`) — a whole topic in the next module.
+
+## Contextual typing: inference flows inward
+
+Inference isn't only bottom-up (from a value to its type). It also flows **top-down** from the surrounding context — this is *contextual typing*.
+
+```ts
+const nums = [1, 2, 3];
+
+nums.forEach((n) => {
+  // n is inferred as number — you didn't annotate it.
+  // The context (an array of number) told the compiler what n must be.
+  console.log(n.toFixed(2));
+});
+
+window.addEventListener("click", (e) => {
+  // e is inferred as MouseEvent from the event name — pure contextual typing.
+});
+```
+
+This is why callback parameters usually don't need annotations: the function you're passing them to already declares their types, and inference flows in.
+
+## Best common type
+
+When a value could be several types — like an array with mixed elements — the compiler computes a **best common type** that covers them all:
+
+```ts
+const mixed = [1, "two", 3]; // inferred: (string | number)[]
+const shapes = [circle, square]; // inferred: (Circle | Square)[]
+```
+
+It doesn't pick one and error on the rest; it forms the union that fits every element. Occasionally the best common type is wider than you want, which is a signal to annotate explicitly.
+
+## When to annotate
+
+Let inference do the work, and annotate deliberately in three places:
+
+1. **Function parameters** — inference can't read your mind about inputs (though contextual typing covers callbacks).
+2. **Function return types on public APIs** — annotating the return type catches mistakes *inside* the function and documents intent. (Inference works, but an explicit return type is a guardrail.)
+3. **When inference is wider than you want** — e.g. you need a literal or a specific union, not the widened type.
+
+Everywhere else, prefer inference. Redundant annotations are noise that can *drift* from reality during refactors.
+
+<Callout title="The one-line takeaway">
+The compiler infers most types, so write fewer of them. The key rule: **`const` keeps the literal type, `let` widens** to the general one. Inference also flows top-down (contextual typing), which is why callback parameters rarely need annotations, and it forms a **best common type** (a union) for mixed values. Annotate parameters and public return types; let inference handle the rest.
+</Callout>
+
+export const quizInference = [
+  {
+    q: 'What type is inferred for `const x = "GET"`?',
+    options: [
+      'string',
+      '"GET" (a literal type)',
+      'any',
+      'String',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does `let y = "GET"` infer `string` while `const x = "GET"` infers `"GET"`?',
+    options: [
+      'let is slower',
+      'A let can be reassigned, so the compiler widens to the general type; a const cannot, so it keeps the literal',
+      'It\'s random',
+      'let variables are always any',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does a callback parameter often not need a type annotation?',
+    options: [
+      'Callbacks are always any',
+      'Contextual typing flows the type inward from the function you pass it to',
+      'The compiler ignores callback parameters',
+      'You must always annotate them',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does TypeScript infer for `[1, "two", 3]`?',
+    options: [
+      'any[]',
+      '(string | number)[] — the best common type as a union',
+      'number[] with an error on "two"',
+      '[number, string, number]',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/type-inference" questions={quizInference} />
+
+<ProgressTracker client:visible id="foundations/type-inference" />

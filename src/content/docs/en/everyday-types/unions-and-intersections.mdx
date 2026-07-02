@@ -1,0 +1,133 @@
+---
+title: 'Unions & Intersections'
+description: 'A union is OR and widens the set; an intersection is AND and narrows it. How to work with each, and why they behave oppositely for objects.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Union: a value that is one of several types
+
+A **union** `A | B` describes a value that is *either* an `A` or a `B`. In the sets model it's the set union — so a union is always **wider** than its members.
+
+```ts
+type Id = string | number;
+
+let id: Id = "abc";
+id = 123; // ✅ both are members of the union
+```
+
+The catch: while you hold a union, you may only touch the members that **all** branches share, because the compiler can't know which one you have yet.
+
+```ts
+function printId(id: string | number) {
+  id.toUpperCase();
+  // ❌ toUpperCase does not exist on number.
+  // Only members common to string AND number are available here.
+}
+```
+
+To use type-specific members, you must **narrow** — the whole next lesson. Until then, a union only exposes the common surface.
+
+## Intersection: a value that is all of several types
+
+An **intersection** `A & B` describes a value that is *both* an `A` and a `B` at once. For object types this means "has every property of both" — so an intersection of objects is **narrower** (more requirements, fewer valid values).
+
+```ts
+type WithId = { id: string };
+type WithTimestamps = { createdAt: Date; updatedAt: Date };
+
+type Entity = WithId & WithTimestamps;
+// must have id AND createdAt AND updatedAt
+
+const e: Entity = { id: "1", createdAt: new Date(), updatedAt: new Date() };
+```
+
+This is the idiomatic way to compose object types from small reusable pieces — far more flexible than inheritance because you can mix any combination.
+
+## They pull in opposite directions
+
+<Mermaid title="Union widens, intersection narrows" code={setDiagram} />
+
+export const setDiagram = `flowchart TB
+  subgraph un["A OR B  (union)"]
+    u["more values allowed\nfewer members guaranteed"]
+  end
+  subgraph inter["A AND B  (intersection)"]
+    i["fewer values allowed\nmore members guaranteed"]
+  end`;
+
+Notice the trade in each direction:
+
+- A **union** allows *more values* but guarantees *fewer members* you can safely access (only the common ones).
+- An **intersection** allows *fewer values* but guarantees *more members* (all of them).
+
+## The edge cases fall out of the sets model
+
+- `string & number` is `never` — no value is both, so the intersection is the empty set.
+- A union with `any` collapses to `any`; a union with `never` drops the `never` (`T | never` is just `T`, because adding the empty set changes nothing).
+- Intersecting object types with a conflicting primitive property can produce `never` for that property.
+
+```ts
+type A = { kind: "a"; value: number };
+type B = { kind: "b"; value: string };
+type Both = A & B;
+// kind: "a" & "b" → never; this type is effectively unconstructable
+```
+
+That last one is a hint: when you want "one of these object shapes," you almost always want a **union** (`A | B`) with a shared discriminant field — not an intersection. That's the discriminated-union pattern in the narrowing lesson.
+
+<Callout title="The one-line takeaway">
+`A \| B` is a **union** — OR — and is wider; while you hold it you can only access members common to every branch until you narrow. `A & B` is an **intersection** — AND — and for objects is narrower, requiring all properties of both, which is how you compose object types. They point in opposite directions: unions add values but restrict access; intersections restrict values but add members.
+</Callout>
+
+export const quizUI = [
+  {
+    q: 'While holding a value of type `string | number`, which members can you access without narrowing?',
+    options: [
+      'All members of both string and number',
+      'Only members common to both string and number',
+      'Only number members',
+      'None at all',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does an intersection of two object types `A & B` require?',
+    options: [
+      'Either the properties of A or the properties of B',
+      'All properties of both A and B',
+      'Only the shared properties',
+      'It is always never',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which is wider (allows more values): a union or an intersection?',
+    options: [
+      'A union is wider',
+      'An intersection is wider',
+      'They are always equal',
+      'Neither has values',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'You want "a value that is one of several object shapes." Which should you usually reach for?',
+    options: [
+      'An intersection with a shared property',
+      'A union with a shared discriminant field',
+      'A class hierarchy',
+      'The any type',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/unions-and-intersections" questions={quizUI} />
+
+<ProgressTracker client:visible id="everyday-types/unions-and-intersections" />

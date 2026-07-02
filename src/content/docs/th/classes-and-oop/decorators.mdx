@@ -1,0 +1,127 @@
+---
+title: 'Decorators'
+description: 'decorator แบบ stage-3 สมัยใหม่ใน TypeScript 5 — class, method, accessor และ field decorator, context object และ decorator factory'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## decorator มีสองยุค — ใช้ยุคใหม่
+
+**decorator** คือ function ที่ wrap หรือสังเกต class หรือ member ของ class ให้คุณเพิ่ม behavior แบบ declarative ด้วย syntax `@name` มันมีสอง design ที่เข้ากันไม่ได้ และสำคัญว่าคุณหมายถึงอันไหน:
+
+- **legacy decorator** — design เก่าแบบ experimental ที่เปิดด้วย `experimentalDecorators` ใน `tsconfig` ใช้เยอะใน Angular และ NestJS รุ่นเก่า signature ต่างกัน และพึ่ง `reflect-metadata`
+- **stage-3 decorator** — design ECMAScript ที่เป็นมาตรฐาน รองรับ native ตั้งแต่ **TypeScript 5.0** โดยไม่ต้องใช้ flag พิเศษ อันนี้คือตัวที่ควรเรียนสำหรับ code ใหม่
+
+บทเรียนนี้ครอบคลุม decorator แบบ **stage-3**
+
+## method decorator
+
+method decorator รับ method ต้นฉบับกับ **context** object แล้ว return ตัวแทน (หรือไม่ return อะไร) นี่คือ decorator `@logged` ที่ wrap method เพื่อ log การเรียกของมัน:
+
+```ts
+function logged(originalMethod: any, context: ClassMethodDecoratorContext) {
+  const name = String(context.name);
+  function replacement(this: any, ...args: any[]) {
+    console.log(`calling ${name}`);
+    return originalMethod.call(this, ...args);
+  }
+  return replacement;
+}
+
+class Service {
+  @logged
+  fetch(id: number) {
+    return `item ${id}`;
+  }
+}
+
+new Service().fetch(1); // logs "calling fetch", then returns "item 1"
+```
+
+`context` object คือหัวใจของ design ใหม่ มันบอก decorator ว่ากำลัง decorate อะไร — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private` และ hook `addInitializer` สำหรับงาน setup
+
+## สี่สิ่งที่ decorate ได้
+
+| ชนิด decorator | รับอะไร | ใช้ทั่วไป |
+|----------------|----------|-------------|
+| Class | ตัว class, context | register มัน, wrap constructor |
+| Method | method, context | wrap/แทน behavior (logging, timing) |
+| Accessor | getter/setter, context | ดักการ read/write |
+| Field | `undefined`, context | return initializer เพื่อแปลง initial value |
+
+**field** decorator ต่างออกไปนิด — มันไม่ได้รับ value มา wrap แต่ return initializer function ที่แปลง initial value ของ field เมื่อสร้าง instance ได้
+
+## decorator factory
+
+จะทำให้ decorator ตั้งค่าได้ ให้เขียน function ที่ *return* decorator — เรียกว่า **decorator factory** การเรียก `@name(args)` จะรัน factory แล้วค่าที่ return ออกมาคือ decorator จริง
+
+```ts
+function logged(label: string) {           // factory: takes config
+  return function (originalMethod: any, context: ClassMethodDecoratorContext) {
+    return function (this: any, ...args: any[]) {
+      console.log(`[${label}] ${String(context.name)}`);
+      return originalMethod.call(this, ...args);
+    };
+  };
+}
+
+class Api {
+  @logged("http")
+  get() { /* ... */ }
+}
+```
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) มัน wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
+</Callout>
+
+export const quizDecorators = [
+  {
+    q: 'code TypeScript ใหม่ควรใช้ decorator design แบบไหน?',
+    options: [
+      'legacy decorator ผ่าน `experimentalDecorators`',
+      'stage-3 (ECMAScript มาตรฐาน) decorator native ตั้งแต่ TypeScript 5',
+      'JSX decorator',
+      'TypeScript ไม่มี decorator',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'argument ตัวที่สองของ stage-3 decorator (context) ให้อะไร?',
+    options: [
+      'runtime value ของ field เท่านั้น',
+      'metadata เกี่ยวกับสิ่งที่ถูก decorate — kind, name, static, private และ hook addInitializer',
+      'ตัวเลือกใน tsconfig',
+      'ไม่มีอะไรมีประโยชน์',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'decorator factory คืออะไร?',
+    options: [
+      'class ที่ build decorator ตอน runtime',
+      'function ที่ return decorator เพื่อส่ง config ด้วย `@name(args)`',
+      'setting พิเศษใน tsconfig',
+      'decorator ที่ apply กับ factory function',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'field decorator ต่างจาก method decorator อย่างไร?',
+    options: [
+      'มันมีไม่ได้',
+      'มันไม่ได้รับ value มา wrap แต่ return initializer ที่แปลง initial value ของ field ได้',
+      'มันรันแค่ครั้งเดียวต่อ class',
+      'มันต้องเป็น static',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/decorators" questions={quizDecorators} />
+
+<ProgressTracker client:visible id="classes-and-oop/decorators" />

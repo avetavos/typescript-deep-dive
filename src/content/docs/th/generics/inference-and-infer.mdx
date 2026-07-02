@@ -1,0 +1,133 @@
+---
+title: 'Inference & infer'
+description: 'TypeScript เลือก type argument จาก inference site อย่างไร และ keyword infer ดึง type ออกจาก type อื่นอย่างไร'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## inference เอาคำตอบมาจากไหน: inference site
+
+เมื่อคุณเรียก generic function โดยไม่ส่ง type argument TypeScript จะดูทุกที่ที่ type parameter ปรากฏใน parameter — แต่ละที่คือ **inference site** — แล้วคำนวณ type ที่เข้ากับทุกที่ได้
+
+```ts
+function pair<A, B>(a: A, b: B): [A, B] {
+  return [a, b];
+}
+
+const p = pair(1, "hi");
+//    ^? [number, string]   — A from the first arg, B from the second
+```
+
+เมื่อ parameter หนึ่งปรากฏมากกว่าหนึ่งครั้ง TypeScript จะประนีประนอมระหว่าง candidate:
+
+```ts
+function both<T>(a: T, b: T): T { return a; }
+
+const x = both(1, 2);        // T = number
+const y = both(1, "two");    // T = number | string (best common type)
+```
+
+การเข้าใจว่า inference อ่าน *ตำแหน่งของ argument* อธิบายโมเมนต์ "ทำไมมัน infer แบบนั้น" ได้เกือบทั้งหมด — และอธิบายว่าทำไมการ annotate return type ไม่เคยเปลี่ยนสิ่งที่ argument infer ออกมา
+
+## `infer`: ดึง type ออกมาจากข้างใน type อื่น
+
+ภายใน conditional type keyword `infer` แนะนำ **type variable ใหม่ที่ TypeScript แก้ให้คุณ** ด้วยการ pattern-match structure มันคือวิธีดึงชิ้นส่วนออกจาก type ที่ใหญ่กว่า
+
+ตัวอย่างคลาสสิก — เอา return type ของ function:
+
+```ts
+type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
+
+type A = MyReturnType<() => number>;      // number
+type B = MyReturnType<(x: string) => User>; // User
+type C = MyReturnType<string>;            // never (not a function)
+```
+
+อ่าน `infer R` ว่า "match type นี้กับ pattern `(...args) => R` ถ้าเข้ากันได้ ให้ bind `R` เป็นอะไรก็ตามที่อยู่ในตำแหน่ง return" นี่คือวิธีที่ built-in `ReturnType<T>` ถูกนิยามเป๊ะ
+
+## pattern นี้ใช้ได้ทั่วไป: ดึงส่วนไหนออกมาก็ได้
+
+`infer` จับตำแหน่งไหนใน structure ก็ได้ — element type, promise value, argument type:
+
+```ts
+// element type of an array
+type ElementType<T> = T extends (infer E)[] ? E : T;
+type E1 = ElementType<number[]>; // number
+type E2 = ElementType<string>;   // string (unchanged — not an array)
+
+// the value a Promise resolves to
+type Awaited1<T> = T extends Promise<infer V> ? V : T;
+type V1 = Awaited1<Promise<string>>; // string
+
+// the first parameter type
+type FirstArg<T> = T extends (first: infer P, ...rest: any[]) => any ? P : never;
+type P1 = FirstArg<(id: number) => void>; // number
+```
+
+ทุกอันคือการทำแบบเดียวกัน: บรรยาย shape ที่คุณคาดหวัง วาง `infer X` ตรงที่ส่วนที่น่าสนใจอยู่ แล้ว TypeScript เติม `X` ให้เมื่อ shape เข้ากัน
+
+## จุดที่ต้องระวัง: `infer` หลายตัวในตำแหน่งเดียวกัน
+
+เมื่อชื่อ `infer` เดียวกันปรากฏหลายจุด พฤติกรรมของ TypeScript ขึ้นกับตำแหน่ง — มัน infer เป็น **union** ในตำแหน่ง covariant และเป็น **intersection** ในตำแหน่ง contravariant (parameter) คุณไม่ค่อยต้องใช้ แต่มันอธิบายเซอร์ไพรส์บางอย่าง:
+
+```ts
+type Merge<T> = T extends { a: infer U; b: infer U } ? U : never;
+type M = Merge<{ a: string; b: number }>; // string | number (union)
+```
+
+สำหรับงานทั่วไปในแต่ละวัน `infer` หนึ่งตัวต่อ pattern ก็พอแล้ว
+
+<Callout title="The one-line takeaway">
+generic inference อ่าน **ตำแหน่งของ argument** (inference site) แล้วประนีประนอมเป็น type เดียว — จึงเป็นเหตุผลว่าทำไม argument (ไม่ใช่ return annotation) เป็นตัวตัดสินว่า `T` กลายเป็นอะไร keyword `infer` ที่ใช้ภายใน conditional type แนะนำ variable ที่ TypeScript แก้ให้ด้วยการ pattern-match structure: วาง `infer X` ตรงที่ส่วนที่คุณต้องการอยู่ (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) แล้ว TypeScript ยื่นชิ้นนั้นให้ นี่คือวิธีสร้าง `ReturnType` และเพื่อน ๆ
+</Callout>
+
+export const quizInfer = [
+  {
+    q: 'TypeScript เอาค่าของ type parameter ของ generic function มาจากไหน?',
+    options: [
+      'จาก return type annotation',
+      'จากตำแหน่งของ argument (inference site) แล้วประนีประนอมเป็น type เดียว',
+      'จาก config file',
+      'เป็น `any` เสมอถ้าไม่เขียนชัด ๆ',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`infer R` ใน `T extends (...args: any[]) => infer R ? R : never` ทำอะไร?',
+    options: [
+      'ประกาศ variable ตอน runtime',
+      'pattern-match type แล้ว bind `R` เป็นอะไรก็ตามที่อยู่ในตำแหน่ง return',
+      'แปลง `T` เป็น function',
+      'throw error ถ้า `T` ไม่ใช่ function',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'จะดึง element type ออกจาก array type อย่างไร?',
+    options: [
+      '`T extends (infer E)[] ? E : T`',
+      '`T extends E[] ? T : E`',
+      '`keyof T`',
+      '`T[number][]`',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'built-in `ReturnType<T>` ถูกสร้างด้วย:',
+    options: [
+      'mapped type',
+      'conditional type ที่มี `infer` ในตำแหน่ง return',
+      'runtime reflection call',
+      'class',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/inference-and-infer" questions={quizInfer} />
+
+<ProgressTracker client:visible id="generics/inference-and-infer" />

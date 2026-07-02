@@ -1,0 +1,141 @@
+---
+title: 'Literals & Widening'
+description: 'literal type, TypeScript widen มันเมื่อไร และ as const ล็อก type แบบแคบที่คุณต้องการจริง ๆ ได้อย่างไร'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## literal คือเซตที่มีสมาชิกตัวเดียว
+
+**literal type** คือ type ที่มี value ได้ค่าเดียวคือ literal ที่ระบุ `"GET"` เป็น type และ value เดียวที่ assign ให้มันได้คือ string `"GET"` เช่นเดียวกับ `42`, `true` และอื่น ๆ
+
+```ts
+let method: "GET" = "GET";
+method = "POST"; // ❌ Type '"POST"' is not assignable to type '"GET"'.
+```
+
+ลำพัง literal type แทบไม่มีประโยชน์ พลังของมันมาจาก **union ของ literal** ซึ่ง model ความหมาย "หนึ่งในค่าที่ระบุพวกนี้":
+
+```ts
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Dice = 1 | 2 | 3 | 4 | 5 | 6;
+```
+
+นี่คือวิธีแทน parameter แบบ `string` หลวม ๆ ด้วยตัวที่แม่นยำ อธิบายตัวเองได้ และ autocomplete ได้
+
+## Widening: ทำไม literal ถึงหายไปเรื่อย ๆ
+
+TypeScript จะ **widen** literal ไปเป็น type ทั่วไปในที่ที่ value อาจเปลี่ยนได้ กฎที่คุณเจอใน Foundations: `const` เก็บ literal, `let` widen
+
+```ts
+const a = "GET"; // type: "GET"
+let   b = "GET"; // type: string   (widen — b reassign ได้)
+```
+
+widening แบบเดียวกันเกิดกับ **property ของ object** ด้วย เพราะ property ของ object แก้ค่าได้โดย default:
+
+```ts
+const config = { method: "GET" };
+// type: { method: string }  — ไม่ใช่ { method: "GET" }
+
+function send(m: "GET" | "POST") {}
+send(config.method); // ❌ string assign ให้ "GET" | "POST" ไม่ได้
+```
+
+ถึง `config` จะเป็น `const` แต่ property `method` ยัง reassign ได้ (`config.method = "POST"` ทำได้) compiler เลย widen มันเป็น `string` จุดนี้ทำทุกคนงงครั้งหนึ่งเสมอ
+
+## `as const`: ล็อก type แบบแคบไว้
+
+**const assertion** (`as const`) บอก compiler ว่า "มองค่านี้เป็น immutable แบบลึก และเก็บทุก literal ให้แคบไว้"
+
+```ts
+const config = { method: "GET" } as const;
+// type: { readonly method: "GET" }
+
+send(config.method); // ✅ ตอนนี้ "GET" อยู่รอด
+```
+
+`as const` ทำ 3 อย่างพร้อมกัน:
+
+1. **literal ยังเป็น literal** — `"GET"` แทน `string`
+2. **property กลายเป็น `readonly`** — สะท้อน immutability ที่คุณสัญญาไว้
+3. **array กลายเป็น `readonly` tuple** — `[1, 2]` กลายเป็น `readonly [1, 2]` ไม่ใช่ `number[]`
+
+<Mermaid title="widening เทียบ as const" code={widenDiagram} />
+
+export const widenDiagram = `flowchart TB
+  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }\n(widened, mutable)"]
+  val -->|as const| narrow["type: { readonly method: 'GET' }\n(literal, readonly)"]`;
+
+## use case ที่พบบ่อยมาก: literal config object
+
+`as const` เปล่งประกายกับ lookup table และ config ที่คุณอยากได้ key/value เป๊ะ ๆ ใน type:
+
+```ts
+const ROUTES = {
+  home: "/",
+  profile: "/profile",
+  settings: "/settings",
+} as const;
+
+type Route = typeof ROUTES[keyof typeof ROUTES];
+// type: "/" | "/profile" | "/settings"
+```
+
+ถ้าไม่มี `as const` `ROUTES` จะเป็น `{ home: string; profile: string; settings: string }` แล้วคุณก็เสีย path เฉพาะทั้งหมด แต่พอมี คุณ derive union type ที่แม่นยำจากตัวข้อมูลได้ตรง ๆ — pattern ที่คุณจะเจอตลอดในโมดูล type-level
+
+<Callout title="สรุปหนึ่งบรรทัด">
+literal type คือเซตที่มีค่าเดียว และ union ของ literal คือการ model "หนึ่งในค่าที่ระบุพวกนี้" TypeScript จะ **widen** literal ทุกที่ที่ value อาจเปลี่ยน — รวมถึง property ของ object ที่แก้ค่าได้ ซึ่งเป็นเหตุผลว่าทำไม `const config = { method: "GET" }` ถึงให้ `method: string` หยิบ `as const` มาใช้เพื่อเก็บ literal ให้แคบ ทำ property เป็น `readonly` และเปลี่ยน array เป็น tuple — กุญแจสำคัญของการ derive type ที่แม่นยำจากข้อมูล
+</Callout>
+
+export const quizLit = [
+  {
+    q: 'type ของ `const x = "GET"` เทียบกับ `let y = "GET"` คืออะไร?',
+    options: [
+      'เป็น string ทั้งคู่',
+      'x เป็น "GET" (literal), y เป็น string (widen แล้ว)',
+      'เป็น "GET" ทั้งคู่',
+      'x เป็น string, y เป็น "GET"',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม `method` ถึงเป็น string ใน `const config = { method: "GET" }`?',
+    options: [
+      'บั๊กของ compiler',
+      'property ของ object แก้ค่าได้โดย default literal เลย widen เป็น string',
+      'const ให้ string เสมอ',
+      'เพราะ method เป็น reserved word',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`as const` ทำอะไร?',
+    options: [
+      'ทำให้ค่า run เร็วขึ้น',
+      'เก็บ literal ให้แคบ ทำ property เป็น readonly และเปลี่ยน array เป็น readonly tuple',
+      'แปลงค่าเป็น any',
+      'ใช้ได้กับ number เท่านั้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม union ของ literal อย่าง "GET" | "POST" ถึงดีกว่า string สำหรับ parameter?',
+    options: [
+      'มันเล็กกว่าตอน runtime',
+      'มันจำกัด input ให้เหลือค่าที่อนุญาตเป๊ะ ๆ ได้ autocomplete และจับ typo ได้',
+      'มัน run function สองครั้ง',
+      'ไม่มีความต่าง',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/literals-and-widening" questions={quizLit} />
+
+<ProgressTracker client:visible id="everyday-types/literals-and-widening" />

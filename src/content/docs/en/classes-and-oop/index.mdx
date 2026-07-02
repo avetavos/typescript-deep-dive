@@ -1,0 +1,85 @@
+---
+title: 'Classes & Advanced OOP'
+description: 'How TypeScript classes bridge the type world and the value world — and the advanced features that make them expressive without leaning on deep inheritance.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Classes live in both worlds
+
+Almost everything else in this course is a *type* — a compile-time construct that gets erased. A **class** is different: it is one of the rare declarations that creates **both** a type *and* a value. The class name is a type you can annotate with, and simultaneously a runtime constructor you can call with `new`.
+
+```ts
+class User {
+  constructor(public name: string) {}
+}
+
+const u: User = new User("Ada"); // `User` as a TYPE (annotation) and a VALUE (constructor)
+```
+
+That dual nature is why classes feel special, and why their features split into two groups: ones the compiler checks and erases (like `private`), and ones that survive into the emitted JavaScript (like `#private` fields).
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Classes, deep | Access modifiers, `readonly`, parameter properties, `static`, `abstract`, `implements` |
+| `this` types & polymorphism | Polymorphic `this`, `this` parameters, and binding pitfalls in the type system |
+| Decorators | The modern stage-3 decorators — class, method, field — and factories |
+| Mixins & composition | Building behavior from composable class factories instead of deep hierarchies |
+
+## A word on inheritance
+
+TypeScript supports classical `extends` inheritance, but this module leans toward the features the community actually reaches for in modern code: **composition over inheritance**. Deep class hierarchies are brittle; `this` types, decorators, and mixins let you build flexible, reusable behavior without them.
+
+<Mermaid title="The two kinds of class features" code={worldsDiagram} />
+
+export const worldsDiagram = `flowchart TB
+  cls["class declaration"] --> typeworld["TYPE world\n(erased): private, protected,\nimplements, abstract"]
+  cls --> valueworld["VALUE world\n(runtime): #private, static,\nthe constructor, methods"]`;
+
+<Callout title="The mental shift">
+When you write a `class`, hold two pictures at once: the **type** it defines (the shape of an instance, used for annotations and checked at compile time) and the **value** it creates (a constructor function that exists at runtime). Many class features are purely the former and vanish on compile; a few — notably `#private` fields and `static` members — are genuinely the latter and ship in your JavaScript.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What makes a class special compared to a type alias or interface?',
+    options: [
+      'It runs faster',
+      'It creates both a type and a runtime value (a constructor)',
+      'It cannot be erased',
+      'It disables structural typing',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which class feature survives into the emitted JavaScript?',
+    options: [
+      'The `private` keyword',
+      'The `implements` clause',
+      'A `#private` field',
+      'An `abstract` method signature',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'What design approach does modern TypeScript OOP tend to favor?',
+    options: [
+      'Deep inheritance hierarchies',
+      'Composition over inheritance',
+      'Avoiding classes entirely',
+      'Global mutable state',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="classes-and-oop/index" />

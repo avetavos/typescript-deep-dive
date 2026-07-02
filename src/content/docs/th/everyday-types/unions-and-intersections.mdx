@@ -1,0 +1,133 @@
+---
+title: 'Unions & Intersections'
+description: 'union คือ OR และทำให้เซตกว้างขึ้น intersection คือ AND และทำให้แคบลง วิธีทำงานกับแต่ละแบบ และทำไมมันทำงานตรงข้ามกันสำหรับ object'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## Union: value ที่เป็นหนึ่งในหลาย type
+
+**union** `A | B` อธิบาย value ที่เป็น *ไม่ `A` ก็ `B`* ใน model เซตมันคือ set union — union จึง **กว้างกว่า** สมาชิกของมันเสมอ
+
+```ts
+type Id = string | number;
+
+let id: Id = "abc";
+id = 123; // ✅ ทั้งคู่เป็นสมาชิกของ union
+```
+
+จุดที่ต้องระวัง: ระหว่างที่คุณถือ union อยู่ คุณแตะได้แค่ member ที่ **ทุก** branch มีร่วมกัน เพราะ compiler ยังไม่รู้ว่าคุณถือตัวไหน
+
+```ts
+function printId(id: string | number) {
+  id.toUpperCase();
+  // ❌ toUpperCase ไม่มีบน number
+  // ตรงนี้ใช้ได้แค่ member ที่ string และ number มีร่วมกัน
+}
+```
+
+จะใช้ member เฉพาะ type ต้อง **narrow** ก่อน — เนื้อหาทั้งบทหน้า จนกว่าจะ narrow union จะเปิดให้เห็นแค่ surface ที่มีร่วมกัน
+
+## Intersection: value ที่เป็นทุก type พร้อมกัน
+
+**intersection** `A & B` อธิบาย value ที่เป็นทั้ง `A` และ `B` พร้อมกัน สำหรับ object type มันหมายถึง "มีทุก property ของทั้งสอง" — intersection ของ object จึง **แคบกว่า** (เงื่อนไขมากขึ้น value ที่ valid น้อยลง)
+
+```ts
+type WithId = { id: string };
+type WithTimestamps = { createdAt: Date; updatedAt: Date };
+
+type Entity = WithId & WithTimestamps;
+// ต้องมี id และ createdAt และ updatedAt
+
+const e: Entity = { id: "1", createdAt: new Date(), updatedAt: new Date() };
+```
+
+นี่คือวิธี idiomatic ในการประกอบ object type จากชิ้นเล็ก ๆ ที่ reuse ได้ — ยืดหยุ่นกว่า inheritance มาก เพราะผสมได้ทุกแบบ
+
+## มันดึงไปคนละทาง
+
+<Mermaid title="union กว้างขึ้น intersection แคบลง" code={setDiagram} />
+
+export const setDiagram = `flowchart TB
+  subgraph un["A OR B  (union)"]
+    u["more values allowed\nfewer members guaranteed"]
+  end
+  subgraph inter["A AND B  (intersection)"]
+    i["fewer values allowed\nmore members guaranteed"]
+  end`;
+
+สังเกต trade-off ของแต่ละทิศ:
+
+- **union** อนุญาต *value มากขึ้น* แต่การันตี *member ที่แตะได้อย่างปลอดภัยน้อยลง* (แค่ที่มีร่วมกัน)
+- **intersection** อนุญาต *value น้อยลง* แต่การันตี *member มากขึ้น* (ครบทุกตัว)
+
+## edge case หลุดออกมาจาก model เซตเอง
+
+- `string & number` เป็น `never` — ไม่มี value ไหนเป็นทั้งสอง intersection เลยเป็นเซตว่าง
+- union กับ `any` จะยุบเป็น `any`; union กับ `never` จะทิ้ง `never` ไป (`T | never` ก็คือ `T` เพราะการเพิ่มเซตว่างไม่เปลี่ยนอะไร)
+- intersect object type ที่มี property primitive ชนกัน อาจได้ `never` สำหรับ property นั้น
+
+```ts
+type A = { kind: "a"; value: number };
+type B = { kind: "b"; value: string };
+type Both = A & B;
+// kind: "a" & "b" → never; type นี้สร้างจริงไม่ได้
+```
+
+ตัวสุดท้ายเป็นสัญญาณ: เวลาคุณอยากได้ "หนึ่งใน object shape พวกนี้" คุณเกือบทุกครั้งต้องการ **union** (`A | B`) ที่มี discriminant field ร่วมกัน — ไม่ใช่ intersection นั่นคือ discriminated-union pattern ในบท narrowing
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`A \| B` คือ **union** — OR — และกว้างกว่า ระหว่างที่ถือมันคุณแตะได้แค่ member ที่ทุก branch มีร่วมกันจนกว่าจะ narrow `A & B` คือ **intersection** — AND — และสำหรับ object จะแคบกว่า ต้องมีทุก property ของทั้งสอง ซึ่งเป็นวิธีประกอบ object type มันชี้ไปคนละทาง: union เพิ่ม value แต่จำกัดการเข้าถึง; intersection จำกัด value แต่เพิ่ม member
+</Callout>
+
+export const quizUI = [
+  {
+    q: 'ระหว่างถือ value type `string | number` คุณแตะ member ไหนได้โดยไม่ต้อง narrow?',
+    options: [
+      'ทุก member ของทั้ง string และ number',
+      'แค่ member ที่ string และ number มีร่วมกัน',
+      'แค่ member ของ number',
+      'ไม่ได้เลย',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'intersection ของ object type สองตัว `A & B` ต้องการอะไร?',
+    options: [
+      'property ของ A หรือ property ของ B อย่างใดอย่างหนึ่ง',
+      'ทุก property ของทั้ง A และ B',
+      'แค่ property ที่มีร่วมกัน',
+      'เป็น never เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'อันไหนกว้างกว่า (อนุญาต value มากกว่า): union หรือ intersection?',
+    options: [
+      'union กว้างกว่า',
+      'intersection กว้างกว่า',
+      'เท่ากันเสมอ',
+      'ไม่มีตัวไหนมี value',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'คุณอยากได้ "value ที่เป็นหนึ่งใน object shape หลายแบบ" ควรหยิบอะไรมาใช้?',
+    options: [
+      'intersection ที่มี property ร่วมกัน',
+      'union ที่มี discriminant field ร่วมกัน',
+      'class hierarchy',
+      'type any',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/unions-and-intersections" questions={quizUI} />
+
+<ProgressTracker client:visible id="everyday-types/unions-and-intersections" />

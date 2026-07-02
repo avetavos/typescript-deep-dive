@@ -1,0 +1,99 @@
+---
+title: 'Generics'
+description: 'Parametric polymorphism in TypeScript — one implementation that works across many types without throwing away type information.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The problem generics solve
+
+Suppose you want a function that returns whatever you give it. Without generics you face a bad choice:
+
+```ts
+// Option A: one type only — not reusable
+function identityStr(x: string): string { return x; }
+
+// Option B: any — reusable, but throws away all type information
+function identityAny(x: any): any { return x; }
+
+const a = identityAny(42);
+a.toUpperCase(); // 💥 no error at compile time — any hides the bug
+```
+
+`any` makes the function reusable but blinds the compiler: the link between the input type and the output type is gone. **Generics** keep that link.
+
+```ts
+function identity<T>(x: T): T { return x; }
+
+const n = identity(42);      // T inferred as number → n: number
+const s = identity("hi");    // T inferred as string → s: string
+n.toUpperCase(); // ❌ Error: number has no toUpperCase — the bug is caught
+```
+
+`T` is a **type parameter** — a placeholder the caller (or inference) fills in. The function works for every type, and the return type still tracks the argument type exactly.
+
+## What generics really are
+
+A generic is a **function at the type level**: it takes types as input and produces types as output. `identity<T>` says "for any type `T`, take a `T` and return a `T`." This is called *parametric polymorphism* — one implementation, parameterized over types.
+
+<Mermaid title="A generic is one implementation over many types" code={genDiagram} />
+
+export const genDiagram = `flowchart LR
+  impl["one generic\nidentity of T"] --> callN["called with number\nreturns number"]
+  impl --> callS["called with string\nreturns string"]
+  impl --> callU["called with User\nreturns User"]`;
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Functions & constraints | Type parameters, `extends` constraints, default type parameters |
+| Classes & interfaces | Generic classes, interfaces, and per-method type parameters |
+| Conditional types | `T extends U ? X : Y` and distribution over unions |
+| Inference & `infer` | How type arguments are inferred, and extracting types with `infer` |
+
+<Callout title="The one-line takeaway">
+Generics let one implementation work across many types **without losing type information** — the thing `any` throws away. A type parameter like `T` is a placeholder filled in by the caller or by inference, so `identity<T>` returns exactly the type it received. Think of a generic as a function that runs at the type level.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'What do generics preserve that `any` throws away?',
+    options: [
+      'Runtime speed',
+      'The link between input types and output types',
+      'Bundle size',
+      'Memory layout',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In `function identity<T>(x: T): T`, what is `T`?',
+    options: [
+      'A runtime value',
+      'A type parameter — a placeholder filled in by the caller or by inference',
+      'A special class',
+      'An alias for `any`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the name for "one implementation parameterized over types"?',
+    options: [
+      'Inheritance',
+      'Parametric polymorphism',
+      'Overloading',
+      'Duck typing',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="generics/index" />

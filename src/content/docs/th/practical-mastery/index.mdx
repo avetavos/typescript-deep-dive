@@ -1,0 +1,77 @@
+---
+title: 'Practical Mastery'
+description: 'เปลี่ยนความรู้เรื่อง type ให้เป็น judgment — การ type boundary กับโลกที่ไม่มี type, nullability, performance และการ migrate codebase จริง'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## จุดที่ความรู้กลายเป็น judgment
+
+ตอนนี้คุณรู้แล้วว่า type system *ทำงานอย่างไร* โมดูลนี้ว่าด้วยการใช้มัน *ให้ดี* — คือ judgment ที่แยกคนที่ผ่าน compiler ได้ ออกจากคนที่ ship TypeScript ที่ maintain ได้จริง
+
+แกนหลักคือความจริงที่ไม่ค่อยสบายใจนัก: **compiler รู้แค่สิ่งที่คุณบอกมันเท่านั้น** type คือ model ของโปรแกรมคุณ และ model ผิดได้ ทั้ง `any`, cast ที่ผิด หรือ JSON blob จาก network ล้วนโกหก checker ได้ ความเชี่ยวชาญคือการรู้ว่า model เจอกับความจริงตรงไหน แล้วปกป้อง boundary นั้น
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียนรู้ |
+|--------|-------------------|
+| Typing APIs & boundaries | `unknown` vs `any`, validate ข้อมูลจากภายนอก, branded type |
+| Nullability & never | `strictNullChecks`, Result type, exhaustiveness ด้วย `never` |
+| Performance & pitfalls | ทำไม `tsc` ช้าลง, footgun ที่พบบ่อย, เมื่อไรควร simplify |
+| Migration strategy | ย้าย JS codebase ไป TS โดยไม่ต้อง rewrite ทีเดียว |
+
+## แนวคิดเดียวที่ร้อยทุกอย่างเข้าด้วยกัน
+
+<Mermaid title="เกาะที่มี type ในทะเลที่ไม่มี type" code={boundaryDiagram} />
+
+export const boundaryDiagram = `flowchart LR
+  world["untyped world\nnetwork, JSON, any, casts"] -->|validate at the edge| edge["boundary\n(guards, schemas)"]
+  edge -->|trusted types| inside["your typed code\n(safe to trust)"]`;
+
+ทุกอย่างในนี้เป็นรูปแบบหนึ่งของ **validate at the edge, trust inside** ผลักความไม่แน่นอนไปไว้ที่ boundary ของโปรแกรม เปลี่ยนมันเป็น type จริงตรงนั้น แล้วปล่อยให้ทั้งภายในได้รับการการันตี ทำ boundary ให้ถูก แล้ว type system จะตอบแทนคุณในทุกที่ที่เหลือ
+
+<Callout title="การเปลี่ยน mindset">
+เลิกมองว่า compiler สีเขียว = ถูกต้อง มันพิสูจน์แค่ว่า code ของคุณ *internally consistent* กับ type ที่คุณเขียน — ไม่มากกว่านั้น ถ้า type เหล่านั้นไม่ตรงกับความจริงตอน runtime (input ที่ไม่ได้ validate, `as` ที่ผิด, `any` ที่หลุดมา) compiler ก็จะผิดอย่างมั่นใจ หน้าที่ของมือโปรคือทำให้ type *สมควรได้รับความเชื่อใจ* ตรง edge
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'ความจริงหลักของโมดูลนี้คืออะไร?',
+    options: [
+      'TypeScript ทำให้ runtime error เป็นไปไม่ได้',
+      'compiler รู้แค่สิ่งที่คุณบอกมัน — type คือ model ที่ผิดได้',
+      'type ตรงกับความจริงตอน runtime เสมอ',
+      'ไม่จำเป็นต้อง validate ถ้าใช้ strict mode',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'กลยุทธ์ที่วนกลับมาเสมอสำหรับจัดการโลกที่ไม่มี type คืออะไร?',
+    options: [
+      'cast ทุกอย่างให้เป็น type ที่คาดหวัง',
+      'validate ที่ edge แล้วเชื่อ type ภายใน',
+      'ใช้ `any` ทุกที่เพื่อความยืดหยุ่น',
+      'ปิด strict mode ตรง boundary',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'project compile ผ่านโดยไม่มี error เลย การันตีอะไร?',
+    options: [
+      'โปรแกรมถูกต้องตอน runtime',
+      'code internally consistent กับ type ที่คุณเขียน — ไม่มากกว่านั้น',
+      'ไม่มี bug',
+      'ข้อมูลจากภายนอกทั้งหมด valid',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="practical-mastery/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="practical-mastery/index" />

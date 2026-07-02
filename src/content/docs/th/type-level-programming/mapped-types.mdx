@@ -1,0 +1,149 @@
+---
+title: 'Mapped Types'
+description: 'วนซ้ำ key ของ type เพื่อ transform มัน — mapping modifier, เพิ่มและลบ readonly กับ optional และสร้าง Partial กับ Readonly เอง'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## loop บน key
+
+**mapped type** วนซ้ำบน key ของ type แล้วสร้าง type ใหม่ syntax คล้าย object type แต่ใส่ `[K in ...]` ตรงตำแหน่งที่ key ควรอยู่ — เป็น `for` loop ระดับ type
+
+```ts
+type Flags = {
+  [K in "a" | "b" | "c"]: boolean;
+};
+//   ^? { a: boolean; b: boolean; c: boolean }
+```
+
+`K` ไล่ไปทีละ member ของ union `"a" | "b" | "c"` และสำหรับแต่ละตัว type ก็สร้าง property ออกมา รวมกับ `keyof` แล้วคุณวนซ้ำบน type ที่มีอยู่ได้:
+
+```ts
+interface User { id: number; name: string; }
+
+type Stringify = {
+  [K in keyof User]: string;
+};
+//   ^? { id: string; name: string }
+```
+
+## อ้างถึง value type เดิม
+
+ภายใน loop `T[K]` (indexed access) ให้ value type เดิม — คุณจึง transform แทนที่จะแทนที่ทั้งหมดได้:
+
+```ts
+type Getters<T> = {
+  [K in keyof T]: () => T[K];
+};
+
+type UserGetters = Getters<User>;
+//   ^? { id: () => number; name: () => string }
+```
+
+แต่ละ property กลายเป็น function ที่คืน value type นั้น รูปแบบ "เก็บ key ไว้ transform value" คือการใช้ mapped type ในชีวิตประจำวัน
+
+## mapping modifier: เพิ่มหรือลบ `readonly` และ `?`
+
+mapped type เปลี่ยน **modifier** ของแต่ละ property ได้ด้วย คุณเพิ่ม `readonly` หรือ `?` ด้วยการเขียนมัน และ *ลบ* ด้วย prefix `-`
+
+```ts
+// ทำให้ทุก property เป็น optional (นี่คือวิธีที่ Partial ทำงาน)
+type MyPartial<T> = {
+  [K in keyof T]?: T[K];
+};
+
+// ทำให้ทุก property เป็น readonly (นี่คือ Readonly)
+type MyReadonly<T> = {
+  readonly [K in keyof T]: T[K];
+};
+
+// ถอด optional และ readonly ออกจากทุก property
+type Concrete<T> = {
+  -readonly [K in keyof T]-?: T[K];
+};
+```
+
+<Mermaid title="mapped type transform แต่ละ property" code={mapDiagram} />
+
+export const mapDiagram = `flowchart LR
+  src["T: { id: number, name: string }"] -->|"for each K in keyof T"| loop["apply transform:\nmodifier + value type"]
+  loop --> out["new type:\n{ id?: number, name?: string }"]`;
+
+`-?` ลบ optional และ `-readonly` ลบ immutability — ซึ่งเป็นวิธีที่ `Required` และ utility แบบ mutable-clone ถูกเขียนพอดี เวลาเห็น `-?` ใน library แปลว่า "บังคับให้ทุก property มีอยู่จริง"
+
+## key remapping ด้วย `as`
+
+feature ที่ใหม่กว่าให้คุณ **rename หรือ filter** key ระหว่าง map ด้วย clause `as` นี่คือวิธีสร้างอย่าง type "getters" ที่มีชื่อขึ้นต้น `get` หรือ drop key ที่ value type ไม่ต้องการ:
+
+```ts
+// rename แต่ละ key เป็น get<Key>
+type Getters2<T> = {
+  [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
+};
+
+type UG = Getters2<{ name: string }>;
+//   ^? { getName: () => string }
+
+// filter: เก็บเฉพาะ property ที่ value เป็น string (remap ตัวที่ไม่เอาเป็น never)
+type StringProps<T> = {
+  [K in keyof T as T[K] extends string ? K : never]: T[K];
+};
+```
+
+การ remap key เป็น `never` จะ **ลบ** มันออกจากผลลัพธ์ — เป็นทริกมาตรฐานสำหรับ filter property ตาม value type ของมัน
+
+<Callout title="สรุปบรรทัดเดียว">
+mapped type `{ [K in keyof T]: ... }` คือ loop ระดับ type บน key ของ `T`; ภายในนั้น `T[K]` ให้ value type เดิมมา transform คุณเพิ่ม modifier ด้วยการเขียน `readonly`/`?` และลบด้วย `-readonly`/`-?` clause `as` remap key — rename มัน (ด้วย template literal) หรือ filter ออกด้วยการ remap เป็น `never` construct เดียวนี้คือวิธีที่ `Partial`, `Readonly`, `Required` และ utility type ส่วนใหญ่ถูกสร้าง
+</Callout>
+
+export const quizMapped = [
+  {
+    q: 'mapped type คืออะไร?',
+    options: [
+      'runtime Map object',
+      'loop ระดับ type บน key ที่สร้าง type ใหม่',
+      'วิธี import type จากไฟล์อื่น',
+      'JSON schema',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ภายใน `{ [K in keyof T]: ... }` จะอ้างถึง value type เดิมที่ key K อย่างไร?',
+    options: [
+      '`keyof T`',
+      '`T[K]` (indexed access)',
+      '`typeof K`',
+      '`K.value`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'modifier `-?` ใน mapped type ทำอะไร?',
+    options: [
+      'ทำให้ทุก property เป็น optional',
+      'ลบ optional — บังคับให้ทุก property มีอยู่ (เหมือน Required)',
+      'ลบ property ทิ้ง',
+      'ทำให้เป็น readonly',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน clause `as` ของ key remapping เกิดอะไรขึ้นเมื่อ remap key เป็น `never`?',
+    options: [
+      'value ของ key กลายเป็น never',
+      'key ถูกลบออกจาก type ผลลัพธ์ — ทริก filter มาตรฐาน',
+      'เกิด compile error',
+      'key กลายเป็น optional',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/mapped-types" questions={quizMapped} />
+
+<ProgressTracker client:visible id="type-level-programming/mapped-types" />

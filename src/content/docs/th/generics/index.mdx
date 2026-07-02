@@ -1,0 +1,99 @@
+---
+title: 'Generics'
+description: 'parametric polymorphism ใน TypeScript — implementation เดียวที่ทำงานได้กับหลาย type โดยไม่ทิ้งข้อมูล type'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ปัญหาที่ generics มาแก้
+
+สมมติคุณอยากได้ function ที่คืนค่าอะไรก็ตามที่คุณส่งเข้าไป ถ้าไม่มี generics คุณจะเจอทางเลือกที่แย่ทั้งคู่:
+
+```ts
+// Option A: one type only — not reusable
+function identityStr(x: string): string { return x; }
+
+// Option B: any — reusable, but throws away all type information
+function identityAny(x: any): any { return x; }
+
+const a = identityAny(42);
+a.toUpperCase(); // 💥 no error at compile time — any hides the bug
+```
+
+`any` ทำให้ function reuse ได้ก็จริง แต่ทำให้ compiler ตาบอด — ความเชื่อมโยงระหว่าง type ของ input กับ output หายไปหมด **Generics** เก็บความเชื่อมโยงนั้นไว้
+
+```ts
+function identity<T>(x: T): T { return x; }
+
+const n = identity(42);      // T inferred as number → n: number
+const s = identity("hi");    // T inferred as string → s: string
+n.toUpperCase(); // ❌ Error: number has no toUpperCase — the bug is caught
+```
+
+`T` คือ **type parameter** — ตัวยึดที่ผู้เรียก (หรือ inference) เป็นคนเติมค่าให้ function ตัวนี้ทำงานได้กับทุก type และ return type ก็ยังตาม type ของ argument ได้เป๊ะ
+
+## จริง ๆ แล้ว generics คืออะไร
+
+generic คือ **function ในระดับ type** — มันรับ type เป็น input แล้วผลิต type เป็น output `identity<T>` บอกว่า "สำหรับ type `T` ใด ๆ ก็ตาม รับ `T` แล้วคืน `T`" อันนี้เรียกว่า *parametric polymorphism* — implementation เดียว ที่ parameterize ด้วย type
+
+<Mermaid title="A generic is one implementation over many types" code={genDiagram} />
+
+export const genDiagram = `flowchart LR
+  impl["generic เดียว\nidentity ของ T"] --> callN["เรียกด้วย number\nคืน number"]
+  impl --> callS["เรียกด้วย string\nคืน string"]
+  impl --> callU["เรียกด้วย User\nคืน User"]`;
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| Functions & constraints | type parameter, constraint ด้วย `extends`, default type parameter |
+| Classes & interfaces | generic class, interface และ type parameter ต่อ method |
+| Conditional types | `T extends U ? X : Y` และการ distribute ผ่าน union |
+| Inference & `infer` | type argument ถูก infer อย่างไร และการดึง type ออกด้วย `infer` |
+
+<Callout title="The one-line takeaway">
+Generics ทำให้ implementation เดียวทำงานได้กับหลาย type **โดยไม่เสียข้อมูล type** — ซึ่งเป็นสิ่งที่ `any` ทิ้งไป type parameter อย่าง `T` คือตัวยึดที่ผู้เรียกหรือ inference เติมค่าให้ ดังนั้น `identity<T>` จึงคืน type เดียวกับที่รับเข้ามาเป๊ะ มอง generic เป็น function ที่รันในระดับ type
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'generics เก็บอะไรไว้ที่ `any` ทิ้งไป?',
+    options: [
+      'ความเร็วตอน runtime',
+      'ความเชื่อมโยงระหว่าง type ของ input กับ output',
+      'bundle size',
+      'memory layout',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน `function identity<T>(x: T): T` `T` คืออะไร?',
+    options: [
+      'value ตอน runtime',
+      'type parameter — ตัวยึดที่ผู้เรียกหรือ inference เติมค่าให้',
+      'class พิเศษ',
+      'alias ของ `any`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ชื่อของ "implementation เดียวที่ parameterize ด้วย type" คืออะไร?',
+    options: [
+      'Inheritance',
+      'Parametric polymorphism',
+      'Overloading',
+      'Duck typing',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="generics/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="generics/index" />

@@ -1,0 +1,105 @@
+---
+title: 'Modules & Resolution'
+description: 'ESM เทียบ CommonJS, tsc หาไฟล์ที่คุณ import เจอได้อย่างไร, resolution mode ต่าง ๆ และทำไม import extension กับ esModuleInterop ถึงทำให้สับสนบ่อย'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## module system สองแบบ ยังอยู่
+
+JavaScript มี module format สองแบบ และ TypeScript ต้องรองรับทั้งคู่:
+
+- **CommonJS (CJS)** — format เก่าของ Node: `require()` และ `module.exports` โหลดแบบ synchronous ด้วยการ resolve ไฟล์บน disk
+- **ES Modules (ESM)** — มาตรฐาน: `import` และ `export` ใช้ native ใน browser และ Node สมัยใหม่ วิเคราะห์แบบ static ได้
+
+ความสับสนส่วนใหญ่ในโปรเจกต์ TypeScript ย้อนกลับไปที่ความไม่ตรงกันระหว่าง module format ที่คุณ *เขียน*, format ที่ `tsc` *emit* และ format ที่ *runtime* คาดหวัง option `module` และ `moduleResolution` คือวิธีที่คุณทำให้ทั้งสามอย่างนี้ตรงกัน
+
+## resolution ทำงานอย่างไร
+
+เมื่อคุณเขียน `import { x } from "./util"` `tsc` ต้องแปลง `"./util"` ให้เป็นไฟล์จริง กลยุทธ์ที่มันใช้ขึ้นกับ `moduleResolution`:
+
+<Mermaid title="การเลือก moduleResolution mode" code={resolveDiagram} />
+
+export const resolveDiagram = `flowchart TB
+  q["How is your code loaded?"] --> node["Runs in Node directly"]
+  q --> bundled["Goes through a bundler"]
+  node --> nodenext["moduleResolution: NodeNext\nrespects package.json type + exports"]
+  bundled --> bundler["moduleResolution: Bundler\nlets the bundler resolve"]`;
+
+- **`NodeNext` / `Node16`** — จำลอง Node สมัยใหม่แบบเป๊ะ: มันอ่าน `"type": "module"` ใน `package.json`, เคารพ field `"exports"` และบังคับกฎ ESM (รวมถึงต้องเขียน file extension ใน relative import: `import "./util.js"`)
+- **`Bundler`** — สำหรับ code ที่ผ่าน Vite, esbuild หรือ webpack มันผ่อนเรื่อง extension และปล่อยให้ bundler จัดการการหาไฟล์จริง ให้ตรงกับพฤติกรรมของเครื่องมือเหล่านั้น
+- **`Node10`** (เดิมชื่อ `Node`) — algorithm CommonJS แบบเก่า หลีกเลี่ยงในโปรเจกต์ใหม่ มันไม่เข้าใจ field `"exports"`
+
+mental model สำคัญ: **`moduleResolution` ควรอธิบายว่า code ของคุณถูก *โหลดจริง* อย่างไร** Node รันมันเหรอ? ใช้ `NodeNext` bundler process มันเหรอ? ใช้ `Bundler`
+
+## เรื่องเซอร์ไพรส์ของ extension
+
+ภายใต้ `NodeNext` native ESM ต้องมี extension ใน import และ — น่าสับสน — คุณเขียน extension `.js` แม้ไฟล์บน disk จะเป็น `.ts`:
+
+```ts
+// util.ts exists on disk, but the emitted import must point at the emitted .js
+import { helper } from "./util.js"; // ✅ correct under NodeNext ESM
+import { helper } from "./util";    // ❌ ESM needs the extension
+```
+
+เรื่องนี้ทำทุกคนสะดุดครั้งหนึ่ง เหตุผลคือ `tsc` ไม่ rewrite import path ของคุณ และตอน runtime ไฟล์จะเป็น `util.js` ดังนั้น source ต้องเรียกชื่อไฟล์ตอน runtime ไว้ตั้งแต่แรก
+
+## esModuleInterop
+
+CJS กับ ESM มีความเห็นไม่ตรงกันเรื่อง default export ซึ่งในอดีตทำให้ `import express from "express"` fail กับ module ที่เป็น CommonJS `esModuleInterop: true` แทรก interop shim เล็ก ๆ ที่ทำให้ default และ namespace import ของ CommonJS module ทำงานตามที่คุณคาดหวัง มันเปิดเป็น default ใน config ที่แนะนำ และคุณเกือบจะอยากได้มันเสมอ — การปิดมันคือแหล่งของ import error ที่เลี่ยงได้
+
+<Callout title="The one-line takeaway">
+ตั้ง `moduleResolution` ให้ตรงกับวิธีที่ code ถูกโหลดจริง — `NodeNext` เมื่อ Node เป็นคนรัน (เคารพ `type` และ `exports` ใน `package.json` และต้องมี extension `.js` ใน import) หรือ `Bundler` เมื่อ bundler resolve ให้ เปิด `esModuleInterop` ไว้ให้ CommonJS default import ทำงาน และจำไว้ว่า module error ส่วนใหญ่คือความไม่ตรงกันระหว่างสิ่งที่คุณเขียน, สิ่งที่ `tsc` emit และสิ่งที่ runtime คาดหวัง
+</Callout>
+
+export const quizModules = [
+  {
+    q: '`moduleResolution` ควรถูกตั้งให้อธิบายอะไร?',
+    options: [
+      'editor ที่คุณใช้',
+      'วิธีที่ code ถูกโหลดจริงตอน runtime (Node รันตรง ๆ เทียบกับผ่าน bundler)',
+      'เวอร์ชัน TypeScript',
+      'จำนวนไฟล์ในโปรเจกต์',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ภายใต้ `NodeNext` ESM คุณเขียน extension อะไรเมื่อ import `./util.ts`?',
+    options: [
+      '`./util.ts`',
+      '`./util.js` — คุณเรียกชื่อไฟล์ตอน runtime ที่ emit ออกมา และ tsc ไม่ rewrite path',
+      '`./util` แบบไม่มี extension',
+      '`./util.mjs` เสมอ',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`esModuleInterop` ทำอะไร?',
+    options: [
+      'แปลง code ทั้งหมดเป็น ESM',
+      'เพิ่ม interop shim ให้ default และ namespace import ของ CommonJS module ทำงานตามที่คาดหวัง',
+      'ปิด CommonJS',
+      'ทำให้ resolution เร็วขึ้น',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`moduleResolution` mode ไหนที่เข้าใจ field `exports` ใน `package.json`?',
+    options: [
+      '`Node10` (แบบเก่า)',
+      '`NodeNext` / `Node16`',
+      'ไม่มีตัวไหนเลย',
+      '`Classic` เท่านั้น',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/modules-and-resolution" questions={quizModules} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/modules-and-resolution" />

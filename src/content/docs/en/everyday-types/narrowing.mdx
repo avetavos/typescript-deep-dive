@@ -1,0 +1,189 @@
+---
+title: 'Narrowing'
+description: 'How control flow turns a wide union into a specific type — typeof, in, discriminated unions, exhaustiveness with never, type guards, and assertion functions.'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The point of unions is narrowing
+
+A union is only useful because you can **narrow** it. TypeScript reads your control flow — `if`, `switch`, `typeof`, `return` — and shrinks the type within each branch to the case that must be true there. This is *control-flow analysis*, and it's one of the smartest parts of the compiler.
+
+```ts
+function printId(id: string | number) {
+  if (typeof id === "string") {
+    id.toUpperCase(); // ✅ here id is string
+  } else {
+    id.toFixed(2);    // ✅ here id is number
+  }
+}
+```
+
+Inside the `if`, the type is `string`; the `else` branch removes `string` from the union, leaving `number`. You didn't cast anything — the compiler narrowed based on a real runtime check it understands.
+
+## The built-in narrowing operators
+
+TypeScript understands several ordinary JavaScript checks and narrows from them:
+
+- **`typeof x`** — narrows primitives: `"string"`, `"number"`, `"boolean"`, `"object"`, `"function"`, `"undefined"`, `"symbol"`, `"bigint"`.
+- **`instanceof`** — narrows to a class from its prototype chain.
+- **`"key" in obj`** — narrows object unions by presence of a property.
+- **Truthiness** — `if (x)` removes `null`, `undefined`, `0`, `""`, `false` from the possibilities.
+- **Equality** — `if (x === "a")` narrows to that literal; comparing two variables narrows both.
+
+```ts
+function area(shape: Circle | Square) {
+  if ("radius" in shape) {
+    return Math.PI * shape.radius ** 2; // shape is Circle
+  }
+  return shape.side ** 2;               // shape is Square
+}
+```
+
+## Discriminated unions: the pattern to reach for
+
+The cleanest way to model "one of several object shapes" is a **discriminated union**: every member shares a common literal field (the *discriminant* or *tag*), and switching on that field narrows to the right member.
+
+```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "rect"; width: number; height: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2; // s is the circle member
+    case "square": return s.side ** 2;
+    case "rect":   return s.width * s.height;
+  }
+}
+```
+
+<Mermaid title="A discriminant field narrows a union to one member" code={discDiagram} />
+
+export const discDiagram = `flowchart TB
+  u["Shape (union)\ncircle | square | rect"] -->|switch on kind| c["kind === circle\n→ radius available"]
+  u --> sq["kind === square\n→ side available"]
+  u --> r["kind === rect\n→ width, height available"]`;
+
+This pattern is everywhere: Redux actions, API responses, state machines, result types. When you find yourself reaching for a class hierarchy to model variants, a discriminated union is usually simpler and safer.
+
+## Exhaustiveness with `never`
+
+Here's the payoff. Add a `default` branch that assigns the value to `never`, and the compiler will error the day someone adds a new union member and forgets to handle it:
+
+```ts
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2;
+    case "square": return s.side ** 2;
+    case "rect":   return s.width * s.height;
+    default:
+      const _exhaustive: never = s; // ❌ errors if a new kind is unhandled
+      return _exhaustive;
+  }
+}
+```
+
+In the `default`, every known case has been narrowed away, so `s` is `never`. Add a `"triangle"` member and `s` is no longer `never` there — the assignment fails to compile, pointing you straight at the missing case. This turns "did I handle every variant?" from a code-review question into a compile error.
+
+## Custom type guards: `x is T`
+
+When narrowing needs custom logic, write a **type-guard function** whose return type is a *type predicate* `x is T`:
+
+```ts
+function isString(x: unknown): x is string {
+  return typeof x === "string";
+}
+
+function handle(v: unknown) {
+  if (isString(v)) {
+    v.toUpperCase(); // ✅ v narrowed to string by the guard
+  }
+}
+```
+
+The predicate is a promise to the compiler: "if this returns true, treat the argument as `T`." It's how you narrow `unknown` from external data, and how libraries expose validation that the type system trusts.
+
+## Assertion functions: `asserts x is T`
+
+A cousin of the type guard is the **assertion function**, which throws instead of returning a boolean and narrows for the rest of the scope:
+
+```ts
+function assert(cond: unknown, msg: string): asserts cond {
+  if (!cond) throw new Error(msg);
+}
+
+function use(v: string | null) {
+  assert(v !== null, "v must be set");
+  v.toUpperCase(); // ✅ v is string from here on — the assert removed null
+}
+```
+
+After the call, the compiler knows the asserted condition held (or execution would have thrown), so it narrows accordingly. This is how `assert`-style helpers and Node's `assert` give you type narrowing for free.
+
+<Callout title="The one-line takeaway">
+Narrowing is how a wide union becomes a usable specific type: the compiler reads control flow (`typeof`, `instanceof`, `in`, truthiness, equality) and shrinks the type per branch. Model variants as **discriminated unions** with a shared literal tag, `switch` on it, and add a `never` default for **compile-time exhaustiveness**. For custom logic, write type guards (`x is T`) or assertion functions (`asserts x is T`) that the compiler trusts.
+</Callout>
+
+export const quizNarrow = [
+  {
+    q: 'What is control-flow narrowing?',
+    options: [
+      'A runtime performance optimization',
+      'The compiler shrinking a union type within each branch based on checks like typeof and in',
+      'A way to cast any to a specific type',
+      'Deleting unused branches',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What defines a discriminated union?',
+    options: [
+      'All members share a common literal tag field you can switch on',
+      'All members are classes',
+      'The members have no shared properties',
+      'It uses intersection instead of union',
+    ],
+    answer: 0,
+  },
+  {
+    q: 'How does assigning to `never` in a default branch help?',
+    options: [
+      'It speeds up the switch',
+      'It forces a compile error if a new union member is added but not handled — exhaustiveness',
+      'It logs an error at runtime',
+      'It has no effect',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does a function returning `x is string` (a type predicate) do?',
+    options: [
+      'Returns the string value of x',
+      'Tells the compiler that when it returns true, the argument can be treated as string',
+      'Throws if x is not a string',
+      'Converts x to a string',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does an assertion function `asserts cond` do after it is called?',
+    options: [
+      'Returns a boolean the caller checks',
+      'Narrows the type for the rest of the scope, since execution would have thrown otherwise',
+      'Nothing at compile time',
+      'Runs only in tests',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/narrowing" questions={quizNarrow} />
+
+<ProgressTracker client:visible id="everyday-types/narrowing" />

@@ -1,0 +1,81 @@
+---
+title: 'Foundations & Mental Model'
+description: 'ทำไมต้องมี TypeScript, mental model ที่มอง type เป็นเซตของ value, structural typing และ inference ทำงานอย่างไร — เลนส์สำหรับทุกอย่างที่ตามมา'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## ไอเดียในหนึ่งประโยค
+
+**TypeScript คือ JavaScript บวกกับ static type system ที่ทำงานตอน compile time และหายไปตอน runtime** มันไม่เปลี่ยนสิ่งที่ code ของคุณ *ทำ* — มันเปลี่ยนสิ่งที่ compiler *ยอมให้คุณเขียน* จับ bug ทั้งกลุ่มได้ก่อนที่ code จะรันเสียอีก
+
+ทุกอย่างขั้นสูงในคอร์สนี้ — generics, conditional types, mapped types — คือ system เดียวกันนี้ที่ถูกต่อยอดไปจนสุดทาง เข้าใจ mental model ให้ถูก แล้วที่เหลือจะตามมาเอง
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียน |
+|--------|-------------------|
+| Why TypeScript | type ให้อะไรกับเรา และเส้นแบ่ง compile-time / runtime |
+| The type-system mindset | type คือ **เซตของ value** — mental model ที่มีประโยชน์ที่สุด |
+| Structural typing | ทำไม TypeScript สนใจ *shape* ไม่ใช่ชื่อ |
+| Type inference | compiler เดา type ที่คุณไม่ได้เขียนออกมาได้อย่างไร |
+
+## เลนส์สำหรับทั้งคอร์ส
+
+สองไอเดียนี้ พอเอามารวมกัน อธิบายพฤติกรรมของ TypeScript ได้แทบทุกอย่างที่คุณจะเจอ:
+
+<Mermaid title="สองไอเดียที่ทุกอย่างสร้างต่อยอดขึ้นมา" code={lensDiagram} />
+
+export const lensDiagram = `flowchart TB
+  sets["Type คือ เซต ของ value\n(number = ทุกจำนวน)"] --> assign["Assignability =\nความสัมพันธ์แบบ subset"]
+  struct["Typing เป็นแบบ STRUCTURAL\n(ดูที่ shape ไม่ใช่ชื่อ)"] --> compat["Compatibility =\nshape เข้ากันได้ไหม"]
+  assign --> ts["ทุกพฤติกรรมของ TS"]
+  compat --> ts`;
+
+เวลาที่การ assign ผ่านได้ เป็นเพราะเซตของ value ของ type หนึ่งพอดีอยู่ในอีก type หนึ่ง เวลาที่ object สองตัวใช้แทนกันได้ เป็นเพราะ shape ของมันตรงกัน จำสองไอเดียนี้ไว้ แล้ว TypeScript จะเลิกทำให้คุณประหลาดใจ
+
+<Callout title="การปรับมุมมอง">
+ถ้ามาจากภาษาอื่น คุณอาจคิดว่า type คือ **ป้ายชื่อ** ที่แปะไว้กับตัวแปร แต่ใน TypeScript จะมีประโยชน์กว่าถ้ามอง type เป็น **เซต** — คือกลุ่มของ value ทั้งหมดที่ถูกต้องสำหรับช่องนั้น `boolean` คือเซต `{true, false}` ส่วน `string` คือเซตของ string ทั้งหมด การปรับมุมมองครั้งเดียวนี้ทำให้ union, narrowing และ `never` กลายเป็นเรื่องชัดเจนแทนที่จะลึกลับ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'type system ของ TypeScript ทำงานตอนไหน?',
+    options: [
+      'ตอน runtime โดยเช็ค value ขณะที่โปรแกรมรัน',
+      'ตอน compile time — เช็ค type แล้วลบมันออกจาก output',
+      'เฉพาะใน editor เท่านั้น ไม่เกิดขึ้นตอน build',
+      'ข้างใน JavaScript engine',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'mental model ที่มีประโยชน์ที่สุดสำหรับ type ของ TypeScript คืออะไร?',
+    options: [
+      'ป้ายชื่อที่แปะกับตัวแปรตัวเดียว',
+      'เซตของ value ทั้งหมดที่ถูกต้องสำหรับช่องนั้น',
+      'class ตอน runtime',
+      'memory layout',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'สองไอเดียใดที่อธิบายพฤติกรรมของ TypeScript ได้เกือบทั้งหมด?',
+    options: [
+      'inheritance กับ interface',
+      'type คือเซตของ value และ structural typing (ดูที่ shape)',
+      'garbage collection กับ closure',
+      'async กับ promise',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="foundations/index" />

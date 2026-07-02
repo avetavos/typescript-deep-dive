@@ -1,0 +1,137 @@
+---
+title: 'Recursive Types'
+description: 'type ที่อ้างถึงตัวเอง — recursive alias, recursion บน tuple ด้วย infer, instantiation-depth limit และรู้ว่าเมื่อไรควรหยุด'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## type ที่อ้างถึงตัวเอง
+
+recursion ที่ระดับ type หน้าตาเหมือน recursion ใน code เป๊ะ: type alias ที่พูดถึงตัวเอง ตัวอย่างคลาสสิกคือ JSON value — ข้อมูลที่ซ้อนลึกได้ทุกระดับ
+
+```ts
+type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | Json[]
+  | { [key: string]: Json };
+
+const ok: Json = { name: "Ada", tags: ["x", "y"], meta: { n: 1 } }; // ✅
+const bad: Json = { fn: () => 1 }; // ❌ function ไม่ใช่ Json
+```
+
+`Json` ปรากฏในนิยามของตัวเองสองที่ — ข้างใน array และข้างใน object — ซึ่งเป็นสิ่งที่ทำให้มันอธิบายข้อมูลที่ลึกได้ไม่จำกัด recursive alias แบบนี้เจอบ่อยและ idiomatic เต็มที่
+
+## recursion บน tuple ด้วย `infer`
+
+รูปแบบที่ทรงพลังกว่าคือการ recurse บน **tuple type** ลอกทีละ element ด้วย `infer` — เทียบเท่าการประมวลผล list แบบ head/tail ที่ระดับ type
+
+```ts
+// reverse tuple type
+type Reverse<T extends unknown[]> =
+  T extends [infer Head, ...infer Rest]
+    ? [...Reverse<Rest>, Head]
+    : [];
+
+type R = Reverse<[1, 2, 3]>;
+//   ^? [3, 2, 1]
+
+// ความยาวของ tuple
+type Length<T extends unknown[]> = T["length"];
+type L = Length<[1, 2, 3]>; // 3
+```
+
+`[infer Head, ...infer Rest]` แยก tuple เป็น element แรกกับที่เหลือ; type เรียกตัวเองบน `Rest` จนเจอ base case คือ tuple ว่าง นี่คือวิธีเขียน typed path builder, deep `Get<Obj, "a.b.c">` lookup และ tuple math
+
+<Mermaid title="recursion ลอกทีละ element จนถึง base case" code={recDiagram} />
+
+export const recDiagram = `flowchart LR
+  a["[1, 2, 3]"] --> b["head 1, rest [2, 3]"]
+  b --> c["head 2, rest [3]"]
+  c --> d["head 3, rest []"]
+  d --> e["base case: stop"]`;
+
+## instantiation-depth limit
+
+type-level recursion ไม่ได้ไม่จำกัด compiler จำกัด recursive instantiation เพื่อป้องกันตัวเองจาก loop ไม่รู้จบ และคุณจะชนเพดานเมื่อ input ใหญ่:
+
+```ts
+// error เมื่อ recursion ลึกเกิน:
+// "Type instantiation is excessively deep and possibly infinite."
+```
+
+limit เดิมอยู่ราว **50** ระดับสำหรับ recursion แบบตรงไปตรงมา ต่อมาผ่อนให้ **tail-recursive** conditional type (ที่ recursive call เป็นผลลัพธ์ทั้งหมด) ไปได้ลึกกว่ามาก — ราวหลักพัน การเขียน recursion แบบ tail-recursive (สะสมเข้า type parameter เพิ่มอีกตัว คืนมันที่ base case) คือทริกมาตรฐานในการดันเพดาน:
+
+```ts
+// tail-recursive: สะสมผลลัพธ์ เพื่อให้ compiler optimize ได้
+type BuildTuple<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
+```
+
+## รู้ว่าเมื่อไรควรหยุด
+
+recursive type คือเครื่องมือที่คมที่สุดในกล่อง type-level และใช้ผิดง่ายที่สุด ก่อนเขียนถามตัวเองว่า:
+
+- **เพื่อนร่วมทีมจะอ่านออกไหม?** type เจ๋ง ๆ ที่ไม่มีใครกล้าแตะคือภาระ ไม่ใช่ทรัพย์สิน
+- **error message รับได้ไหม?** recursive type ที่ลึกให้ error แย่มากเวลาพัง — บางทีแย่กว่า bug ที่มันกันเสียอีก
+- **type ที่ง่ายกว่าหรือ runtime check ใช้แทนได้ไหม?** บ่อยครั้งคำตอบที่ซื่อสัตย์คือ type ธรรมดาบวก validation ที่ boundary (โมดูล Practical Mastery)
+
+engineer ระดับ type-level ที่เก่งที่สุดเขียนมัน *น้อยกว่า* ที่ทำได้ เก็บ recursion ไว้ใช้กับไม่กี่กรณี — deep key path, builder API ที่แม่นยำ — ที่มันคุ้มค่าจริง
+
+<Callout title="สรุปบรรทัดเดียว">
+type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`) และ recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element compiler จำกัดความลึกของ recursion (ราว 50 แบบตรง ๆ, ลึกกว่ามากสำหรับ **tail-recursive** conditional ที่สะสมเข้า parameter) recursion ทรงพลังและอ่านยาก — หยิบมันมาใช้เฉพาะเมื่อ type ที่ง่ายกว่าหรือ runtime check ใช้แทนไม่ได้จริง ๆ
+</Callout>
+
+export const quizRecursive = [
+  {
+    q: 'อะไรทำให้ type `Json` อธิบายข้อมูลที่ลึกได้ไม่จำกัด?',
+    options: [
+      'มันใช้ runtime parser',
+      'มันอ้างถึงตัวเองในนิยามของตัวเอง (ข้างใน array และ object)',
+      'มันถูก mark ว่า recursive ด้วย keyword',
+      'มันไม่มี limit flag',
+    ],
+    answer: 1,
+  },
+  {
+    q: '`[infer Head, ...infer Rest]` ทำอะไรใน recursive tuple type?',
+    options: [
+      'reverse tuple ทั้งหมดในทีเดียว',
+      'แยก tuple เป็น element แรก (Head) กับ element ที่เหลือ (Rest)',
+      'นับ element',
+      'แปลง tuple เป็น array',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม compiler ถึงจำกัด instantiation depth ของ type?',
+    options: [
+      'เพื่อประหยัดพื้นที่ disk',
+      'เพื่อป้องกันตัวเองจาก recursion ที่ไม่รู้จบหรือลึกเกินไป',
+      'เพราะ recursion ใช้ไม่ได้เลย',
+      'เพื่อทำให้ build ช้าลงโดยตั้งใจ',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทริกมาตรฐานในการดัน recursion ให้ลึกขึ้นคืออะไร?',
+    options: [
+      'เพิ่ม member ของ union',
+      'เขียนแบบ tail-recursive — สะสมเข้า type parameter เพิ่มอีกตัว แล้วคืนมันที่ base case',
+      'ปิด strict mode',
+      'ใช้ class แทน',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="type-level-programming/recursive-types" questions={quizRecursive} />
+
+<ProgressTracker client:visible id="type-level-programming/recursive-types" />

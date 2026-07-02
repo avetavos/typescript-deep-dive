@@ -1,0 +1,141 @@
+---
+title: 'Literals & Widening'
+description: 'Literal types, when TypeScript widens them, and how as const locks in the narrow type you actually want.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## A literal is a one-member set
+
+A **literal type** is a type whose only value is a single specific literal. `"GET"` is a type; the only value assignable to it is the string `"GET"`. Same for `42`, `true`, and so on.
+
+```ts
+let method: "GET" = "GET";
+method = "POST"; // ❌ Type '"POST"' is not assignable to type '"GET"'.
+```
+
+On their own, literal types are rarely useful. Their power comes from **unions of literals**, which model "one of these exact values":
+
+```ts
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+type Dice = 1 | 2 | 3 | 4 | 5 | 6;
+```
+
+This is how you replace loose `string` parameters with precise, self-documenting, autocompleting ones.
+
+## Widening: why literals keep disappearing
+
+TypeScript **widens** a literal to its general type in places where the value could change. The rule you met in Foundations: `const` keeps the literal, `let` widens.
+
+```ts
+const a = "GET"; // type: "GET"
+let   b = "GET"; // type: string   (widened — b is reassignable)
+```
+
+The same widening happens to **object properties**, because object properties are mutable by default:
+
+```ts
+const config = { method: "GET" };
+// type: { method: string }  — NOT { method: "GET" }
+
+function send(m: "GET" | "POST") {}
+send(config.method); // ❌ string is not assignable to "GET" | "POST"
+```
+
+Even though `config` is a `const`, its `method` property can be reassigned (`config.method = "POST"` is legal), so the compiler widens it to `string`. This surprises everyone once.
+
+## `as const`: freeze the narrow type
+
+A **const assertion** (`as const`) tells the compiler "treat this value as deeply immutable, and keep every literal narrow."
+
+```ts
+const config = { method: "GET" } as const;
+// type: { readonly method: "GET" }
+
+send(config.method); // ✅ now "GET" survives
+```
+
+`as const` does three things at once:
+
+1. **Literals stay literal** — `"GET"` instead of `string`.
+2. **Properties become `readonly`** — reflecting the immutability you promised.
+3. **Arrays become `readonly` tuples** — `[1, 2]` becomes `readonly [1, 2]`, not `number[]`.
+
+<Mermaid title="Widening vs as const" code={widenDiagram} />
+
+export const widenDiagram = `flowchart TB
+  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }\n(widened, mutable)"]
+  val -->|as const| narrow["type: { readonly method: 'GET' }\n(literal, readonly)"]`;
+
+## A very common use: literal config objects
+
+`as const` shines for lookup tables and configuration where you want the exact keys and values in the type:
+
+```ts
+const ROUTES = {
+  home: "/",
+  profile: "/profile",
+  settings: "/settings",
+} as const;
+
+type Route = typeof ROUTES[keyof typeof ROUTES];
+// type: "/" | "/profile" | "/settings"
+```
+
+Without `as const`, `ROUTES` would be `{ home: string; profile: string; settings: string }` and you'd lose every specific path. With it, you can derive precise union types straight from the data — a pattern you'll see constantly in the type-level module.
+
+<Callout title="The one-line takeaway">
+A literal type is a one-value set, and unions of literals model "one of these exact values." TypeScript **widens** literals wherever a value could change — including mutable object properties, which is why `const config = { method: "GET" }` gives `method: string`. Reach for `as const` to keep literals narrow, make properties `readonly`, and turn arrays into tuples — the key to deriving precise types from data.
+</Callout>
+
+export const quizLit = [
+  {
+    q: 'What is the type of `const x = "GET"` versus `let y = "GET"`?',
+    options: [
+      'Both are string',
+      'x is "GET" (literal), y is string (widened)',
+      'Both are "GET"',
+      'x is string, y is "GET"',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is `method` typed as string in `const config = { method: "GET" }`?',
+    options: [
+      'A bug in the compiler',
+      'Object properties are mutable by default, so the literal widens to string',
+      'const always produces string',
+      'Because method is a reserved word',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What does `as const` do?',
+    options: [
+      'Makes the value run faster',
+      'Keeps literals narrow, makes properties readonly, and turns arrays into readonly tuples',
+      'Converts the value to any',
+      'Only works on numbers',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why is a union of literals like "GET" | "POST" better than string for a parameter?',
+    options: [
+      'It is smaller at runtime',
+      'It restricts inputs to exact allowed values, giving autocomplete and catching typos',
+      'It runs the function twice',
+      'There is no difference',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="everyday-types/literals-and-widening" questions={quizLit} />
+
+<ProgressTracker client:visible id="everyday-types/literals-and-widening" />

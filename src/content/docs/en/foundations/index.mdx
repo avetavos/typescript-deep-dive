@@ -1,0 +1,81 @@
+---
+title: 'Foundations & Mental Model'
+description: 'Why TypeScript exists, the mental model of types as sets of values, structural typing, and how inference works — the lens for everything that follows.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## The idea in one sentence
+
+**TypeScript is JavaScript plus a static type system that runs at compile time and disappears at runtime.** It doesn't change what your code *does* — it changes what the compiler will *let you write*, catching whole classes of bugs before the code ever runs.
+
+Everything advanced in this course — generics, conditional types, mapped types — is just this one system taken to its logical conclusion. Get the mental model right and the rest follows.
+
+## What this module covers
+
+| Lesson | What you'll learn |
+|--------|-------------------|
+| Why TypeScript | What types buy you, and the compile-time / runtime split |
+| The type-system mindset | Types as **sets of values** — the single most useful mental model |
+| Structural typing | Why TypeScript cares about *shape*, not names |
+| Type inference | How the compiler figures out types you didn't write |
+
+## The lens for the whole course
+
+Two ideas, held together, explain almost every TypeScript behavior you'll ever hit:
+
+<Mermaid title="The two ideas everything builds on" code={lensDiagram} />
+
+export const lensDiagram = `flowchart TB
+  sets["Types are SETS of values\n(number = all numbers)"] --> assign["Assignability =\nsubset relationship"]
+  struct["Typing is STRUCTURAL\n(shape, not name)"] --> compat["Compatibility =\ndoes the shape fit?"]
+  assign --> ts["Every TS behavior"]
+  compat --> ts`;
+
+When an assignment is allowed, it's because one type's set of values fits inside another's. When two objects are interchangeable, it's because their shapes match. Hold those two ideas and TypeScript stops surprising you.
+
+<Callout title="The mental shift">
+Coming from other languages, you might think of a type as a **label** attached to a variable. In TypeScript it's more useful to think of a type as a **set** — the collection of all values that are legal for that slot. `boolean` is the set `{true, false}`. `string` is the set of all strings. This one reframe makes unions, narrowing, and `never` obvious instead of mysterious.
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'When does TypeScript\'s type system do its work?',
+    options: [
+      'At runtime, checking values as the program runs',
+      'At compile time — it checks types, then erases them from the output',
+      'Only in the editor, never during a build',
+      'Inside the JavaScript engine',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What is the most useful mental model for a TypeScript type?',
+    options: [
+      'A label attached to one variable',
+      'A set of all the values that are legal for that slot',
+      'A runtime class',
+      'A memory layout',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Which two ideas explain most TypeScript behavior?',
+    options: [
+      'Inheritance and interfaces',
+      'Types as sets of values, and structural (shape-based) typing',
+      'Garbage collection and closures',
+      'Async and promises',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="foundations/index" />

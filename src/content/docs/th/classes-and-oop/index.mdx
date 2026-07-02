@@ -1,0 +1,85 @@
+---
+title: 'Classes & Advanced OOP'
+description: 'class ของ TypeScript เชื่อมโลกของ type กับโลกของ value อย่างไร และ feature ขั้นสูงที่ทำให้ class expressive โดยไม่ต้องพึ่ง inheritance ลึก ๆ'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## class อยู่ทั้งสองโลก
+
+เกือบทุกอย่างในคอร์สนี้เป็น *type* — construct ที่อยู่ตอน compile time แล้วถูก erase ทิ้ง แต่ **class** ต่างออกไป มันเป็นหนึ่งในไม่กี่ declaration ที่สร้าง**ทั้ง** type *และ* value ชื่อ class เป็น type ที่คุณเอาไป annotate ได้ และในเวลาเดียวกันก็เป็น runtime constructor ที่เรียกด้วย `new` ได้
+
+```ts
+class User {
+  constructor(public name: string) {}
+}
+
+const u: User = new User("Ada"); // `User` เป็น TYPE (annotation) และ VALUE (constructor)
+```
+
+ธรรมชาติสองด้านนี้คือเหตุผลที่ class รู้สึกพิเศษ และเป็นเหตุผลที่ feature ของมันแบ่งเป็นสองกลุ่ม: กลุ่มที่ compiler เช็คแล้ว erase (เช่น `private`) กับกลุ่มที่รอดไปถึง JavaScript ที่ emit ออกมา (เช่น `#private` field)
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียนรู้ |
+|--------|-------------------|
+| Classes, deep | access modifier, `readonly`, parameter property, `static`, `abstract`, `implements` |
+| `this` types & polymorphism | polymorphic `this`, `this` parameter และ pitfall เรื่อง binding ใน type system |
+| Decorators | decorator แบบ stage-3 สมัยใหม่ — class, method, field และ factory |
+| Mixins & composition | สร้าง behavior จาก class factory ที่ compose ได้ แทน hierarchy ลึก ๆ |
+
+## พูดถึง inheritance สักหน่อย
+
+TypeScript รองรับ `extends` inheritance แบบคลาสสิก แต่โมดูลนี้เน้นไปที่ feature ที่ community ใช้จริงใน code สมัยใหม่: **composition over inheritance** class hierarchy ที่ลึกมัก brittle ส่วน `this` type, decorator และ mixin ช่วยให้สร้าง behavior ที่ยืดหยุ่นและ reuse ได้โดยไม่ต้องพึ่งมัน
+
+<Mermaid title="feature ของ class มีสองแบบ" code={worldsDiagram} />
+
+export const worldsDiagram = `flowchart TB
+  cls["class declaration"] --> typeworld["TYPE world\n(erased): private, protected,\nimplements, abstract"]
+  cls --> valueworld["VALUE world\n(runtime): #private, static,\nthe constructor, methods"]`;
+
+<Callout title="การปรับมุมมอง">
+เวลาเขียน `class` ให้นึกภาพสองอย่างพร้อมกัน: **type** ที่มันนิยาม (shape ของ instance ใช้ annotate และเช็คตอน compile) กับ **value** ที่มันสร้าง (constructor function ที่มีอยู่จริงตอน runtime) feature ของ class หลายตัวเป็นแค่อย่างแรกและหายไปตอน compile ส่วนไม่กี่ตัว — โดยเฉพาะ `#private` field และ `static` member — เป็นอย่างหลังจริง ๆ และ ship ไปกับ JavaScript ของคุณ
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'อะไรทำให้ class พิเศษกว่า type alias หรือ interface?',
+    options: [
+      'มันรันเร็วกว่า',
+      'มันสร้างทั้ง type และ runtime value (constructor)',
+      'มัน erase ไม่ได้',
+      'มันปิด structural typing',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'feature ของ class อันไหนที่รอดไปถึง JavaScript ที่ emit ออกมา?',
+    options: [
+      'keyword `private`',
+      'clause `implements`',
+      'field `#private`',
+      'signature ของ `abstract` method',
+    ],
+    answer: 2,
+  },
+  {
+    q: 'TypeScript OOP สมัยใหม่มักเลือกแนวทางออกแบบแบบไหน?',
+    options: [
+      'inheritance hierarchy ที่ลึก',
+      'composition over inheritance',
+      'เลี่ยง class ทั้งหมด',
+      'global mutable state',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="classes-and-oop/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="classes-and-oop/index" />

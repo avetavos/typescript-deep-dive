@@ -1,0 +1,142 @@
+---
+title: 'Why TypeScript?'
+description: 'static type system ให้อะไรกับเราจริง ๆ, เส้นแบ่ง compile-time กับ runtime, type erasure และต้นทุนที่ต้องยอมรับ'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## bug ที่ TypeScript ถูกออกแบบมาเพื่อจับ
+
+นี่คือ JavaScript ธรรมดาที่ดูโอเคแต่พังตอน runtime:
+
+```js
+function greet(user) {
+  return "Hello, " + user.name.toUpperCase();
+}
+
+greet({ nam: "Ada" }); // typo: `nam` not `name`
+// 💥 TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+typo นี้จะไม่ถูกเจอจนกว่าบรรทัดนั้นจะรัน — อาจจะบน production, อาจจะเจอกับ user โชคร้ายคนหนึ่ง TypeScript ย้ายการค้นพบนั้นมาที่ **compile time**:
+
+```ts
+function greet(user: { name: string }) {
+  return "Hello, " + user.name.toUpperCase();
+}
+
+greet({ nam: "Ada" });
+// ❌ Error: Object literal may only specify known properties,
+//    and 'nam' does not exist in type '{ name: string }'.
+```
+
+คุณรู้ทันทีที่เขียน ใน editor ก่อนที่อะไรจะรัน การเปลี่ยนแปลงนั้น — จาก "พังทีหลัง ที่ไหนสักแห่ง" ไปเป็น "พังตอนนี้ ตรงนี้" — คือคุณค่าทั้งหมดของมัน
+
+## compile time กับ runtime: เส้นแบ่งที่สำคัญ
+
+TypeScript มีสอง phase ที่แยกกันสิ้นเชิง และการสับสนระหว่างสอง phase นี้คือต้นตอของความผิดพลาดของมือใหม่ส่วนใหญ่
+
+<Mermaid title="type ถูกเช็ค แล้วถูกลบทิ้ง" code={phaseDiagram} />
+
+export const phaseDiagram = `flowchart LR
+  ts[".ts source\n(type + logic)"] -->|tsc: type-check| check["Type checking\n(error รายงานตรงนี้)"]
+  ts -->|tsc: emit| js[".js output\n(type ถูกลบ)"]
+  js --> run["Runtime\n(ไม่มี type อยู่แล้ว)"]`;
+
+- **Compile time** — type checker อ่าน annotation และ type ที่ infer ได้ของคุณ แล้วรายงาน error ความปลอดภัยทั้งหมดเกิดขึ้นตรงนี้
+- **Runtime** — JavaScript ที่ emit ออกมารัน **type หายไปหมดแล้ว** มันถูกลบทิ้งตอน compile
+
+นี่คือเหตุผลที่คุณทำแบบนี้ไม่ได้:
+
+```ts
+function isString(x: unknown) {
+  return x is string; // ❌ not a thing — types don't exist at runtime
+}
+```
+
+ตอน runtime ไม่มี type `string` ให้เช็ค — มีแต่ value ของ JavaScript การจะ narrow type ตอน runtime คุณต้องใช้ operation จริงของ JavaScript (`typeof x === "string"`) ที่ compiler *เข้าใจ* เดี๋ยวเจาะลึกในบท narrowing
+
+## type erasure แบบเป็นรูปธรรม
+
+compile อันนี้:
+
+```ts
+interface User { name: string; age: number; }
+const u: User = { name: "Ada", age: 36 };
+function older(u: User): number { return u.age + 1; }
+```
+
+JavaScript ที่ emit ออกมาคือ:
+
+```js
+const u = { name: "Ada", age: 36 };
+function older(u) { return u.age + 1; }
+```
+
+`interface` หายไปทั้งอัน annotation ถูกถอดออก type เพิ่ม runtime cost เท่ากับ **ศูนย์** และไม่มีพฤติกรรมตอน runtime เลย — มันคือบทสนทนาระหว่างคุณกับ compiler ที่จบก่อนโปรแกรมจะรัน
+
+## ต้นทุนที่ต้องยอมรับตามจริง
+
+TypeScript ไม่ได้ฟรี และการแกล้งทำเป็นว่าฟรีก็ไม่ยุติธรรมกับคุณ:
+
+- **build step** คุณต้องมี `tsc` หรือ bundler ที่ strip type ออก `.ts` ธรรมดารันตรง ๆ ใน Node หรือ browser ไม่ได้ (แม้ว่า runtime หลายตัวจะเริ่มเพิ่มการ strip type เข้ามา)
+- **learning curve** type system เป็นภาษาในตัวมันเอง — คอร์สนี้ทั้งคอร์สมีอยู่ก็เพราะเหตุนี้
+- **ช่องว่างระหว่าง type กับ runtime** compiler อาจ *ผิด* เรื่องความจริงตอน runtime ได้ — `any`, cast ที่ผิด หรือ external data ที่ไม่ผ่านการ validate โกหก compiler ได้ type คือ model ไม่ใช่การการันตีเรื่องโลกภายนอก (โมดูล Practical Mastery พูดเรื่องนี้เป็นหลัก)
+
+การแลกเปลี่ยนนี้เกือบจะคุ้มเสมอสำหรับอะไรก็ตามที่มากกว่า script ใช้แล้วทิ้ง: คุณจ่ายภาษีก้อนคงที่ แล้วได้ผลตอบแทนที่ทบต้นก้อนใหญ่กลับมาในรูปของ bug ที่ถูกจับ, การ refactor ที่ปลอดภัย และความฉลาดของ editor
+
+<Callout title="สรุปบรรทัดเดียว">
+TypeScript เช็ค type ตอน **compile time** แล้ว **ลบ** มันทิ้ง — JavaScript ที่ emit ออกมาไม่มี type และไม่มี runtime cost ที่เกี่ยวกับ type เลย หน้าที่ของมันคือย้าย bug จาก "เจอทีหลังบน production" ไปเป็น "เจอตอนนี้ใน editor" ราคาที่จ่ายคือ build step และ learning curve ที่มีจริง ส่วนผลตอบแทนคือการ refactor ที่ปลอดภัยและ bug ทั้งกลุ่มที่ compile ไม่ผ่านตั้งแต่แรก
+</Callout>
+
+export const quizWhy = [
+  {
+    q: 'เกิดอะไรขึ้นกับ type ของ TypeScript เมื่อ code ถูก compile เป็น JavaScript?',
+    options: [
+      'มันกลายเป็น class ตอน runtime',
+      'มันถูกลบทิ้ง — JavaScript ที่ออกมาไม่มี type',
+      'มันถูกเก็บใน metadata file แยกที่ใช้ตอน runtime',
+      'มันถูกแปลงเป็น runtime assertion',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณค่าหลักของ TypeScript คืออะไร?',
+    options: [
+      'ทำให้ JavaScript รันเร็วขึ้น',
+      'ย้ายการค้นพบ bug จาก runtime มาที่ compile time',
+      'แทนที่ความจำเป็นในการเขียน test',
+      'ลดขนาด bundle',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไมคุณถึงเช็ค type ของ TypeScript ตรง ๆ ตอน runtime ไม่ได้?',
+    options: [
+      'การเช็คตอน runtime ช้าเกินไป',
+      'type ถูกลบไปแล้ว — ตอน runtime มีแต่ value ของ JavaScript',
+      'มันต้องใช้ flag พิเศษ',
+      'จริง ๆ คุณทำได้ ด้วย operator `is`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ข้อใดเป็นต้นทุนจริงของการใช้ TypeScript?',
+    options: [
+      'มันเพิ่ม runtime overhead ให้ทุก function',
+      'มันต้องมี build/compile step และมี learning curve ที่มีจริง',
+      'มันห้ามใช้ JavaScript library ใด ๆ',
+      'มันทำให้ code ใหญ่ขึ้นตอน runtime',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="foundations/why-typescript" questions={quizWhy} />
+
+<ProgressTracker client:visible id="foundations/why-typescript" />

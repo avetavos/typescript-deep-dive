@@ -1,0 +1,80 @@
+---
+title: 'The Compiler & Tooling'
+description: 'tsc ทำงานจริงอย่างไร, tsconfig option ที่สำคัญ, module resolution, declaration file และการแยก type-checking ออกจากการ emit code'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+## compiler คือตัวภาษาเอง
+
+ทุกอย่างเรื่อง type ที่คุณเรียนมาถูกบังคับใช้โดยโปรแกรมเดียวคือ TypeScript compiler หรือ `tsc` แต่ `tsc` ทำงานสองอย่างที่ควรแยกออกจากกันในหัว — มัน **check** type ของคุณ และมัน **emit** JavaScript ออกมา setup สมัยใหม่มักแยกสองงานนี้ออกจากกัน: ให้ bundler emit JavaScript อย่างรวดเร็ว แล้วให้ `tsc` check type แยกต่างหาก
+
+`tsconfig.json` คือที่ที่คุณตัดสินใจว่า checker จะเข้มแค่ไหน, จะ target JavaScript feature รุ่นไหน, module ถูก resolve อย่างไร และจะ emit อะไรออกมา (ถ้ามี) การตั้งไฟล์นี้ให้ถูกคือความต่างระหว่าง TypeScript ที่จับ bug ได้จริง กับ TypeScript ที่ปล่อย bug ผ่านไปเงียบ ๆ
+
+## โมดูลนี้ครอบคลุมอะไรบ้าง
+
+| บทเรียน | สิ่งที่คุณจะได้เรียนรู้ |
+|--------|-------|
+| tsconfig, deep | flag ที่คุ้มค่าที่สุด — `strict` และครอบครัวของมัน, `target`, `module` และ option ข้าง ๆ `strict` |
+| Modules & resolution | ESM เทียบ CJS และ `tsc` หาไฟล์ที่คุณ import เจอได้อย่างไร |
+| Declaration files | `.d.ts` คืออะไร, เขียนมันอย่างไร และ `@types` มาจากไหน |
+| Build & emit | `tsc` เทียบ bundler, `isolatedModules`, type-only import และ project references |
+
+## สองงานของ tsc
+
+<Mermaid title="tsc ทำสองงานที่เป็นอิสระต่อกัน" code={jobsDiagram} />
+
+export const jobsDiagram = `flowchart LR
+  src["source .ts / .tsx"] --> tsc["tsc"]
+  tsc -->|job 1| check["type-check\nreport errors"]
+  tsc -->|job 2| emit["emit .js and .d.ts\n(types erased)"]
+  check --> ci["run in CI to catch bugs"]
+  emit --> ship["run or bundle the JS"]`;
+
+แยกสองงานนี้ให้ชัดแล้วทั้ง toolchain จะเข้าใจง่ายขึ้น bundler อย่าง esbuild ทำงานที่ 2 ได้ในเสี้ยววินาที เพราะมันแค่ strip type ออกโดยไม่เข้าใจมัน — ซึ่งแปลว่ามันจะ emit code ที่ type-check ไม่ผ่านออกมาได้อย่างสบายใจ นั่นคือเหตุผลที่คำแนะนำมาตรฐานคือ: **ให้ bundler emit แล้วรัน `tsc --noEmit` ใน CI เพื่อ check จริง ๆ** ที่เหลือของโมดูลนี้จะแกะ config ที่ควบคุมทั้งสองงานนี้
+
+<Callout title="The one-line takeaway">
+`tsc` ทำสองงานที่แยกกันได้: **type-checking** และ **emit JavaScript** `tsconfig.json` ของคุณควบคุมทั้งสองอย่าง รวมถึงวิธี resolve module และความเข้มของการ check bundler emit ได้เร็วกว่ามากเพราะข้ามการ check ไปเลย — pattern ที่ยั่งยืนจึงเป็นการ bundle ด้วยเครื่องมือหนึ่ง แล้ว type-check ด้วย `tsc` แยกต่างหาก
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'TypeScript compiler ทำงานสองอย่างอะไร?',
+    options: [
+      'minify กับ bundle',
+      'type-check กับ emit JavaScript',
+      'lint กับ format',
+      'test กับ deploy',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม bundler อย่าง esbuild ถึง emit JavaScript ที่ type-check ไม่ผ่านออกมาได้?',
+    options: [
+      'มันใช้ type system รุ่นใหม่กว่า',
+      'มัน strip type ออกโดยไม่เข้าใจมัน จึงข้ามการ check ไป',
+      'มันทำงานกับไฟล์ JavaScript เท่านั้น',
+      'มัน cache ผล check ล่าสุดไว้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'วิธีที่แนะนำในการจับ type error จริง ๆ เมื่อ bundler เป็นคน emit คืออะไร?',
+    options: [
+      'เชื่อ bundler',
+      'รัน `tsc --noEmit` แยกต่างหาก (เช่น ใน CI)',
+      'ปิด strict mode',
+      'check เฉพาะตอน production',
+    ],
+    answer: 1,
+  },
+];
+
+<Quiz client:visible id="compiler-and-tooling/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="compiler-and-tooling/index" />
