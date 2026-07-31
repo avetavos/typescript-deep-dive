@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## string ที่คุณคำนวณได้
 
-template literal type หน้าตาเหมือน template string ของ JavaScript แต่มันสร้าง **type** คุณ interpolate type อื่นเข้าไปใน type ที่มีรูปเป็น string
+template literal type หน้าตาเหมือน template string ของ JavaScript แต่สร้าง **type** คุณ interpolate type อื่นเข้าไปใน type ที่มีรูปเป็น string
 
 ```ts
 type Greeting = `Hello, ${string}`;
@@ -21,7 +21,7 @@ const a: Greeting = "Hello, Ada"; // ✅
 const b: Greeting = "Hi, Ada";    // ❌ ต้องขึ้นต้นด้วย "Hello, "
 ```
 
-interpolate union ของ literal เข้าไป แล้ว template จะ **distribute** บนมัน — สร้างทุกการผสมออกมาเป็น union ของ literal type:
+interpolate union ของ literal เข้าไป แล้ว template จะ **distribute** บน union นั้น — สร้างทุกการผสมออกมาเป็น union ของ literal type:
 
 ```ts
 type Lang = "en" | "th";
@@ -53,7 +53,7 @@ export const distDiagram = `flowchart LR
 
 ## pattern matching ด้วย `infer`
 
-พลังจริง ๆ มาเมื่อคุณรวม template literal กับ conditional type และ `infer`: คุณ **destructure string type** ได้ โดย capture ส่วนหนึ่งของมันเข้าไปใน type variable ใหม่
+พลังจริง ๆ มาเมื่อคุณรวม template literal กับ conditional type และ `infer`: คุณ **destructure string type** ได้ โดย capture ส่วนหนึ่งของตัวเองเข้าไปใน type variable ใหม่
 
 ```ts
 // capture ชื่อ event หลัง prefix "on"
@@ -68,7 +68,7 @@ type Method<T> = T extends `${infer M} ${string}` ? M : never;
 type M = Method<"GET /users">; // "GET"
 ```
 
-`infer E` บอกว่า "match อะไรก็ได้ตรงนี้แล้วเรียกมันว่า `E`" นี่คือการ parse จริง ๆ ที่ระดับ type — เป็นเทคนิคเบื้องหลัง typed router ที่ดึง `:id` param จาก path string และ library ที่ validate format string
+`infer E` บอกว่า "match อะไรก็ได้ตรงนี้แล้วเรียกว่า `E`" นี่คือการ parse จริง ๆ ที่ระดับ type — เป็นเทคนิคเบื้องหลัง typed router ที่ดึง `:id` param จาก path string และ library ที่ validate format string
 
 ## เจอที่ไหนบ้าง
 
@@ -77,10 +77,10 @@ type M = Method<"GET /users">; // "GET"
 - **route param**: ดึง `id` จาก `"/users/:id"` เป็น `{ id: string }`
 - **ORM/query builder**: parse column string เป็น typed shape
 
-ใช้มันตรงที่ string encode structure จริง ๆ ถ้าใช้กระตือรือร้นเกินไปคุณจะได้ type ที่เพื่อนร่วมทีมอ่านไม่ออก — เป็น trade-off ที่กลับมาเสมอของ type-level programming
+ใช้เทคนิคนี้ตรงที่ string encode structure จริง ๆ ถ้าใช้กระตือรือร้นเกินไปคุณจะได้ type ที่เพื่อนร่วมทีมอ่านไม่ออก — เป็น trade-off ที่กลับมาเสมอของ type-level programming
 
 <Callout title="สรุปบรรทัดเดียว">
-template literal type สร้าง string type ด้วยการ interpolate และมัน **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform มัน และการรวม template กับ conditional type บวก `infer` ให้คุณ **pattern-match และ parse** string type ได้ (capture ชิ้นส่วนเข้า type variable ใหม่) มันคือการ parse string จริง ๆ ที่ compiler ประเมินให้
+template literal type สร้าง string type ด้วยการ interpolate และ **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform string type เหล่านั้น และการรวม template กับ conditional type บวก `infer` ให้คุณ **pattern-match และ parse** string type ได้ (capture ชิ้นส่วนเข้า type variable ใหม่) นี่คือการ parse string จริง ๆ ที่ compiler ประเมินให้
 </Callout>
 
 export const quizTemplate = [

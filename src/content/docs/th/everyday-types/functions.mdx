@@ -69,7 +69,7 @@ function handleClick(this: Button, event: Event): void {
 }
 ```
 
-มันจับบั๊กคลาสสิกที่ method เสีย `this` เมื่อถูกส่งเป็น callback เปล่า ๆ มีประโยชน์สุดกับ API แบบเก่าที่พึ่ง `this`; กับ arrow function และ pattern สมัยใหม่คุณจะใช้มันน้อยลง
+ช่วยจับบั๊กคลาสสิกที่ method เสีย `this` เมื่อถูกส่งเป็น callback เปล่า ๆ มีประโยชน์สุดกับ API แบบเก่าที่พึ่ง `this`; กับ arrow function และ pattern สมัยใหม่คุณจะใช้น้อยลง
 
 ## กฎ `void` return ที่ทำทุกคนงง
 
@@ -87,10 +87,10 @@ export const voidDiagram = `flowchart LR
   fn["() => number\n(returns 42)"] -->|assignable to| target["() => void\n(caller ignores return)"]
   target --> use["callers treat result\nas void — safe"]`;
 
-นี่แหละคือเหตุผลว่าทำไม `array.forEach(x => arr.push(x))` ถึง type-check ผ่านทั้งที่ `push` return number: `forEach` ต้องการ callback แบบ `void` และเมินสิ่งที่ return กลับมา พอรู้กฎแล้วมันเลิกลึกลับ — แต่แทบทุกคนเจอมันแบบงงก่อน
+นี่แหละคือเหตุผลว่าทำไม `array.forEach(x => arr.push(x))` ถึง type-check ผ่านทั้งที่ `push` return number: `forEach` ต้องการ callback แบบ `void` และเมินสิ่งที่ return กลับมา พอรู้กฎแล้วก็เลิกลึกลับ — แต่แทบทุกคนต้องงงกับเรื่องนี้ก่อน
 
 <Callout title="สรุปหนึ่งบรรทัด">
-type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ `this` parameter type `this` และหายไปที่ call site และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้มันได้ — ซึ่งเป็นเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้
+type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ `this` parameter type `this` และหายไปที่ call site และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้ได้ — นั่นคือเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้
 </Callout>
 
 export const quizFn = [
@@ -108,8 +108,8 @@ export const quizFn = [
     q: '`this` parameter (`function f(this: T, ...)`) ทำอะไรที่ call site?',
     options: [
       'ต้องส่งเป็น argument ตัวแรก',
-      'มันหายไป — type แค่ `this` ตอน compile',
-      'มันกลายเป็น undefined',
+      'หายไป — type แค่ `this` ตอน compile',
+      'กลายเป็น undefined',
       'ถูกส่งเป็น null อัตโนมัติ',
     ],
     answer: 1,
@@ -130,7 +130,7 @@ export const quizFn = [
       'forEach เมิน error',
       'forEach ต้องการ callback แบบ void และ function ที่ return ค่า assign ให้ void return type ได้',
       'push จริง ๆ return void',
-      'มันไม่ type-check',
+      'ไม่ type-check',
     ],
     answer: 1,
   },

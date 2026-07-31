@@ -16,7 +16,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 การตัดสินใจแรกคือจะเลือก "ไม่รู้ type นี้" แบบไหน: `any` หรือ `unknown`
 
-## `any` ปิด checker; `unknown` เก็บมันไว้
+## `any` ปิด checker ส่วน `unknown` เก็บ checker ไว้
 
 ```ts
 const a: any = JSON.parse(input);
@@ -26,7 +26,7 @@ const u: unknown = JSON.parse(input);
 u.user.name; // ❌ Error: 'u' is of type 'unknown'.
 ```
 
-`any` opts *out* จากการ type check — เข้าถึงอะไรก็ได้ และการการันตีทั้งหมดถูกปิด `unknown` คือ top type ที่ซื่อสัตย์: มันเก็บ value อะไรก็ได้ แต่ห้ามคุณทำอะไรกับมันจนกว่าจะ **พิสูจน์** ว่ามันเป็นอะไร เลือก `unknown` ที่ทุก boundary และมอง `any` เป็น code smell ที่คุณกำลังกำจัดออกไป
+`any` opts *out* จากการ type check — เข้าถึงอะไรก็ได้ และการการันตีทั้งหมดถูกปิด `unknown` คือ top type ที่ซื่อสัตย์: รับ value อะไรก็ได้ แต่ห้ามคุณทำอะไรกับ value นั้นจนกว่าจะ **พิสูจน์** ว่าเป็นอะไร เลือก `unknown` ที่ทุก boundary และมอง `any` เป็น code smell ที่คุณกำลังกำจัดออกไป
 
 สังเกตว่า `JSON.parse` ถูก type ให้ return `any` — ผลลัพธ์จึงแอบวางยา downstream ทั้งหมด เว้นแต่คุณจะ assign เป็น `unknown` ทันทีแล้ว validate
 
@@ -73,7 +73,7 @@ export const validateDiagram = `flowchart LR
 
 ## Branded type สำหรับ nominal ID
 
-structural typing หมายความว่า `UserId` กับ `OrderId` ที่เป็น `string` ทั้งคู่ใช้แทนกันได้ — คุณจึงส่งตัวหนึ่งไปที่ที่คาดหวังอีกตัวได้ เมื่อเรื่องนี้สำคัญ ให้ **brand** มันด้วย marker แบบ phantom:
+structural typing หมายความว่า `UserId` กับ `OrderId` ที่เป็น `string` ทั้งคู่ใช้แทนกันได้ — คุณจึงส่งตัวหนึ่งไปที่ที่คาดหวังอีกตัวได้ เมื่อเรื่องนี้สำคัญ ให้ **brand** type เหล่านั้นด้วย marker แบบ phantom:
 
 ```ts
 type UserId = string & { readonly __brand: "UserId" };
@@ -85,7 +85,7 @@ getUser(raw); // ❌ string ธรรมดาไม่ใช่ UserId
 getUser(raw as UserId); // ✅ คุณ assert มันอย่างตั้งใจตรง boundary
 ```
 
-brand มีอยู่แค่ตอน compile time (มันถูก erase), ไม่มี cost ตอน runtime และบังคับให้ทุก `UserId` ถูก *สร้างอย่างตั้งใจ* — โดยปกติคือทันทีหลัง validate นี่คือวิธีได้ nominal safety ในระบบที่เป็น structural
+brand มีอยู่แค่ตอน compile time (ถูก erase ทิ้ง), ไม่มี cost ตอน runtime และบังคับให้ทุก `UserId` ถูก *สร้างอย่างตั้งใจ* — โดยปกติคือทันทีหลัง validate นี่คือวิธีได้ nominal safety ในระบบที่เป็น structural
 
 <Callout title="สรุปหนึ่งบรรทัด">
 ทุก bug เข้ามาตรงที่ typed code เจอกับข้อมูลที่ไม่มี type เลือก `unknown` ไม่ใช่ `any` ตรง edge เหล่านั้น แล้วแปลงเป็น type ที่เชื่อถือได้ด้วย type guard หรือ (ดีกว่า) schema library อย่าง zod ที่ declaration เดียวเป็นทั้ง validator และ type สำหรับ ID ที่ห้ามปนกัน ใช้ **branded type** กฎคือเสมอ: validate ที่ edge, เชื่อภายใน
@@ -105,10 +105,10 @@ export const quizBoundaries = [
   {
     q: 'ข้อดีของ schema library อย่าง zod ตรง boundary คืออะไร?',
     options: [
-      'มันทำให้ไม่ต้องใช้ TypeScript',
+      'ทำให้ไม่ต้องใช้ TypeScript',
       'declaration เดียวเป็นทั้ง runtime validator และ static type — source of truth เดียว',
-      'มันทำให้ JSON.parse เร็วขึ้น',
-      'มันปิด strict mode',
+      'ทำให้ JSON.parse เร็วขึ้น',
+      'ปิด strict mode',
     ],
     answer: 1,
   },
@@ -123,7 +123,7 @@ export const quizBoundaries = [
     answer: 1,
   },
   {
-    q: 'type guard function มี return type เป็น `v is User` มันทำอะไร?',
+    q: 'type guard function มี return type เป็น `v is User` ทำอะไร?',
     options: [
       'return object User',
       'บอก compiler ว่าถ้า function return true จะ narrow argument เป็น User ได้',

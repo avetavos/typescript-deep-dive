@@ -55,7 +55,7 @@ type R = ToArray<string | number>;
 //   ^? string[] | number[]
 ```
 
-มัน **ไม่** ได้ให้ `(string | number)[]` แต่ conditional รันแยกกันสำหรับ `string` (ได้ `string[]`) และ `number` (ได้ `number[]`) แล้ว union กัน นี่คือพฤติกรรม *distributive conditional type*
+ผลลัพธ์ **ไม่** ใช่ `(string | number)[]` แต่ conditional รันแยกกันสำหรับ `string` (ได้ `string[]`) และ `number` (ได้ `number[]`) แล้ว union กัน นี่คือพฤติกรรม *distributive conditional type*
 
 <Mermaid title="A conditional distributes over each union member" code={distDiagram} />
 
@@ -93,10 +93,10 @@ type D2 = Bad<"a" | number>; // boolean  (true | false — distributed!)
 type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string)
 ```
 
-ทริก `[T] extends [U]` เป็น idiom มาตรฐาน — หยิบมาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่ามัน distribute แล้ว union `true | false` เข้าด้วยกัน)
+ทริก `[T] extends [U]` เป็น idiom มาตรฐาน — หยิบมาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่า distribute แล้ว union `true | false` เข้าด้วยกัน)
 
 <Callout title="The one-line takeaway">
-conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type ใช้การทดสอบ subset แบบเดียวกับ `extends` ที่อื่น พฤติกรรมเด่นของมันคือ **distribution**: naked type parameter ที่ตรวจกับ union จะรันทีละ member แล้ว union ผลลัพธ์ (ซึ่งเป็นวิธีที่ `Exclude` และ `Extract` ทำงาน) ห่อทั้งสองฝั่งเป็น `[T] extends [U]` เพื่อตรวจ union ทั้งก้อนและปิด distribution
+conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type ใช้การทดสอบ subset แบบเดียวกับ `extends` ที่อื่น พฤติกรรมเด่นของตัวเองคือ **distribution**: naked type parameter ที่ตรวจกับ union จะรันทีละ member แล้ว union ผลลัพธ์ (นั่นคือวิธีที่ `Exclude` และ `Extract` ทำงาน) ห่อทั้งสองฝั่งเป็น `[T] extends [U]` เพื่อตรวจ union ทั้งก้อนและปิด distribution
 </Callout>
 
 export const quizConditional = [
@@ -106,7 +106,7 @@ export const quizConditional = [
       '`T` สืบทอดจาก `U`',
       'ถ้า `T` assignable ให้ `U` type จะเป็น `X` ไม่งั้นเป็น `Y`',
       '`T` กับ `U` ถูกรวมกัน',
-      'มันคือ if-statement ตอน runtime',
+      'เป็น if-statement ตอน runtime',
     ],
     answer: 1,
   },
@@ -123,10 +123,10 @@ export const quizConditional = [
   {
     q: 'built-in `Exclude<T, U>` เอา member ออกจาก union อย่างไร?',
     options: [
-      'ลบมันตอน runtime',
+      'ลบ member ตอน runtime',
       'ผ่าน `T extends U ? never : T` — member ที่ match กลายเป็น `never` แล้วหลุดจาก union',
       'sort union',
-      'มันเอา member ออกจาก union ไม่ได้',
+      'เอา member ออกจาก union ไม่ได้',
     ],
     answer: 1,
   },

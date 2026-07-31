@@ -1,6 +1,6 @@
 ---
 title: 'Type-Level Programming'
-description: 'type คือภาษาที่คุณเขียนโปรแกรมได้ — mapped types, keyof, template literals, utility types และ recursion จุดที่ TypeScript เลิกแค่อธิบายข้อมูลแล้วเริ่ม transform มัน'
+description: 'type คือภาษาที่คุณเขียนโปรแกรมได้ — mapped types, keyof, template literals, utility types และ recursion จุดที่ TypeScript เลิกแค่อธิบายข้อมูลแล้วเริ่ม transform ข้อมูลนั้น'
 sidebar:
   order: 1
 ---
@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## type คือภาษาหนึ่ง
 
-ที่ผ่านมา type ทำหน้าที่ *อธิบาย* ข้อมูล ในโมดูลนี้มันจะเริ่ม *คำนวณ* จากข้อมูลนั้น จาก type หนึ่งคุณ derive อีก type ออกมาได้ — ทำให้ทุก field เป็น optional, pick key แค่บางส่วน, ดึง return type ของ function ออกมา หรือ parse string ให้เป็น union — ทั้งหมดที่ระดับ type โดย compiler ประเมินก่อน code รัน
+ที่ผ่านมา type ทำหน้าที่ *อธิบาย* ข้อมูล ในโมดูลนี้ type จะเริ่ม *คำนวณ* จากข้อมูลนั้น จาก type หนึ่งคุณ derive อีก type ออกมาได้ — ทำให้ทุก field เป็น optional, pick key แค่บางส่วน, ดึง return type ของ function ออกมา หรือ parse string ให้เป็น union — ทั้งหมดที่ระดับ type โดย compiler ประเมินก่อน code รัน
 
 นี่คือการเขียนโปรแกรมจริง ๆ type system มีตัวแปร (type parameter), การ branch (conditional type), การวนซ้ำ (mapped type และ recursion) และ function (generic type alias) มีคนเขียน arithmetic หรือแม้แต่ parser ด้วย type ล้วน ๆ คุณคงไม่ทำแบบนั้นในงานจริง — แต่เข้าใจกลไกนี้คือสิ่งที่ทำให้คุณ *อ่าน* type ของ library ออก และเขียน type เจ๋ง ๆ ไม่กี่ตัวที่คุ้มค่าจริง
 
@@ -20,10 +20,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 | บทเรียน | สิ่งที่คุณจะได้เรียน |
 |--------|-------------------|
-| Mapped types | วนซ้ำ key ของ type เพื่อ transform มัน — สร้าง `Partial` และ `Readonly` เอง |
+| Mapped types | วนซ้ำ key ของ type เพื่อ transform แต่ละ property — สร้าง `Partial` และ `Readonly` เอง |
 | keyof & indexed access | `keyof T` และ `T[K]` — การ lookup ที่เป็นฐานของทุกอย่าง |
 | Template literal types | คำนวณ string type และ pattern-match string ด้วย `infer` |
-| The utility types | ตัว built-in และวิธีที่มันถูก implement จริง |
+| The utility types | ตัว built-in และวิธีที่ถูก implement จริง |
 | Recursive types | type ที่เรียกตัวเอง — และจุดที่ compiler ขีดเส้น |
 
 ## ชิ้นส่วนต่าง ๆ ประกอบกัน
@@ -49,7 +49,7 @@ export const quizIndex = [
     q: '"type-level programming" หมายความว่าอะไร?',
     options: [
       'เขียน runtime function ที่ตรวจ type',
-      'คำนวณ type ใหม่จาก type เดิม — compiler ประเมินมันก่อน runtime',
+      'คำนวณ type ใหม่จาก type เดิม — compiler ประเมินให้ก่อน runtime',
       'วิธีรัน JavaScript ที่เร็วขึ้น',
       'generate เอกสารจาก type',
     ],

@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## ไอเดียในหนึ่งประโยค
 
-**TypeScript คือ JavaScript บวกกับ static type system ที่ทำงานตอน compile time และหายไปตอน runtime** มันไม่เปลี่ยนสิ่งที่ code ของคุณ *ทำ* — มันเปลี่ยนสิ่งที่ compiler *ยอมให้คุณเขียน* จับ bug ทั้งกลุ่มได้ก่อนที่ code จะรันเสียอีก
+**TypeScript คือ JavaScript บวกกับ static type system ที่ทำงานตอน compile time และหายไปตอน runtime** ไม่เปลี่ยนสิ่งที่ code ของคุณ *ทำ* — แต่เปลี่ยนสิ่งที่ compiler *ยอมให้คุณเขียน* จับ bug ทั้งกลุ่มได้ก่อนที่ code จะรันเสียอีก
 
 ทุกอย่างขั้นสูงในคอร์สนี้ — generics, conditional types, mapped types — คือ system เดียวกันนี้ที่ถูกต่อยอดไปจนสุดทาง เข้าใจ mental model ให้ถูก แล้วที่เหลือจะตามมาเอง
 
@@ -37,7 +37,7 @@ export const lensDiagram = `flowchart TB
   assign --> ts["ทุกพฤติกรรมของ TS"]
   compat --> ts`;
 
-เวลาที่การ assign ผ่านได้ เป็นเพราะเซตของ value ของ type หนึ่งพอดีอยู่ในอีก type หนึ่ง เวลาที่ object สองตัวใช้แทนกันได้ เป็นเพราะ shape ของมันตรงกัน จำสองไอเดียนี้ไว้ แล้ว TypeScript จะเลิกทำให้คุณประหลาดใจ
+เวลาที่การ assign ผ่านได้ เป็นเพราะเซตของ value ของ type หนึ่งพอดีอยู่ในอีก type หนึ่ง เวลาที่ object สองตัวใช้แทนกันได้ เป็นเพราะ shape ของตัวเองตรงกัน จำสองไอเดียนี้ไว้ แล้ว TypeScript จะเลิกทำให้คุณประหลาดใจ
 
 <Callout title="การปรับมุมมอง">
 ถ้ามาจากภาษาอื่น คุณอาจคิดว่า type คือ **ป้ายชื่อ** ที่แปะไว้กับตัวแปร แต่ใน TypeScript จะมีประโยชน์กว่าถ้ามอง type เป็น **เซต** — คือกลุ่มของ value ทั้งหมดที่ถูกต้องสำหรับช่องนั้น `boolean` คือเซต `{true, false}` ส่วน `string` คือเซตของ string ทั้งหมด การปรับมุมมองครั้งเดียวนี้ทำให้ union, narrowing และ `never` กลายเป็นเรื่องชัดเจนแทนที่จะลึกลับ
@@ -48,7 +48,7 @@ export const quizIndex = [
     q: 'type system ของ TypeScript ทำงานตอนไหน?',
     options: [
       'ตอน runtime โดยเช็ค value ขณะที่โปรแกรมรัน',
-      'ตอน compile time — เช็ค type แล้วลบมันออกจาก output',
+      'ตอน compile time — เช็ค type แล้วลบ type ออกจาก output',
       'เฉพาะใน editor เท่านั้น ไม่เกิดขึ้นตอน build',
       'ข้างใน JavaScript engine',
     ],

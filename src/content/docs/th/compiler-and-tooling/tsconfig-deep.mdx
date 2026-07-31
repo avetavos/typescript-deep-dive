@@ -1,6 +1,6 @@
 ---
 title: 'tsconfig, Deep'
-description: 'compiler option ที่เปลี่ยนความปลอดภัยและ output ของคุณจริง ๆ — strict และครอบครัวของมัน, target, module และ flag ข้าง ๆ strict ที่ควรเปิด'
+description: 'compiler option ที่เปลี่ยนความปลอดภัยและ output ของคุณจริง ๆ — strict และครอบครัวของตัวเอง, target, module และ flag ข้าง ๆ strict ที่ควรเปิด'
 sidebar:
   order: 2
 ---
@@ -11,7 +11,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## เริ่มจาก strict
 
-`tsconfig.json` มี option เป็นสิบ ๆ ตัว แต่มีไม่กี่ตัวที่ตัดสินว่า TypeScript ปกป้องคุณจริงหรือเปล่า ตัวสำคัญที่สุดคือ `strict` มันไม่ใช่ check ตัวเดียว — มันคือชุดที่เปิด flag ทั้งครอบครัวพร้อมกัน และทุกตัวจับ bug จริงได้
+`tsconfig.json` มี option เป็นสิบ ๆ ตัว แต่มีไม่กี่ตัวที่ตัดสินว่า TypeScript ปกป้องคุณจริงหรือเปล่า ตัวสำคัญที่สุดคือ `strict` ไม่ใช่ check ตัวเดียว — แต่เป็นชุดที่เปิด flag ทั้งครอบครัวพร้อมกัน และทุกตัวจับ bug จริงได้
 
 ```json
 {
@@ -29,13 +29,13 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 }
 ```
 
-เปิด `strict` ตั้งแต่วันแรก การมาเปิดทีหลังบน codebase ใหญ่ ๆ แปลว่าต้องแก้ error เป็นร้อยพร้อมกัน — ยากกว่าการไม่ปล่อยให้มันสะสมตั้งแต่แรกมาก
+เปิด `strict` ตั้งแต่วันแรก การมาเปิดทีหลังบน codebase ใหญ่ ๆ แปลว่าต้องแก้ error เป็นร้อยพร้อมกัน — ยากกว่าการไม่ปล่อยให้ error สะสมตั้งแต่แรกมาก
 
 ## `strict` เปิดอะไรให้จริง ๆ
 
 `strict: true` เป็นตัวย่อของครอบครัวนี้ทั้งหมด:
 
-| Flag (อยู่ใน `strict`) | สิ่งที่มันจับได้ |
+| Flag (อยู่ใน `strict`) | สิ่งที่จับได้ |
 |------------------------|-----------------|
 | `strictNullChecks` | `null` และ `undefined` ไม่แอบอยู่ในทุก type อีกต่อไป — คุ้มที่สุด |
 | `noImplicitAny` | value ที่จะ fall back เป็น `any` กลายเป็น error ที่คุณต้องแก้ |
@@ -45,7 +45,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | `useUnknownInCatchVariables` | `catch (e)` ให้ `unknown` ไม่ใช่ `any` บังคับให้คุณ narrow |
 | `alwaysStrict` | emit `"use strict"` และ parse ใน strict mode |
 
-พระเอกคือ `strictNullChecks` ถ้าไม่มีมัน `string` จะแอบรวม `null` และ `undefined` ไว้ด้วย และ compiler เตือนคุณเรื่อง runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย พอเปิดมัน `null` และ `undefined` กลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างตั้งใจ
+พระเอกคือ `strictNullChecks` ถ้าไม่เปิด `string` จะแอบรวม `null` และ `undefined` ไว้ด้วย และ compiler เตือนคุณเรื่อง runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย พอเปิดแล้ว `null` และ `undefined` กลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างตั้งใจ
 
 ## `target`, `module` และ `lib`
 
@@ -53,7 +53,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 - **`target`** — JavaScript version ที่ `tsc` emit ออกมา `ES2022` เป็น default สมัยใหม่ที่ปลอดภัย ถ้า target ต่ำกว่าจะ down-level syntax ใหม่ ๆ ให้เป็นของเทียบเท่าเวอร์ชันเก่า
 - **`module`** — module format ของ output (`NodeNext`, `ESNext`, `CommonJS`, ...) ควรตรงกับวิธีที่ code ถูกโหลดจริง
-- **`lib`** — type declaration built-in ตัวไหนที่ใช้ได้ (เช่น `DOM` สำหรับ global ของ browser, `ES2022` สำหรับ method ใหม่ ๆ ของ runtime) ถ้าคุณใช้ `structuredClone` หรือ `Array.prototype.at` ตัว `lib` ต้องรวมเวอร์ชันที่ declare พวกมันไว้
+- **`lib`** — type declaration built-in ตัวไหนที่ใช้ได้ (เช่น `DOM` สำหรับ global ของ browser, `ES2022` สำหรับ method ใหม่ ๆ ของ runtime) ถ้าคุณใช้ `structuredClone` หรือ `Array.prototype.at` ตัว `lib` ต้องรวมเวอร์ชันที่ declare API เหล่านั้นไว้
 
 ## flag ข้าง ๆ strict ที่ควรเพิ่ม
 
@@ -70,7 +70,7 @@ x.toFixed(); // ❌ Object is possibly 'undefined' — exactly the bug you want 
 - **`exactOptionalPropertyTypes`** — แยกความต่างระหว่าง property ที่ set เป็น `undefined` กับ property ที่หายไปเลย ทำให้ optional `name?: string` ไม่แอบรับ `name: undefined` อีกต่อไป
 
 <Callout title="The one-line takeaway">
-เปิด `strict: true` ตั้งแต่วันแรก — มันรวมชุดของ check ไว้ และแค่ `strictNullChecks` ตัวเดียวก็กำจัด class ของ JavaScript crash ที่พบบ่อยที่สุดได้ ตั้ง `target`, `module` และ `lib` ให้ตรงกับ runtime ของคุณ แล้วเพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` เพื่อจับ bug ที่ strict ไม่จับ
+เปิด `strict: true` ตั้งแต่วันแรก — flag นี้รวมชุดของ check ไว้ และแค่ `strictNullChecks` ตัวเดียวก็กำจัด class ของ JavaScript crash ที่พบบ่อยที่สุดได้ ตั้ง `target`, `module` และ `lib` ให้ตรงกับ runtime ของคุณ แล้วเพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` เพื่อจับ bug ที่ strict ไม่จับ
 </Callout>
 
 export const quizTsconfig = [
@@ -107,10 +107,10 @@ export const quizTsconfig = [
   {
     q: 'ทำไมควรเปิด `strict` ตั้งแต่เริ่มโปรเจกต์ ไม่ใช่มาเปิดทีหลัง?',
     options: [
-      'มันเปิดทีหลังไม่ได้เลย',
+      'เปิดทีหลังไม่ได้เลย',
       'การมาเปิดทีหลังบน codebase ใหญ่แปลว่าต้องแก้ error ที่สะสมไว้เป็นร้อยพร้อมกัน',
-      'มันเปลี่ยน behavior ตอน runtime',
-      'มันฟรีเฉพาะโปรเจกต์ใหม่',
+      'เปลี่ยน behavior ตอน runtime',
+      'ฟรีเฉพาะโปรเจกต์ใหม่',
     ],
     answer: 1,
   },

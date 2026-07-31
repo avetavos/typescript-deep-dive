@@ -10,7 +10,7 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-## object type และ modifier ของมัน
+## object type และ modifier ของตัวเอง
 
 object type อธิบาย shape ด้วยการ list property modifier สองตัวสื่อความหมายเยอะ:
 
@@ -22,7 +22,7 @@ interface User {
 }
 ```
 
-- **`readonly`** บล็อกการ reassign property มันเป็น compile-time เท่านั้น (runtime ไม่ได้กันการ mutate) แต่มันสื่อและ enforce เจตนา
+- **`readonly`** บล็อกการ reassign property เป็น compile-time เท่านั้น (runtime ไม่ได้กันการ mutate) แต่สื่อและ enforce เจตนา
 - **`?` (optional)** หมายถึง property อาจไม่มี สำคัญคือ optional property มี type `T | undefined` คุณจึงต้อง handle case `undefined`:
 
 ```ts
@@ -37,7 +37,7 @@ function greet(u: User) {
 
 ## index signature: object เป็น map
 
-เมื่อยังไม่รู้ key ล่วงหน้า **index signature** type มันแบบ uniform:
+เมื่อยังไม่รู้ key ล่วงหน้า **index signature** type ทุก key แบบ uniform:
 
 ```ts
 interface Scores {
@@ -60,7 +60,7 @@ let point: [number, number] = [10, 20];    // number สองตัวพอด
 let pair: [string, number] = ["age", 36];  // ตำแหน่ง 0 string, ตำแหน่ง 1 number
 ```
 
-tuple ขับเคลื่อน pattern อย่าง return ของ `useState` ใน React (`[value, setter]`) และพิกัดแบบมีชื่อกลาย ๆ มันยังรองรับ **label** (เป็น documentation ไม่มีผล runtime) และ rest element:
+tuple ขับเคลื่อน pattern อย่าง return ของ `useState` ใน React (`[value, setter]`) และพิกัดแบบมีชื่อกลาย ๆ tuple ยังรองรับ **label** (เป็น documentation ไม่มีผล runtime) และ rest element:
 
 ```ts
 type HttpResult = [status: number, body: string];

@@ -29,14 +29,14 @@ const a = new Account();
 // a.#pin;    // ❌ SyntaxError even at runtime — hard private
 ```
 
-- `private` (และ `protected`) เป็น access check ตอน **compile time** มันถูก erase ตอน emit ดังนั้นคนที่ตั้งใจจริงยังเข้าถึง field ตอน runtime ได้ผ่าน `any` หรือ bracket access มันบอก intent และจับ mistake ที่ตั้งใจดี
+- `private` (และ `protected`) เป็น access check ตอน **compile time** และถูก erase ตอน emit ดังนั้นคนที่ตั้งใจจริงยังเข้าถึง field ตอน runtime ได้ผ่าน `any` หรือ bracket access modifier พวกนี้บอก intent และจับ mistake ที่ตั้งใจดี
 - field `#name` เป็น **ECMAScript private field** — เข้าถึงจากนอก class ไม่ได้จริง ๆ บังคับโดย JavaScript engine เอง ใช้ `#` เมื่อ privacy ต้อง hold ตอน runtime
 
-`protected` อยู่ตรงกลาง: เข้าถึงได้ใน class และ subclass ของมัน แต่ไม่ได้จากข้างนอก
+`protected` อยู่ตรงกลาง: เข้าถึงได้ใน class และ subclass ของตัวเอง แต่ไม่ได้จากข้างนอก
 
 ## `readonly` field
 
-`readonly` อนุญาตให้ assign ได้แค่ตอน declaration หรือใน constructor แล้ว lock field นั้น เหมือน `private` มันเป็น compile-time guarantee — ถูก erase ตอน runtime
+`readonly` อนุญาตให้ assign ได้แค่ตอน declaration หรือใน constructor แล้ว lock field นั้น เหมือน `private` เป็น compile-time guarantee — ถูก erase ตอน runtime
 
 ```ts
 class Point {
@@ -52,7 +52,7 @@ class Point {
 
 ## parameter property: constructor shorthand
 
-การ declare field แล้ว assign จาก constructor parameter เกิดบ่อยมากจน TypeScript มี shorthand: ใส่ access modifier บน constructor parameter แล้วมันจะกลายเป็น field อัตโนมัติ
+การ declare field แล้ว assign จาก constructor parameter เกิดบ่อยมากจน TypeScript มี shorthand: ใส่ access modifier บน constructor parameter แล้ว parameter นั้นจะกลายเป็น field อัตโนมัติ
 
 ```ts
 class User {
@@ -64,11 +64,11 @@ class User {
 }
 ```
 
-อันนี้เท่ากับการ declare `id` และ `name` เป็น field แล้ว assign ใน body มันเป็นแค่ความสะดวก แต่เป็นความสะดวกที่ใช้กันกว้างขวาง
+อันนี้เท่ากับการ declare `id` และ `name` เป็น field แล้ว assign ใน body เป็นแค่ความสะดวก แต่เป็นความสะดวกที่ใช้กันกว้างขวาง
 
 ## `static` member
 
-`static` member เป็นของ **ตัว class เอง** ไม่ใช่ของ instance มันมีอยู่จริงตอน runtime เป็น property บน constructor function
+`static` member เป็นของ **ตัว class เอง** ไม่ใช่ของ instance มีอยู่จริงตอน runtime เป็น property บน constructor function
 
 ```ts
 class Circle {
@@ -81,7 +81,7 @@ Circle.area(2); // called on the class, not an instance
 
 ## `abstract` class
 
-`abstract` class instantiate ตรง ๆ ไม่ได้ มันมีไว้ให้ extend `abstract` method declare signature ที่ subclass ต้อง implement ตัว marker `abstract` เป็น compile-time only
+`abstract` class instantiate ตรง ๆ ไม่ได้ มีไว้ให้ extend `abstract` method declare signature ที่ subclass ต้อง implement ตัว marker `abstract` เป็น compile-time only
 
 ```ts
 abstract class Shape {
@@ -99,7 +99,7 @@ class Square extends Shape {
 
 ## `implements` เป็นการเช็ค ไม่ใช่ inheritance
 
-class `implements` interface ได้ อันนี้ **ไม่ได้** copy อะไรเข้ามา — มันเป็น *assertion* ตอน compile time ว่า class satisfy interface เชิง structural เพราะ TypeScript เป็น structural class match interface ได้ *โดยไม่ต้อง* `implements` clause แค่ทำให้ intent ชัดเจนและเปลี่ยน mismatch ให้เป็น error ที่จุดนิยาม class แทนที่จะเป็นที่จุดใช้งาน
+class `implements` interface ได้ อันนี้ **ไม่ได้** copy อะไรเข้ามา — เป็น *assertion* ตอน compile time ว่า class satisfy interface เชิง structural เพราะ TypeScript เป็น structural class match interface ได้ *โดยไม่ต้อง* `implements` clause แค่ทำให้ intent ชัดเจนและเปลี่ยน mismatch ให้เป็น error ที่จุดนิยาม class แทนที่จะเป็นที่จุดใช้งาน
 
 ```ts
 interface Named { name: string; }
@@ -127,7 +127,7 @@ export const quizDeep = [
   {
     q: 'parameter property (เช่น `constructor(public id: string)`) ทำอะไร?',
     options: [
-      'ไม่ทำอะไร — มันเป็น syntax error',
+      'ไม่ทำอะไร — เป็น syntax error',
       'declare field แล้ว assign จาก parameter อัตโนมัติ',
       'ทำให้ parameter เป็น global',
       'mark class ให้ abstract',

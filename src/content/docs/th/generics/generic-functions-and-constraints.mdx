@@ -24,11 +24,11 @@ const b = first(["x", "y"]);
 //    ^? string | undefined   — T inferred as string
 ```
 
-คุณ *ส่ง* มันตรง ๆ ได้ (`first<number>([1, 2, 3])`) แต่แทบไม่จำเป็น type parameter ไหลมาจากจุดที่เรียก
+คุณ *ส่ง* type argument ตรง ๆ ได้ (`first<number>([1, 2, 3])`) แต่แทบไม่จำเป็น type parameter ไหลมาจากจุดที่เรียก
 
 ## constraint: `extends` จำกัดว่า `T` เป็นอะไรได้บ้าง
 
-`T` ที่ไม่มี constraint เป็นอะไรก็ได้ ดังนั้นคุณจะสมมติว่ามัน property อะไรไม่ได้เลย เมื่อ function ต้องการให้ `T` มี shape บางอย่าง ให้ constrain ด้วย `extends`:
+`T` ที่ไม่มี constraint เป็นอะไรก็ได้ ดังนั้นคุณจะสมมติว่า property อะไรไม่ได้เลย เมื่อ function ต้องการให้ `T` มี shape บางอย่าง ให้ constrain ด้วย `extends`:
 
 ```ts
 // ❌ without a constraint, T might not have .length
@@ -84,7 +84,7 @@ default พบบ่อยกับ generic class และ interface ที่�
 
 ## อย่า generic เกินจำเป็น
 
-generics เป็นเครื่องมือ ไม่ใช่เป้าหมาย type parameter ที่ปรากฏ **แค่ครั้งเดียว** ใน signature มักเป็นความผิดพลาด — มันไม่ได้เชื่อมอะไรเลย ก็เลยควรเป็น type ตรง ๆ หรือ `unknown` ไปเลย:
+generics เป็นเครื่องมือ ไม่ใช่เป้าหมาย type parameter ที่ปรากฏ **แค่ครั้งเดียว** ใน signature มักเป็นความผิดพลาด — ไม่ได้เชื่อมอะไรเลย ก็เลยควรเป็น type ตรง ๆ หรือ `unknown` ไปเลย:
 
 ```ts
 // pointless generic: T is used once, links nothing
@@ -93,7 +93,7 @@ function log<T>(x: T): void { console.log(x); }
 function log(x: unknown): void { console.log(x); }
 ```
 
-generic จะคุ้มค่าก็ต่อเมื่อ type parameter เชื่อมตำแหน่งตั้งแต่สองที่ขึ้นไป (input ไป output, หรือ parameter ตัวหนึ่งไปอีกตัว) ถ้ามันไม่ได้สร้าง *ความสัมพันธ์* ก็ตัดทิ้ง
+generic จะคุ้มค่าก็ต่อเมื่อ type parameter เชื่อมตำแหน่งตั้งแต่สองที่ขึ้นไป (input ไป output, หรือ parameter ตัวหนึ่งไปอีกตัว) ถ้า type parameter ไม่ได้สร้าง *ความสัมพันธ์* ก็ตัดทิ้ง
 
 <Callout title="The one-line takeaway">
 type parameter ส่วนใหญ่ถูก **infer** จาก argument ไม่ใช่เขียนเอง constrain ด้วย `extends` เมื่อต้องการให้ `T` มี shape บางอย่าง (`T extends { length: number }`) หรือเป็น key ของ type อื่น (`K extends keyof T` คืน `T[K]`) ใส่ default ตรงที่มี fallback สมเหตุสมผล และตัด type parameter ที่ปรากฏแค่ครั้งเดียวทิ้ง — generic ควรเชื่อมตำแหน่ง ไม่ใช่ตกแต่งตำแหน่งเดียว
@@ -106,7 +106,7 @@ export const quizConstraints = [
       'เพื่อให้ function รันเร็วขึ้น',
       'เพื่อให้ function พึ่งพาได้ว่า `T` มี shape บางอย่าง (เช่นมี property `length`)',
       'เพื่อแปลง `T` เป็น `any`',
-      'มันจำเป็นสำหรับ generic ทุกตัว',
+      'จำเป็นสำหรับ generic ทุกตัว',
     ],
     answer: 1,
   },

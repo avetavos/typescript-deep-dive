@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## คุณเขียน type น้อยกว่าที่คิด
 
-TypeScript ที่ดีไม่ได้เต็มไปด้วย annotation compiler *infer* type ส่วนใหญ่ให้ และการฝืนมันด้วย annotation ที่ซ้ำซ้อนคือสัญญาณของมือใหม่ ทักษะที่แท้จริงคือรู้ว่ามัน infer **อะไร** และ **ตรงไหน** ที่คุณต้องเข้าไปช่วยจริง ๆ
+TypeScript ที่ดีไม่ได้เต็มไปด้วย annotation compiler *infer* type ส่วนใหญ่ให้ และการฝืน inference ด้วย annotation ที่ซ้ำซ้อนคือสัญญาณของมือใหม่ ทักษะที่แท้จริงคือรู้ว่า infer **อะไร** และ **ตรงไหน** ที่คุณต้องเข้าไปช่วยจริง ๆ
 
 ```ts
 let count = 5;        // inferred: number
@@ -31,7 +31,7 @@ const a = "hello"; // type: "hello"   (literal — it can't change)
 let   b = "hello"; // type: string    (widened — b might become any string)
 ```
 
-นี่คือเหตุผลที่ literal type "โผล่มาแล้วก็หายไป" มันสำคัญอยู่ตลอด:
+นี่คือเหตุผลที่พฤติกรรม "โผล่มาแล้วก็หายไป" ของ literal type สำคัญอยู่ตลอด:
 
 ```ts
 const method = "GET";        // type: "GET"
@@ -52,7 +52,7 @@ export const widenDiagram = `flowchart LR
 
 ## Contextual typing: inference ไหลเข้าด้านใน
 
-inference ไม่ได้ไหลจากล่างขึ้นบน (จาก value ไปหา type) อย่างเดียว มันไหลจาก **บนลงล่าง** จาก context รอบ ๆ ด้วย — นี่คือ *contextual typing*
+inference ไม่ได้ไหลจากล่างขึ้นบน (จาก value ไปหา type) อย่างเดียว แต่ไหลจาก **บนลงล่าง** จาก context รอบ ๆ ด้วย — นี่คือ *contextual typing*
 
 ```ts
 const nums = [1, 2, 3];
@@ -68,7 +68,7 @@ window.addEventListener("click", (e) => {
 });
 ```
 
-นี่คือเหตุผลที่ parameter ของ callback มักไม่ต้อง annotate: function ที่คุณส่งมันเข้าไปประกาศ type ของ parameter ไว้แล้ว inference จึงไหลเข้ามา
+นี่คือเหตุผลที่ parameter ของ callback มักไม่ต้อง annotate: function ที่รับ callback ตัวนั้นประกาศ type ของ parameter ไว้แล้ว inference จึงไหลเข้ามา
 
 ## Best common type
 
@@ -79,7 +79,7 @@ const mixed = [1, "two", 3]; // inferred: (string | number)[]
 const shapes = [circle, square]; // inferred: (Circle | Square)[]
 ```
 
-มันไม่ได้เลือกอันหนึ่งแล้ว error ที่เหลือ แต่สร้าง union ที่เข้าได้กับทุก element บางครั้ง best common type กว้างกว่าที่คุณอยากได้ ซึ่งเป็นสัญญาณว่าควร annotate ให้ชัด
+ไม่ได้เลือกอันหนึ่งแล้ว error ที่เหลือ แต่สร้าง union ที่เข้าได้กับทุก element บางครั้ง best common type กว้างกว่าที่คุณอยากได้ ที่เป็นสัญญาณว่าควร annotate ให้ชัด
 
 ## เมื่อไรควร annotate
 
@@ -92,7 +92,7 @@ const shapes = [circle, square]; // inferred: (Circle | Square)[]
 ที่เหลือทั้งหมดให้ใช้ inference annotation ที่ซ้ำซ้อนคือ noise ที่อาจ *เพี้ยน* ไปจากความจริงตอน refactor
 
 <Callout title="สรุปบรรทัดเดียว">
-compiler infer type ส่วนใหญ่ให้ ดังนั้นเขียนมันให้น้อยลง กฎสำคัญ: **`const` เก็บ literal type ส่วน `let` widen** ไปเป็น type ทั่วไป inference ยังไหลจากบนลงล่างด้วย (contextual typing) ซึ่งเป็นเหตุผลที่ parameter ของ callback แทบไม่ต้อง annotate และมันสร้าง **best common type** (เป็น union) ให้ value ที่ปนกัน annotate parameter กับ return type ของ public API แล้วปล่อยที่เหลือให้ inference จัดการ
+compiler infer type ส่วนใหญ่ให้ ดังนั้นเขียน annotation ให้น้อยลง กฎสำคัญ: **`const` เก็บ literal type ส่วน `let` widen** ไปเป็น type ทั่วไป inference ยังไหลจากบนลงล่างด้วย (contextual typing) นั่นคือเหตุผลที่ parameter ของ callback แทบไม่ต้อง annotate และสร้าง **best common type** (เป็น union) ให้ value ที่ปนกัน annotate parameter กับ return type ของ public API แล้วปล่อยที่เหลือให้ inference จัดการ
 </Callout>
 
 export const quizInference = [
@@ -111,7 +111,7 @@ export const quizInference = [
     options: [
       'let ช้ากว่า',
       'let reassign ได้ compiler จึง widen ไปเป็น type ทั่วไป; const ทำไม่ได้ จึงเก็บ literal ไว้',
-      'มันสุ่ม',
+      'สุ่ม',
       'ตัวแปร let มี type เป็น any เสมอ',
     ],
     answer: 1,
@@ -120,9 +120,9 @@ export const quizInference = [
     q: 'ทำไม parameter ของ callback มักไม่ต้อง annotate type?',
     options: [
       'callback มี type เป็น any เสมอ',
-      'contextual typing ไหล type เข้าด้านในจาก function ที่คุณส่งมันเข้าไป',
+      'contextual typing ไหล type เข้าด้านในจาก function ที่รับ callback ตัวนั้น',
       'compiler ไม่สนใจ parameter ของ callback',
-      'คุณต้อง annotate มันเสมอ',
+      'คุณต้อง annotate เองเสมอ',
     ],
     answer: 1,
   },

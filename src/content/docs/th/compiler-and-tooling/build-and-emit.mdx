@@ -22,14 +22,14 @@ export const trackDiagram = `flowchart LR
   bundler --> out["shipped JavaScript"]
   tsc --> ci["pass/fail in CI"]`;
 
-- **bundler** (esbuild, swc, Vite) transpile ไฟล์แต่ละไฟล์ โดย strip type ออก มันเร็วมากเพราะไม่เคย check อะไรเลย — มันดูทีละไฟล์แล้วลบ type ทิ้ง
-- **`tsc --noEmit`** ทำ type check ทั้งโปรแกรมและไม่ produce output ออกมา นี่คือตัวที่จับ bug ของคุณจริง ๆ และคุณรันมันใน CI (และ editor รันมันตลอดเวลา)
+- **bundler** (esbuild, swc, Vite) transpile ไฟล์แต่ละไฟล์ โดย strip type ออก เร็วมากเพราะไม่เคย check อะไรเลย — แค่ดูทีละไฟล์แล้วลบ type ทิ้ง
+- **`tsc --noEmit`** ทำ type check ทั้งโปรแกรมและไม่ produce output ออกมา นี่คือตัวที่จับ bug ของคุณจริง ๆ และคุณควรรันใน CI (และ editor ก็รันให้คุณตลอดเวลา)
 
 ship สิ่งที่ bundler emit; เชื่อสิ่งที่ `tsc` รายงาน `noEmit` บอก `tsc` ให้เป็น checker ล้วน ๆ
 
 ## isolatedModules: ทำให้ transpile ทีละไฟล์ปลอดภัย
 
-เพราะ bundler transpile **ทีละไฟล์** มันมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild และ swc
+เพราะ bundler transpile **ทีละไฟล์** จึงมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild และ swc
 
 ```ts
 // with isolatedModules, tsc forces you to be explicit here:
@@ -39,14 +39,14 @@ export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
 
 ## type-only import
 
-การแก้ข้างบนเป็นส่วนหนึ่งของ feature ที่กว้างกว่า: **type-only import และ export** การ mark import เป็น type-only บอก compiler ว่ามันมีอยู่เพื่อ type information ล้วน ๆ และต้องถูก erase — ไม่ emit เป็น runtime import เด็ดขาด
+การแก้ข้างบนเป็นส่วนหนึ่งของ feature ที่กว้างกว่า: **type-only import และ export** การ mark import เป็น type-only บอก compiler ว่ามีอยู่เพื่อ type information ล้วน ๆ และต้องถูก erase — ไม่ emit เป็น runtime import เด็ดขาด
 
 ```ts
 import type { User } from "./user";     // erased entirely at emit
 import { type User, save } from "./db"; // User erased, save kept
 ```
 
-`verbatimModuleSyntax: true` บังคับวินัยนี้: import ตัวไหนที่ *ไม่* ถูก mark `type` จะถูก emit ตรง ๆ เป็น runtime import มันกำจัด class ของเรื่องเซอร์ไพรส์ที่ compiler แอบ drop หรือเก็บ import ไว้ และเป็น setting ที่แนะนำสำหรับโปรเจกต์ใหม่
+`verbatimModuleSyntax: true` บังคับวินัยนี้: import ตัวไหนที่ *ไม่* ถูก mark `type` จะถูก emit ตรง ๆ เป็น runtime import setting นี้กำจัด class ของเรื่องเซอร์ไพรส์ที่ compiler แอบ drop หรือเก็บ import ไว้ และเป็น setting ที่แนะนำสำหรับโปรเจกต์ใหม่
 
 ## project references สำหรับ monorepo
 
@@ -59,7 +59,7 @@ import { type User, save } from "./db"; // User erased, save kept
 }
 ```
 
-เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ และ recheck เฉพาะสิ่งที่เปลี่ยน มันเปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental — วิธีมาตรฐานในการทำให้ type-checking เร็วเมื่อ monorepo โตขึ้น
+เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ และ recheck เฉพาะสิ่งที่เปลี่ยน วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental — วิธีมาตรฐานในการทำให้ type-checking เร็วเมื่อ monorepo โตขึ้น
 
 <Callout title="The one-line takeaway">
 แยก build ออก: ให้ bundler เร็ว ๆ strip type แล้ว emit JavaScript และรัน `tsc --noEmit` แยกเพื่อ check จริง ๆ เปิด `isolatedModules` กับ `verbatimModuleSyntax` เพื่อให้ code ปลอดภัยกับ single-file transpiler และ type-only import ชัดเจน ใน monorepo project references พร้อม `composite: true` ทำให้ `tsc --build` เป็น incremental
@@ -79,10 +79,10 @@ export const quizBuild = [
   {
     q: 'ทำไม `isolatedModules` ถึงแนะนำเมื่อใช้ bundler?',
     options: [
-      'มันทำให้ type รันตอน runtime',
+      'ทำให้ type รันตอน runtime',
       'bundler transpile ทีละไฟล์ และ `isolatedModules` flag construct ที่ single-file transpiler อาจทำพลาด',
-      'มันปิด strict mode',
-      'มัน bundle เร็วขึ้น',
+      'ปิด strict mode',
+      'bundle เร็วขึ้น',
     ],
     answer: 1,
   },
@@ -99,10 +99,10 @@ export const quizBuild = [
   {
     q: 'project references พร้อม `composite: true` แก้ปัญหาอะไร?',
     options: [
-      'มันลดขนาด output bundle',
-      'มันทำให้ type-check monorepo ใหญ่ ๆ เป็น incremental แทนที่จะ recheck ทุกอย่างใหม่ทุกครั้ง',
-      'มันเพิ่ม runtime type check',
-      'มันแทนที่ bundler',
+      'ลดขนาด output bundle',
+      'ทำให้ type-check monorepo ใหญ่ ๆ เป็น incremental แทนที่จะ recheck ทุกอย่างใหม่ทุกครั้ง',
+      'เพิ่ม runtime type check',
+      'แทนที่ bundler',
     ],
     answer: 1,
   },

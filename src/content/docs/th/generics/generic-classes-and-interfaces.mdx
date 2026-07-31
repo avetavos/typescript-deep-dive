@@ -36,7 +36,7 @@ const r: Result<number> = { ok: true, value: 10 };
 
 ## generic class: parameter fix ต่อ instance
 
-เมื่อ class เป็น generic type parameter ของมันจะถูกเลือก **ตอนที่คุณ construct instance** และทุก method ของ instance นั้นใช้ร่วมกัน:
+เมื่อ class เป็น generic type parameter ของตัวเองจะถูกเลือก **ตอนที่คุณ construct instance** และทุก method ของ instance นั้นใช้ร่วมกัน:
 
 ```ts
 class Stack<T> {
@@ -145,7 +145,7 @@ export const quizClasses = [
   {
     q: 'class จะทำตาม `Repository<T>` สำหรับ entity หนึ่ง ๆ ได้อย่างไร?',
     options: [
-      'มัน implement generic interface ไม่ได้',
+      'implement generic interface ไม่ได้',
       'implement `Repository<User>` โดย fix parameter เป็น type ตรง ๆ',
       'ใส่ `any` ให้ทุก method',
       'extends `T`',

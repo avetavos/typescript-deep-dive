@@ -1,6 +1,6 @@
 ---
 title: 'Unions & Intersections'
-description: 'union คือ OR และทำให้เซตกว้างขึ้น intersection คือ AND และทำให้แคบลง วิธีทำงานกับแต่ละแบบ และทำไมมันทำงานตรงข้ามกันสำหรับ object'
+description: 'union คือ OR และทำให้เซตกว้างขึ้น intersection คือ AND และทำให้แคบลง วิธีทำงานกับแต่ละแบบ และทำไมทั้งสองทำงานตรงข้ามกันสำหรับ object'
 sidebar:
   order: 3
 ---
@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## Union: value ที่เป็นหนึ่งในหลาย type
 
-**union** `A | B` อธิบาย value ที่เป็น *ไม่ `A` ก็ `B`* ใน model เซตมันคือ set union — union จึง **กว้างกว่า** สมาชิกของมันเสมอ
+**union** `A | B` อธิบาย value ที่เป็น *ไม่ `A` ก็ `B`* ใน model เซตนี่คือ set union — union จึง **กว้างกว่า** สมาชิกของตัวเองเสมอ
 
 ```ts
 type Id = string | number;
@@ -35,7 +35,7 @@ function printId(id: string | number) {
 
 ## Intersection: value ที่เป็นทุก type พร้อมกัน
 
-**intersection** `A & B` อธิบาย value ที่เป็นทั้ง `A` และ `B` พร้อมกัน สำหรับ object type มันหมายถึง "มีทุก property ของทั้งสอง" — intersection ของ object จึง **แคบกว่า** (เงื่อนไขมากขึ้น value ที่ valid น้อยลง)
+**intersection** `A & B` อธิบาย value ที่เป็นทั้ง `A` และ `B` พร้อมกัน สำหรับ object type นี่หมายถึง "มีทุก property ของทั้งสอง" — intersection ของ object จึง **แคบกว่า** (เงื่อนไขมากขึ้น value ที่ valid น้อยลง)
 
 ```ts
 type WithId = { id: string };
@@ -49,7 +49,7 @@ const e: Entity = { id: "1", createdAt: new Date(), updatedAt: new Date() };
 
 นี่คือวิธี idiomatic ในการประกอบ object type จากชิ้นเล็ก ๆ ที่ reuse ได้ — ยืดหยุ่นกว่า inheritance มาก เพราะผสมได้ทุกแบบ
 
-## มันดึงไปคนละทาง
+## ทั้งสองดึงไปคนละทาง
 
 <Mermaid title="union กว้างขึ้น intersection แคบลง" code={setDiagram} />
 
@@ -82,7 +82,7 @@ type Both = A & B;
 ตัวสุดท้ายเป็นสัญญาณ: เวลาคุณอยากได้ "หนึ่งใน object shape พวกนี้" คุณเกือบทุกครั้งต้องการ **union** (`A | B`) ที่มี discriminant field ร่วมกัน — ไม่ใช่ intersection นั่นคือ discriminated-union pattern ในบท narrowing
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`A \| B` คือ **union** — OR — และกว้างกว่า ระหว่างที่ถือมันคุณแตะได้แค่ member ที่ทุก branch มีร่วมกันจนกว่าจะ narrow `A & B` คือ **intersection** — AND — และสำหรับ object จะแคบกว่า ต้องมีทุก property ของทั้งสอง ซึ่งเป็นวิธีประกอบ object type มันชี้ไปคนละทาง: union เพิ่ม value แต่จำกัดการเข้าถึง; intersection จำกัด value แต่เพิ่ม member
+`A \| B` คือ **union** — OR — และกว้างกว่า ระหว่างที่ถือ union คุณแตะได้แค่ member ที่ทุก branch มีร่วมกันจนกว่าจะ narrow `A & B` คือ **intersection** — AND — และสำหรับ object จะแคบกว่า ต้องมีทุก property ของทั้งสอง ในฐานะวิธีประกอบ object type ทั้งสองชี้ไปคนละทาง: union เพิ่ม value แต่จำกัดการเข้าถึง; intersection จำกัด value แต่เพิ่ม member
 </Callout>
 
 export const quizUI = [

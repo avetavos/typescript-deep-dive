@@ -25,7 +25,7 @@ type UserKey = keyof User;
 //   ^? "id" | "name" | "active"
 ```
 
-`keyof User` ไม่ใช่ value — มันคือ union type `"id" | "name" | "active"` นี่คือวัตถุดิบสำหรับการวนซ้ำบน type ซึ่งก็คือสิ่งที่ mapped type ทำพอดี
+`keyof User` ไม่ใช่ value — แต่เป็น union type `"id" | "name" | "active"` นี่คือวัตถุดิบสำหรับการวนซ้ำบน type ซึ่งก็คือสิ่งที่ mapped type ทำพอดี
 
 สำหรับ object type ที่มี index signature `keyof` จะให้ index type ออกมา:
 
@@ -100,7 +100,7 @@ type NameOnly = MyPick<User, "name">;
 //   ^? { name: string }
 ```
 
-`K extends keyof T` จำกัด key ให้เป็น key จริงของ `T`; `[P in K]` วนซ้ำมัน (mapped type, บทเรียนถัดไปถ้าคุณข้ามมา); `T[P]` lookup value type แต่ละตัว สาม primitive ได้เครื่องมือที่มีประโยชน์หนึ่งตัว
+`K extends keyof T` จำกัด key ให้เป็น key จริงของ `T`; `[P in K]` วนซ้ำ key เหล่านั้น (mapped type, บทเรียนถัดไปถ้าคุณข้ามมา); `T[P]` lookup value type แต่ละตัว สาม primitive ได้เครื่องมือที่มีประโยชน์หนึ่งตัว
 
 <Callout title="สรุปบรรทัดเดียว">
 `keyof T` สร้าง **union ของ key ของ `T`** เป็น type; **indexed access** `T[K]` lookup **value type** ที่ key เหล่านั้น และ `T[keyof T]` ให้ union ของ value type ทั้งหมด `Arr[number]` เปลี่ยน array หรือ tuple type เป็น union ของ element สอง lookup นี้รวมกันคือฐานของ mapped type และแทบทุก utility type

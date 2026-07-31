@@ -11,7 +11,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## `this` ก็เป็น type ด้วย
 
-ภายใน class `this` ไม่ได้เป็นแค่ value — มันเป็น **type** ที่หมายถึง "type ของ instance ปัจจุบัน" และที่สำคัญคือใน subclass `this` หมายถึง *subclass* ไม่ใช่ class ที่ method นั้นถูกเขียนไว้ นี่คือ **polymorphic `this` type** และมันทำให้ fluent API ทำงานถูกต้องข้าม inheritance
+ภายใน class `this` ไม่ได้เป็นแค่ value — เป็น **type** ที่หมายถึง "type ของ instance ปัจจุบัน" และที่สำคัญคือใน subclass `this` หมายถึง *subclass* ไม่ใช่ class ที่ method นั้นถูกเขียนไว้ นี่คือ **polymorphic `this` type** และทำให้ fluent API ทำงานถูกต้องข้าม inheritance
 
 ## fluent chaining ด้วย polymorphic `this`
 
@@ -37,11 +37,11 @@ new MySQLBuilder()
   .limit(10);     // ...limit() is still available. ✅
 ```
 
-ถ้า `where` ถูก type ให้ return `QueryBuilder` chain จะ "ลืม" ว่ามันเป็น `MySQLBuilder` และ `.limit()` จะ fail polymorphic `this` รักษา type จริงไว้ตลอด chain
+ถ้า `where` ถูก type ให้ return `QueryBuilder` chain จะ "ลืม" ว่าเป็น `MySQLBuilder` และ `.limit()` จะ fail polymorphic `this` รักษา type จริงไว้ตลอด chain
 
 ## `this` parameter
 
-function สามารถ declare parameter ตัวแรกปลอม ๆ ชื่อ `this` เพื่อ type ว่า `this` ต้องเป็นอะไรตอน function ถูกเรียก มันถูก erase ตอน emit และไม่กระทบ argument list จริง มันมีไว้ type-check calling context ล้วน ๆ
+function สามารถ declare parameter ตัวแรกปลอม ๆ ชื่อ `this` เพื่อ type ว่า `this` ต้องเป็นอะไรตอน function ถูกเรียก parameter นี้ถูก erase ตอน emit และไม่กระทบ argument list จริง มีไว้ type-check calling context ล้วน ๆ
 
 ```ts
 interface Card { title: string; }
@@ -54,7 +54,7 @@ function render(this: Card) {
 render.call({ title: "hi" }); // ✅ this is a Card here
 ```
 
-อันนี้จับ bug ทั้งกลุ่มที่ method พึ่ง `this` ที่มันอาจไม่ได้รับจริง
+อันนี้จับ bug ทั้งกลุ่มที่ method พึ่ง `this` ที่อาจไม่ได้รับจริง
 
 ## pitfall เรื่องเสีย `this` ใน type
 
@@ -74,7 +74,7 @@ const fn = c.increment;
 TypeScript จับอันนี้ได้เมื่อคุณ opt in ตัว `strictBindCallApply` และ (ด้วย `this` parameter) checker จะ flag การเรียก method ที่ไม่ได้ bind วิธีแก้แบบ idiomatic คือใช้ **arrow-function field** (`increment = () => { ... }` ซึ่ง bind `this` แบบ lexical) หรือ bind ที่จุดเรียก (`c.increment.bind(c)`)
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และมันเป็น **polymorphic** — ใน subclass มันหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit และ bug เสีย `this` ของ JavaScript มี defense ระดับ type — bind ด้วย arrow-function field หรือ `.bind()`
+`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และเป็น **polymorphic** — ใน subclass จะหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit และ bug เสีย `this` ของ JavaScript มี defense ระดับ type — bind ด้วย arrow-function field หรือ `.bind()`
 </Callout>
 
 export const quizThis = [
@@ -91,9 +91,9 @@ export const quizThis = [
   {
     q: 'ทำไมต้อง return `this` (แทนชื่อ class) จาก builder method ที่ chain ได้?',
     options: [
-      'มันเร็วกว่า',
+      'เร็วกว่า',
       'เพื่อให้ chain รักษา subtype จริงไว้และ method ของ subclass ยังเรียกได้',
-      'มันเป็น syntax ที่บังคับ',
+      'เป็น syntax ที่บังคับ',
       'เพื่อเลี่ยง inheritance',
     ],
     answer: 1,
@@ -102,7 +102,7 @@ export const quizThis = [
     q: '`this` parameter ใช้ทำอะไร?',
     options: [
       'ส่ง argument runtime เพิ่มอีกตัว',
-      'type-check calling context ที่ต้องการ มันถูก erase และไม่ใช่ argument จริง',
+      'type-check calling context ที่ต้องการ ถูก erase และไม่ใช่ argument จริง',
       'ทำให้ method เป็น static',
       'เปลี่ยนชื่อ instance',
     ],

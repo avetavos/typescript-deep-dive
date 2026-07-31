@@ -22,9 +22,9 @@ let p: Point = { x: 1, y: 2 };
 let c: Coord = p; // ✅ different names, identical shape — compatible
 ```
 
-`Point` กับ `Coord` ไม่เคยถูกประกาศว่าเกี่ยวข้องกัน แต่ TypeScript ไม่สนใจ value ที่มี `x: number` และ `y: number` เข้าได้กับทั้งคู่ บางทีเรียกว่า "duck typing" — ถ้ามันเดินเหมือน `Point` และร้องเหมือน `Point` มันก็ *คือ* `Point` ในสายตาของ type checker
+`Point` กับ `Coord` ไม่เคยถูกประกาศว่าเกี่ยวข้องกัน แต่ TypeScript ไม่สนใจ value ที่มี `x: number` และ `y: number` เข้าได้กับทั้งคู่ บางทีเรียกว่า "duck typing" — ถ้าเดินเหมือน `Point` และร้องเหมือน `Point` value ตัวนั้นก็ *คือ* `Point` ในสายตาของ type checker
 
-## มี property เกินมาก็ไม่เป็นไร — มันคือความสัมพันธ์แบบ subset
+## มี property เกินมาก็ไม่เป็นไร — เพราะเป็นความสัมพันธ์แบบ subset
 
 value มี property **เกิน** มาได้ และยัง assign ให้ type ที่ขอน้อยกว่าได้ ข้อนี้ตามมาจาก model แบบเซตโดยตรง: เซตของ "object ที่มี x, y และ z" เป็น subset ของ "object ที่มี x, y"
 
@@ -35,7 +35,7 @@ const user = { name: "Ada", age: 36 };
 const n: Named = user; // ✅ user has name (plus extra) — that's fine
 ```
 
-`user` มีทุกอย่างที่ `Named` ต้องการ (มี `name`) มันจึงเข้าได้ ส่วน `age` ที่เกินมามองไม่เห็นจากคนที่ถือมันในฐานะ `Named`
+`user` มีทุกอย่างที่ `Named` ต้องการ (มี `name`) จึงเข้าได้ ส่วน `age` ที่เกินมามองไม่เห็นจากฝั่งที่ถือ object นี้ในฐานะ `Named`
 
 <Mermaid title="structural compatibility ว่าด้วย shape ที่จำเป็นต้องมี" code={structDiagram} />
 
@@ -45,7 +45,7 @@ export const structDiagram = `flowchart LR
 
 ## ข้อยกเว้น: excess property check บน object literal
 
-มีอยู่จุดหนึ่งที่ TypeScript เข้มขึ้น เมื่อคุณ assign **object literal ตรง ๆ** มันจะ flag property ที่ target ไม่รู้จัก — เพราะ literal ที่มี key แปลก ๆ เกือบจะเป็น typo หรือความผิดพลาดเสมอ
+มีอยู่จุดหนึ่งที่ TypeScript เข้มขึ้น เมื่อคุณ assign **object literal ตรง ๆ** จะ flag property ที่ target ไม่รู้จัก — เพราะ literal ที่มี key แปลก ๆ เกือบจะเป็น typo หรือความผิดพลาดเสมอ
 
 ```ts
 interface Options { width: number; }
@@ -57,14 +57,14 @@ const raw = { width: 10, height: 20 };
 const b: Options = raw; // ✅ no error — not a fresh literal
 ```
 
-assign *object ตัวเดียวกัน* ผ่านตัวแปรกลับผ่านได้ เพราะตอนนี้มันเป็นกฎ structural ปกติแล้ว (property เกินไม่เป็นไร) excess property check คือ safety net แคบ ๆ ที่ตั้งใจไว้จับ bug ยอดฮิต "พิมพ์ชื่อ option ผิด" — ไม่ใช่การเปลี่ยน model ที่อยู่เบื้องหลัง
+assign *object ตัวเดียวกัน* ผ่านตัวแปรกลับผ่านได้ เพราะตอนนี้ใช้กฎ structural ปกติแล้ว (property เกินไม่เป็นไร) excess property check คือ safety net แคบ ๆ ที่ตั้งใจไว้จับ bug ยอดฮิต "พิมพ์ชื่อ option ผิด" — ไม่ใช่การเปลี่ยน model ที่อยู่เบื้องหลัง
 
 ## ทำไมเรื่องนี้ถึงสำคัญ
 
-structural typing คือเหตุผลที่ TypeScript ทำงานกับ object ธรรมดาได้ลื่น และเป็นเหตุผลที่คุณแทบไม่ต้องประกาศว่า type หนึ่ง "implements" อีก type และเป็นเหตุผลที่ library สองตัวที่มี `Point` type ของตัวเองใช้ด้วยกันได้เลย ต้นทุนคือ type ที่ไม่เกี่ยวกันแต่ shape เหมือนกันจะใช้แทนกันได้ — บางครั้งคุณ *อยาก* ให้มันต่างกันแบบ nominal (`UserId` ที่ไม่ใช่แค่ `string` ตัวไหนก็ได้) ซึ่งคุณปลอมได้ด้วย **branded type** (เจาะลึกทีหลังในโมดูล Practical Mastery)
+structural typing คือเหตุผลที่ TypeScript ทำงานกับ object ธรรมดาได้ลื่น และเป็นเหตุผลที่คุณแทบไม่ต้องประกาศว่า type หนึ่ง "implements" อีก type และเป็นเหตุผลที่ library สองตัวที่มี `Point` type ของตัวเองใช้ด้วยกันได้เลย ต้นทุนคือ type ที่ไม่เกี่ยวกันแต่ shape เหมือนกันจะใช้แทนกันได้ — บางครั้งคุณ *อยาก* ให้ type ต่างกันแบบ nominal (`UserId` ที่ไม่ใช่แค่ `string` ตัวไหนก็ได้) ซึ่งคุณปลอมได้ด้วย **branded type** (เจาะลึกทีหลังในโมดูล Practical Mastery)
 
 <Callout title="สรุปบรรทัดเดียว">
-TypeScript เป็นแบบ **structural**: compatibility ขึ้นกับ shape ไม่ใช่ชื่อที่ประกาศ และ value ที่มี property เกินก็ยังเข้าได้กับ type ที่ขอน้อยกว่า (มันเป็น subset) ข้อยกเว้นเดียวคือ **excess property check** — object literal สด ๆ ที่ assign ตรง ๆ จะถูก flag ถ้ามี key ที่ไม่รู้จัก เป็นการป้องกัน typo แบบเจาะจง ถ้า assign ผ่านตัวแปร กฎ structural ปกติก็ใช้แทน
+TypeScript เป็นแบบ **structural**: compatibility ขึ้นกับ shape ไม่ใช่ชื่อที่ประกาศ และ value ที่มี property เกินก็ยังเข้าได้กับ type ที่ขอน้อยกว่า (เป็น subset) ข้อยกเว้นเดียวคือ **excess property check** — object literal สด ๆ ที่ assign ตรง ๆ จะถูก flag ถ้ามี key ที่ไม่รู้จัก เป็นการป้องกัน typo แบบเจาะจง ถ้า assign ผ่านตัวแปร กฎ structural ปกติก็ใช้แทน
 </Callout>
 
 export const quizStructural = [
@@ -82,7 +82,7 @@ export const quizStructural = [
     q: 'value ที่มี property เกิน assign ให้ type ที่ต้องการน้อยกว่าได้ไหม?',
     options: [
       'ไม่ได้ property ต้องตรงเป๊ะ',
-      'ได้ — มันมีทุกอย่างที่ target ต้องการ มันจึงเป็น subset ที่ถูกต้อง',
+      'ได้ — มีทุกอย่างที่ target ต้องการ จึงเป็น subset ที่ถูกต้อง',
       'ได้เฉพาะเมื่อ property ที่เกินเป็น optional',
       'ได้เฉพาะกับ array',
     ],
@@ -92,7 +92,7 @@ export const quizStructural = [
     q: 'ทำไม assign `{ width: 10, height: 20 }` ตรง ๆ ให้ `Options { width: number }` ถึง error แต่ assign ผ่านตัวแปรกลับไม่ error?',
     options: [
       'ตัวแปรมี type เป็น any เสมอ',
-      'excess property check flag key ที่ไม่รู้จักบน object literal สด ๆ เพื่อป้องกัน typo ส่วนกฎ structural ใช้เมื่อมันเป็นตัวแปรแล้ว',
+      'excess property check flag key ที่ไม่รู้จักบน object literal สด ๆ เพื่อป้องกัน typo ส่วนกฎ structural ใช้เมื่อ value ถูกเก็บเป็นตัวแปรแล้ว',
       'object literal assign ไม่ได้เลย',
       'เป็น bug ของ compiler',
     ],

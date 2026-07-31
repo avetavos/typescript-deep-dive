@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## type คือเซตของ value
 
-นี่คือการปรับมุมมองที่ปลดล็อก TypeScript เลิกคิดว่า type เป็น *ป้ายชื่อ* แล้วเริ่มคิดว่ามันเป็น **เซต** — คือกลุ่มของ value ทุกตัวที่เป็นสมาชิกของมันอย่างถูกต้อง
+นี่คือการปรับมุมมองที่ปลดล็อก TypeScript เลิกคิดว่า type เป็น *ป้ายชื่อ* แล้วเริ่มคิดว่าเป็น **เซต** — คือกลุ่มของ value ทุกตัวที่เป็นสมาชิกของตัวเองอย่างถูกต้อง
 
 - `boolean` คือเซต `{ true, false }` — มีสมาชิกสองตัวพอดี
 - `undefined` คือเซตที่มีสมาชิก **หนึ่ง** ตัว: `{ undefined }`
@@ -50,16 +50,16 @@ export const setDiagram = `flowchart TB
   end`;
 
 - `string | number` คือ **union** ของสองเซต — value ที่อยู่ใน *เซตใดเซตหนึ่ง* union จะ *กว้างกว่า* (สมาชิกเยอะกว่า)
-- `A & B` คือ **intersection** — value ที่อยู่ใน *ทั้งสอง* สำหรับ object type แปลว่า "มี property ของทั้งสองครบ" ซึ่งเป็นเหตุผลที่ intersection ทำให้ *แคบลง*
+- `A & B` คือ **intersection** — value ที่อยู่ใน *ทั้งสอง* สำหรับ object type แปลว่า "มี property ของทั้งสองครบ" นั่นคือเหตุผลที่ intersection ทำให้ *แคบลง*
 
-เรื่องน่าประหลาดใจที่พบบ่อยหลุดออกมาจากตรงนี้: `string & number` คือเซตว่าง ไม่มี value ไหนเป็นทั้ง string และ number — type ของมันจึงเป็น `never`
+เรื่องน่าประหลาดใจที่พบบ่อยหลุดออกมาจากตรงนี้: `string & number` คือเซตว่าง ไม่มี value ไหนเป็นทั้ง string และ number — type ของตัวเองจึงเป็น `never`
 
 ## สองปลายสุด: `never` และ `unknown`
 
 เซตมีตัวเล็กสุดและใหญ่สุด และ TypeScript ตั้งชื่อให้:
 
-- **`never`** คือ **เซตว่าง** `{ }` — ไม่มี value เลย ไม่มีอะไร assign ให้ `never` ได้ (คุณสร้างสมาชิกของเซตว่างไม่ได้) แต่ `never` assign ให้ *ทุกอย่าง* ได้ (เซตว่างเป็น subset ของทุกเซต) มันคือ type ของ function ที่ไม่มีทาง return และเป็นสัญญาณว่า branch นั้นไปไม่ถึง
-- **`unknown`** คือ **เซตของ value ทั้งหมด** — top type ทุกอย่าง assign ให้ `unknown` ได้ แต่ `unknown` assign ให้แทบไม่มีอะไรได้จนกว่าคุณจะ narrow มัน มันคือ `any` เวอร์ชันที่ปลอดภัยเรื่อง type
+- **`never`** คือ **เซตว่าง** `{ }` — ไม่มี value เลย ไม่มีอะไร assign ให้ `never` ได้ (คุณสร้างสมาชิกของเซตว่างไม่ได้) แต่ `never` assign ให้ *ทุกอย่าง* ได้ (เซตว่างเป็น subset ของทุกเซต) `never` คือ type ของ function ที่ไม่มีทาง return และเป็นสัญญาณว่า branch นั้นไปไม่ถึง
+- **`unknown`** คือ **เซตของ value ทั้งหมด** — top type ทุกอย่าง assign ให้ `unknown` ได้ แต่ `unknown` assign ให้แทบไม่มีอะไรได้จนกว่าคุณจะ narrow ก่อน พูดง่าย ๆ `unknown` คือ `any` เวอร์ชันที่ปลอดภัยเรื่อง type
 
 ```ts
 let n: never;
@@ -69,10 +69,10 @@ let s: string = u; // ❌ unknown is too wide — narrow it first
 let x: unknown = 42; // ✅ everything fits into unknown
 ```
 
-`any` ทำลาย model นี้โดยตั้งใจ: มันขอ *ออก* จากการเช็คเซตทั้งหมด ซึ่งเป็นเหตุผลที่มันอันตราย ส่วน `unknown` รักษา model ไว้และบังคับให้คุณ narrow
+`any` ทำลาย model นี้โดยตั้งใจ: เป็นการขอ *ออก* จากการเช็คเซตทั้งหมด นั่นคือเหตุผลที่อันตราย ส่วน `unknown` รักษา model ไว้และบังคับให้คุณ narrow
 
 <Callout title="สรุปบรรทัดเดียว">
-มองทุก type เป็น **เซตของ value ที่มันอนุญาต** แล้ว: assignability คือความสัมพันธ์แบบ subset, `|` คือ set union (กว้างกว่า), `&` คือ set intersection (แคบกว่า), `never` คือเซตว่าง (bottom) และ `unknown` คือเซตของ value ทั้งหมด (top) model เดียวนี้ทำให้ส่วนที่เหลือของ TypeScript รู้สึกเหมือนอนุมานได้เอง แทนที่จะต้องท่องจำ
+มองทุก type เป็น **เซตของ value ที่อนุญาต** แล้ว: assignability คือความสัมพันธ์แบบ subset, `|` คือ set union (กว้างกว่า), `&` คือ set intersection (แคบกว่า), `never` คือเซตว่าง (bottom) และ `unknown` คือเซตของ value ทั้งหมด (top) model เดียวนี้ทำให้ส่วนที่เหลือของ TypeScript รู้สึกเหมือนอนุมานได้เอง แทนที่จะต้องท่องจำ
 </Callout>
 
 export const quizMindset = [
@@ -89,10 +89,10 @@ export const quizMindset = [
   {
     q: 'type ของ `string & number` คืออะไร และเพราะอะไร?',
     options: [
-      '`string | number` เพราะ & รวมมันเข้าด้วยกัน',
+      '`string | number` เพราะ & รวมสอง type เข้าด้วยกัน',
       '`never` เพราะไม่มี value ไหนอยู่ในทั้งสองเซต — intersection เป็นเซตว่าง',
       '`unknown` เพราะ compiler ยอมแพ้',
-      '`any` เพราะมันตัดสินใจไม่ได้',
+      '`any` เพราะตัดสินใจไม่ได้',
     ],
     answer: 1,
   },

@@ -1,6 +1,6 @@
 ---
 title: 'Literals & Widening'
-description: 'literal type, TypeScript widen มันเมื่อไร และ as const ล็อก type แบบแคบที่คุณต้องการจริง ๆ ได้อย่างไร'
+description: 'literal type, TypeScript widen เมื่อไร และ as const ล็อก type แบบแคบที่คุณต้องการจริง ๆ ได้อย่างไร'
 sidebar:
   order: 2
 ---
@@ -12,14 +12,14 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## literal คือเซตที่มีสมาชิกตัวเดียว
 
-**literal type** คือ type ที่มี value ได้ค่าเดียวคือ literal ที่ระบุ `"GET"` เป็น type และ value เดียวที่ assign ให้มันได้คือ string `"GET"` เช่นเดียวกับ `42`, `true` และอื่น ๆ
+**literal type** คือ type ที่มี value ได้ค่าเดียวคือ literal ที่ระบุ `"GET"` เป็น type และ value เดียวที่ assign ให้ type นี้ได้คือ string `"GET"` เช่นเดียวกับ `42`, `true` และอื่น ๆ
 
 ```ts
 let method: "GET" = "GET";
 method = "POST"; // ❌ Type '"POST"' is not assignable to type '"GET"'.
 ```
 
-ลำพัง literal type แทบไม่มีประโยชน์ พลังของมันมาจาก **union ของ literal** ซึ่ง model ความหมาย "หนึ่งในค่าที่ระบุพวกนี้":
+ลำพัง literal type แทบไม่มีประโยชน์ พลังของตัวเองมาจาก **union ของ literal** ซึ่ง model ความหมาย "หนึ่งในค่าที่ระบุพวกนี้":
 
 ```ts
 type Method = "GET" | "POST" | "PUT" | "DELETE";
@@ -47,7 +47,7 @@ function send(m: "GET" | "POST") {}
 send(config.method); // ❌ string assign ให้ "GET" | "POST" ไม่ได้
 ```
 
-ถึง `config` จะเป็น `const` แต่ property `method` ยัง reassign ได้ (`config.method = "POST"` ทำได้) compiler เลย widen มันเป็น `string` จุดนี้ทำทุกคนงงครั้งหนึ่งเสมอ
+ถึง `config` จะเป็น `const` แต่ property `method` ยัง reassign ได้ (`config.method = "POST"` ทำได้) compiler เลย widen เป็น `string` จุดนี้ทำทุกคนงงครั้งหนึ่งเสมอ
 
 ## `as const`: ล็อก type แบบแคบไว้
 
@@ -90,7 +90,7 @@ type Route = typeof ROUTES[keyof typeof ROUTES];
 ถ้าไม่มี `as const` `ROUTES` จะเป็น `{ home: string; profile: string; settings: string }` แล้วคุณก็เสีย path เฉพาะทั้งหมด แต่พอมี คุณ derive union type ที่แม่นยำจากตัวข้อมูลได้ตรง ๆ — pattern ที่คุณจะเจอตลอดในโมดูล type-level
 
 <Callout title="สรุปหนึ่งบรรทัด">
-literal type คือเซตที่มีค่าเดียว และ union ของ literal คือการ model "หนึ่งในค่าที่ระบุพวกนี้" TypeScript จะ **widen** literal ทุกที่ที่ value อาจเปลี่ยน — รวมถึง property ของ object ที่แก้ค่าได้ ซึ่งเป็นเหตุผลว่าทำไม `const config = { method: "GET" }` ถึงให้ `method: string` หยิบ `as const` มาใช้เพื่อเก็บ literal ให้แคบ ทำ property เป็น `readonly` และเปลี่ยน array เป็น tuple — กุญแจสำคัญของการ derive type ที่แม่นยำจากข้อมูล
+literal type คือเซตที่มีค่าเดียว และ union ของ literal คือการ model "หนึ่งในค่าที่ระบุพวกนี้" TypeScript จะ **widen** literal ทุกที่ที่ value อาจเปลี่ยน — รวมถึง property ของ object ที่แก้ค่าได้ นั่นคือเหตุผลว่าทำไม `const config = { method: "GET" }` ถึงให้ `method: string` หยิบ `as const` มาใช้เพื่อเก็บ literal ให้แคบ ทำ property เป็น `readonly` และเปลี่ยน array เป็น tuple — กุญแจสำคัญของการ derive type ที่แม่นยำจากข้อมูล
 </Callout>
 
 export const quizLit = [
@@ -127,9 +127,9 @@ export const quizLit = [
   {
     q: 'ทำไม union ของ literal อย่าง "GET" | "POST" ถึงดีกว่า string สำหรับ parameter?',
     options: [
-      'มันเล็กกว่าตอน runtime',
-      'มันจำกัด input ให้เหลือค่าที่อนุญาตเป๊ะ ๆ ได้ autocomplete และจับ typo ได้',
-      'มัน run function สองครั้ง',
+      'เล็กกว่าตอน runtime',
+      'จำกัด input ให้เหลือค่าที่อนุญาตเป๊ะ ๆ ได้ autocomplete และจับ typo ได้',
+      'run function สองครั้ง',
       'ไม่มีความต่าง',
     ],
     answer: 1,

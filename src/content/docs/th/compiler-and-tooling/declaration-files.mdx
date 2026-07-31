@@ -11,13 +11,13 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## type ที่ไม่มี implementation
 
-declaration file — `.d.ts` — คือไฟล์ที่มี **แต่ type ไม่มี runtime code** มันอธิบาย shape ของบางอย่างที่อยู่ที่อื่น: JavaScript library, global variable, module มันคือวิธีที่ TypeScript รู้ type ของ code ที่มันไม่ได้ compile เอง
+declaration file — `.d.ts` — คือไฟล์ที่มี **แต่ type ไม่มี runtime code** ใช้อธิบาย shape ของบางอย่างที่อยู่ที่อื่น: JavaScript library, global variable, module นี่คือวิธีที่ TypeScript รู้ type ของ code ที่ไม่ได้ compile เอง
 
-คุณใช้มันตลอดโดยไม่รู้ตัว เมื่อคุณ import `fs` ใน Node แล้วได้ autocomplete นั่นคือ `.d.ts` เมื่อ `document.querySelector` มี type นั่นคือ `lib.dom.d.ts` ตัว type กับ implementation เป็นไฟล์แยกกัน
+คุณใช้ไฟล์พวกนี้ตลอดโดยไม่รู้ตัว เมื่อคุณ import `fs` ใน Node แล้วได้ autocomplete นั่นคือ `.d.ts` เมื่อ `document.querySelector` มี type นั่นคือ `lib.dom.d.ts` ตัว type กับ implementation เป็นไฟล์แยกกัน
 
 ## `declare` และ ambient declaration
 
-keyword `declare` แปลว่า "เชื่อผมสิ ตัวนี้มีอยู่จริงตอน runtime — นี่คือ type ของมัน" มันแนะนำ **ambient** declaration: type ที่ไม่มี implementation แนบมา
+keyword `declare` แปลว่า "เชื่อผมสิ ตัวนี้มีอยู่จริงตอน runtime — นี่คือ type ของสิ่งนั้น" keyword นี้แนะนำ **ambient** declaration: type ที่ไม่มี implementation แนบมา
 
 ```ts
 // globals.d.ts
@@ -33,7 +33,7 @@ gtag("event", "page_view");
 
 ## การ type library ที่ไม่มี type
 
-สมมติคุณ install JavaScript library เล็ก ๆ ที่ไม่มี type คุณอธิบาย shape ของมันเองได้ด้วย module declaration:
+สมมติคุณ install JavaScript library เล็ก ๆ ที่ไม่มี type คุณอธิบาย shape ของตัวเองได้ด้วย module declaration:
 
 ```ts
 // legacy-lib.d.ts
@@ -53,7 +53,7 @@ declare module "legacy-lib" {
 npm install --save-dev @types/lodash
 ```
 
-`tsc` หยิบ package `@types/*` จาก `node_modules` มาใช้อัตโนมัติ การ install `@types/lodash` จึงทำให้ `import _ from "lodash"` มี type ทันที library สมัยใหม่หลายตัว ship type ของตัวเองมาใน package (declare ผ่าน field `"types"` ใน `package.json` ของมัน) ซึ่งกรณีนั้นคุณไม่ต้องใช้ package `@types` เลย
+`tsc` หยิบ package `@types/*` จาก `node_modules` มาใช้อัตโนมัติ การ install `@types/lodash` จึงทำให้ `import _ from "lodash"` มี type ทันที library สมัยใหม่หลายตัว ship type ของตัวเองมาใน package (declare ผ่าน field `"types"` ใน `package.json` ของตัวเอง) ซึ่งกรณีนั้นคุณไม่ต้องใช้ package `@types` เลย
 
 ## การ emit declaration ของตัวเอง
 
@@ -104,7 +104,7 @@ export const quizDecl = [
     q: 'จะ ship type อย่างไรเมื่อ publish TypeScript library ของตัวเอง?',
     options: [
       'copy ไฟล์ .ts ด้วยมือ',
-      'เปิด `declaration: true` ให้ tsc emit ไฟล์ `.d.ts` แล้วชี้ field `types` ใน `package.json` ไปที่มัน',
+      'เปิด `declaration: true` ให้ tsc emit ไฟล์ `.d.ts` แล้วชี้ field `types` ใน `package.json` มาที่ไฟล์นั้น',
       'publish ขึ้น DefinitelyTyped เอง',
       'ทำไม่ได้ — ผู้ใช้ต้อง retype เอง',
     ],

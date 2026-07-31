@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## คุณรู้อยู่แล้วว่าพวกนี้ถูกสร้างยังไง
 
-TypeScript มี standard library ของ **utility type** มาให้ ถึงตอนนี้คุณเห็นทุกเทคนิคที่มันใช้แล้ว — แทนที่จะท่องจำ คุณจึง *อ่าน* มันออก นั่นคือเป้าหมายของบทเรียนนี้: จำแต่ละ utility ได้และรู้ primitive เบื้องหลัง
+TypeScript มี standard library ของ **utility type** มาให้ ถึงตอนนี้คุณเห็นทุกเทคนิคที่ใช้แล้ว — แทนที่จะท่องจำ คุณจึง *อ่าน* utility เหล่านี้ออก นั่นคือเป้าหมายของบทเรียนนี้: จำแต่ละ utility ได้และรู้ primitive เบื้องหลัง
 
 | Utility | ทำอะไร | สร้างอย่างไร |
 |---------|--------|-----------------|
@@ -41,7 +41,7 @@ type Pick<T, K extends keyof T> = { [P in K]: T[P] };
 type Record<K extends keyof any, V> = { [P in K]: V };
 ```
 
-ไม่มีอะไรพิสดาร — loop บน key บางทีเปลี่ยน modifier บางที lookup `T[K]` พอเห็นแบบนี้ `Pick<User, "id" | "name">` ก็ชัดว่าคือ "วนซ้ำสอง key นั้น copy value type ของมัน"
+ไม่มีอะไรพิสดาร — loop บน key บางทีเปลี่ยน modifier บางที lookup `T[K]` พอเห็นแบบนี้ `Pick<User, "id" | "name">` ก็ชัดว่าคือ "วนซ้ำสอง key นั้น copy value type ของตัวเอง"
 
 ## ตระกูล distributive-conditional
 
@@ -55,7 +55,7 @@ type NonNullable<T> = T extends null | undefined ? never : T;
 type A = Exclude<"a" | "b" | "c", "b">; // "a" | "c"
 ```
 
-เมื่อ type ที่ถูกเช็คเป็น naked type parameter และคุณส่ง union เข้าไป conditional จะรัน **ทีละ member** แล้ว union ผลลัพธ์ ดังนั้น `Exclude` map แต่ละ member เป็น `never` (drop) หรือตัวมันเอง (เก็บ) — และ `never` หายไปจาก union `Omit` จึงตกมาเป็น `Pick<T, Exclude<keyof T, K>>`
+เมื่อ type ที่ถูกเช็คเป็น naked type parameter และคุณส่ง union เข้าไป conditional จะรัน **ทีละ member** แล้ว union ผลลัพธ์ ดังนั้น `Exclude` map แต่ละ member เป็น `never` (drop) หรือตัวเอง (เก็บ) — และ `never` หายไปจาก union `Omit` จึงตกมาเป็น `Pick<T, Exclude<keyof T, K>>`
 
 ## ตระกูล `infer`
 
@@ -79,7 +79,7 @@ export const utilDiagram = `flowchart TB
   infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
 
 <Callout title="สรุปบรรทัดเดียว">
-utility type ไม่ใช่เวทมนตร์ — มันคือ expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract`, `NonNullable` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับทั้ง 5 เทคนิค
+utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract`, `NonNullable` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับทั้ง 5 เทคนิค
 </Callout>
 
 export const quizUtility = [
@@ -97,7 +97,7 @@ export const quizUtility = [
     q: 'เทคนิคใดที่เป็นพลังของ `Exclude<T, U>`?',
     options: [
       'mapped type',
-      'distributive conditional ที่ map แต่ละ member ของ union เป็น never หรือตัวมันเอง',
+      'distributive conditional ที่ map แต่ละ member ของ union เป็น never หรือตัวเอง',
       'template literal',
       'recursion อย่างเดียว',
     ],
@@ -106,7 +106,7 @@ export const quizUtility = [
   {
     q: '`ReturnType<F>` ดึง return type อย่างไร?',
     options: [
-      'มันรัน function',
+      'รัน function',
       'conditional type กับ `infer R` ที่ตำแหน่ง return: `F extends (...a: any[]) => infer R ? R : never`',
       'อ่าน runtime property',
       'mapped type บน parameter',

@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## จุดประสงค์ของ union คือการ narrow
 
-union มีประโยชน์ก็เพราะคุณ **narrow** มันได้ TypeScript อ่าน control flow ของคุณ — `if`, `switch`, `typeof`, `return` — แล้วย่อ type ในแต่ละ branch ลงเหลือ case ที่ต้องเป็นจริงตรงนั้น นี่คือ *control-flow analysis* หนึ่งในส่วนที่ฉลาดที่สุดของ compiler
+union มีประโยชน์ก็เพราะคุณ **narrow** ได้ TypeScript อ่าน control flow ของคุณ — `if`, `switch`, `typeof`, `return` — แล้วย่อ type ในแต่ละ branch ลงเหลือ case ที่ต้องเป็นจริงตรงนั้น นี่คือ *control-flow analysis* หนึ่งในส่วนที่ฉลาดที่สุดของ compiler
 
 ```ts
 function printId(id: string | number) {
@@ -24,11 +24,11 @@ function printId(id: string | number) {
 }
 ```
 
-ใน `if` type เป็น `string`; branch `else` ตัด `string` ออกจาก union เหลือ `number` คุณไม่ได้ cast อะไรเลย — compiler narrow จาก runtime check จริงที่มันเข้าใจ
+ใน `if` type เป็น `string`; branch `else` ตัด `string` ออกจาก union เหลือ `number` คุณไม่ได้ cast อะไรเลย — compiler narrow จาก runtime check จริงที่เข้าใจ
 
 ## narrowing operator ที่มีมาให้
 
-TypeScript เข้าใจ JavaScript check ทั่วไปหลายตัวและ narrow จากมัน:
+TypeScript เข้าใจ JavaScript check ทั่วไปหลายตัวและ narrow ตามผลของ check เหล่านั้น:
 
 - **`typeof x`** — narrow primitive: `"string"`, `"number"`, `"boolean"`, `"object"`, `"function"`, `"undefined"`, `"symbol"`, `"bigint"`
 - **`instanceof`** — narrow เป็น class จาก prototype chain
@@ -108,7 +108,7 @@ function handle(v: unknown) {
 }
 ```
 
-predicate คือคำสัญญาต่อ compiler: "ถ้าอันนี้ return true ให้มอง argument เป็น `T`" มันคือวิธี narrow `unknown` จากข้อมูลภายนอก และวิธีที่ library เปิด validation ที่ type system เชื่อถือ
+predicate คือคำสัญญาต่อ compiler: "ถ้าอันนี้ return true ให้มอง argument เป็น `T`" นี่คือวิธี narrow `unknown` จากข้อมูลภายนอก และวิธีที่ library เปิด validation ที่ type system เชื่อถือ
 
 ## Assertion function: `asserts x is T`
 
@@ -128,7 +128,7 @@ function use(v: string | null) {
 หลังเรียก compiler รู้ว่าเงื่อนไขที่ assert เป็นจริง (ไม่งั้นคง throw ไปแล้ว) เลย narrow ตาม นี่คือวิธีที่ helper แบบ `assert` และ `assert` ของ Node ให้ type narrowing มาฟรี ๆ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บนมัน แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) ที่ compiler เชื่อถือ
+narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บน tag นั้น แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) ที่ compiler เชื่อถือ
 </Callout>
 
 export const quizNarrow = [
@@ -148,7 +148,7 @@ export const quizNarrow = [
       'ทุก member มี literal tag field ร่วมกันที่ switch ได้',
       'ทุก member เป็น class',
       'member ไม่มี property ร่วมกัน',
-      'มันใช้ intersection แทน union',
+      'ใช้ intersection แทน union',
     ],
     answer: 0,
   },
@@ -166,7 +166,7 @@ export const quizNarrow = [
     q: 'function ที่ return `x is string` (type predicate) ทำอะไร?',
     options: [
       'return ค่า string ของ x',
-      'บอก compiler ว่าเมื่อมัน return true ให้มอง argument เป็น string',
+      'บอก compiler ว่าเมื่อ function นี้ return true ให้มอง argument เป็น string',
       'throw ถ้า x ไม่ใช่ string',
       'แปลง x เป็น string',
     ],

@@ -31,11 +31,11 @@ const x = both(1, 2);        // T = number
 const y = both(1, "two");    // T = number | string (best common type)
 ```
 
-การเข้าใจว่า inference อ่าน *ตำแหน่งของ argument* อธิบายโมเมนต์ "ทำไมมัน infer แบบนั้น" ได้เกือบทั้งหมด — และอธิบายว่าทำไมการ annotate return type ไม่เคยเปลี่ยนสิ่งที่ argument infer ออกมา
+การเข้าใจว่า inference อ่าน *ตำแหน่งของ argument* อธิบายโมเมนต์ "ทำไม compiler infer แบบนั้น" ได้เกือบทั้งหมด — และอธิบายว่าทำไมการ annotate return type ไม่เคยเปลี่ยนสิ่งที่ argument infer ออกมา
 
 ## `infer`: ดึง type ออกมาจากข้างใน type อื่น
 
-ภายใน conditional type keyword `infer` แนะนำ **type variable ใหม่ที่ TypeScript แก้ให้คุณ** ด้วยการ pattern-match structure มันคือวิธีดึงชิ้นส่วนออกจาก type ที่ใหญ่กว่า
+ภายใน conditional type keyword `infer` แนะนำ **type variable ใหม่ที่ TypeScript แก้ให้คุณ** ด้วยการ pattern-match structure นี่คือวิธีดึงชิ้นส่วนออกจาก type ที่ใหญ่กว่า
 
 ตัวอย่างคลาสสิก — เอา return type ของ function:
 
@@ -72,7 +72,7 @@ type P1 = FirstArg<(id: number) => void>; // number
 
 ## จุดที่ต้องระวัง: `infer` หลายตัวในตำแหน่งเดียวกัน
 
-เมื่อชื่อ `infer` เดียวกันปรากฏหลายจุด พฤติกรรมของ TypeScript ขึ้นกับตำแหน่ง — มัน infer เป็น **union** ในตำแหน่ง covariant และเป็น **intersection** ในตำแหน่ง contravariant (parameter) คุณไม่ค่อยต้องใช้ แต่มันอธิบายเซอร์ไพรส์บางอย่าง:
+เมื่อชื่อ `infer` เดียวกันปรากฏหลายจุด พฤติกรรมของ TypeScript ขึ้นกับตำแหน่ง — โดย infer เป็น **union** ในตำแหน่ง covariant และเป็น **intersection** ในตำแหน่ง contravariant (parameter) คุณไม่ค่อยต้องใช้ แต่อธิบายเซอร์ไพรส์บางอย่าง:
 
 ```ts
 type Merge<T> = T extends { a: infer U; b: infer U } ? U : never;

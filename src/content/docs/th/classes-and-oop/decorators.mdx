@@ -11,7 +11,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## decorator มีสองยุค — ใช้ยุคใหม่
 
-**decorator** คือ function ที่ wrap หรือสังเกต class หรือ member ของ class ให้คุณเพิ่ม behavior แบบ declarative ด้วย syntax `@name` มันมีสอง design ที่เข้ากันไม่ได้ และสำคัญว่าคุณหมายถึงอันไหน:
+**decorator** คือ function ที่ wrap หรือสังเกต class หรือ member ของ class ให้คุณเพิ่ม behavior แบบ declarative ด้วย syntax `@name` มีสอง design ที่เข้ากันไม่ได้ และสำคัญว่าคุณหมายถึงอันไหน:
 
 - **legacy decorator** — design เก่าแบบ experimental ที่เปิดด้วย `experimentalDecorators` ใน `tsconfig` ใช้เยอะใน Angular และ NestJS รุ่นเก่า signature ต่างกัน และพึ่ง `reflect-metadata`
 - **stage-3 decorator** — design ECMAScript ที่เป็นมาตรฐาน รองรับ native ตั้งแต่ **TypeScript 5.0** โดยไม่ต้องใช้ flag พิเศษ อันนี้คือตัวที่ควรเรียนสำหรับ code ใหม่
@@ -20,7 +20,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## method decorator
 
-method decorator รับ method ต้นฉบับกับ **context** object แล้ว return ตัวแทน (หรือไม่ return อะไร) นี่คือ decorator `@logged` ที่ wrap method เพื่อ log การเรียกของมัน:
+method decorator รับ method ต้นฉบับกับ **context** object แล้ว return ตัวแทน (หรือไม่ return อะไร) นี่คือ decorator `@logged` ที่ wrap method เพื่อ log การเรียกของตัวเอง:
 
 ```ts
 function logged(originalMethod: any, context: ClassMethodDecoratorContext) {
@@ -42,18 +42,18 @@ class Service {
 new Service().fetch(1); // logs "calling fetch", then returns "item 1"
 ```
 
-`context` object คือหัวใจของ design ใหม่ มันบอก decorator ว่ากำลัง decorate อะไร — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private` และ hook `addInitializer` สำหรับงาน setup
+`context` object คือหัวใจของ design ใหม่ โดยบอก decorator ว่ากำลัง decorate อะไร — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private` และ hook `addInitializer` สำหรับงาน setup
 
 ## สี่สิ่งที่ decorate ได้
 
 | ชนิด decorator | รับอะไร | ใช้ทั่วไป |
 |----------------|----------|-------------|
-| Class | ตัว class, context | register มัน, wrap constructor |
+| Class | ตัว class, context | register class, wrap constructor |
 | Method | method, context | wrap/แทน behavior (logging, timing) |
 | Accessor | getter/setter, context | ดักการ read/write |
 | Field | `undefined`, context | return initializer เพื่อแปลง initial value |
 
-**field** decorator ต่างออกไปนิด — มันไม่ได้รับ value มา wrap แต่ return initializer function ที่แปลง initial value ของ field เมื่อสร้าง instance ได้
+**field** decorator ต่างออกไปนิด — ไม่ได้รับ value มา wrap แต่ return initializer function ที่แปลง initial value ของ field เมื่อสร้าง instance ได้
 
 ## decorator factory
 
@@ -76,7 +76,7 @@ class Api {
 ```
 
 <Callout title="สรุปหนึ่งบรรทัด">
-เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) มัน wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
+เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) แล้ว wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
 </Callout>
 
 export const quizDecorators = [
@@ -113,10 +113,10 @@ export const quizDecorators = [
   {
     q: 'field decorator ต่างจาก method decorator อย่างไร?',
     options: [
-      'มันมีไม่ได้',
-      'มันไม่ได้รับ value มา wrap แต่ return initializer ที่แปลง initial value ของ field ได้',
-      'มันรันแค่ครั้งเดียวต่อ class',
-      'มันต้องเป็น static',
+      'มีไม่ได้',
+      'ไม่ได้รับ value มา wrap แต่ return initializer ที่แปลง initial value ของ field ได้',
+      'รันแค่ครั้งเดียวต่อ class',
+      'ต้องเป็น static',
     ],
     answer: 1,
   },

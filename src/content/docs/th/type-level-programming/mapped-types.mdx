@@ -1,6 +1,6 @@
 ---
 title: 'Mapped Types'
-description: 'วนซ้ำ key ของ type เพื่อ transform มัน — mapping modifier, เพิ่มและลบ readonly กับ optional และสร้าง Partial กับ Readonly เอง'
+description: 'วนซ้ำ key ของ type เพื่อ transform แต่ละ property — mapping modifier, เพิ่มและลบ readonly กับ optional และสร้าง Partial กับ Readonly เอง'
 sidebar:
   order: 2
 ---
@@ -49,7 +49,7 @@ type UserGetters = Getters<User>;
 
 ## mapping modifier: เพิ่มหรือลบ `readonly` และ `?`
 
-mapped type เปลี่ยน **modifier** ของแต่ละ property ได้ด้วย คุณเพิ่ม `readonly` หรือ `?` ด้วยการเขียนมัน และ *ลบ* ด้วย prefix `-`
+mapped type เปลี่ยน **modifier** ของแต่ละ property ได้ด้วย คุณเพิ่ม `readonly` หรือ `?` ด้วยการเขียนลงไปตรง ๆ และ *ลบ* ด้วย prefix `-`
 
 ```ts
 // ทำให้ทุก property เป็น optional (นี่คือวิธีที่ Partial ทำงาน)
@@ -74,7 +74,7 @@ export const mapDiagram = `flowchart LR
   src["T: { id: number, name: string }"] -->|"for each K in keyof T"| loop["apply transform:\nmodifier + value type"]
   loop --> out["new type:\n{ id?: number, name?: string }"]`;
 
-`-?` ลบ optional และ `-readonly` ลบ immutability — ซึ่งเป็นวิธีที่ `Required` และ utility แบบ mutable-clone ถูกเขียนพอดี เวลาเห็น `-?` ใน library แปลว่า "บังคับให้ทุก property มีอยู่จริง"
+`-?` ลบ optional และ `-readonly` ลบ immutability — นั่นคือวิธีที่ `Required` และ utility แบบ mutable-clone ถูกเขียนพอดี เวลาเห็น `-?` ใน library แปลว่า "บังคับให้ทุก property มีอยู่จริง"
 
 ## key remapping ด้วย `as`
 
@@ -95,10 +95,10 @@ type StringProps<T> = {
 };
 ```
 
-การ remap key เป็น `never` จะ **ลบ** มันออกจากผลลัพธ์ — เป็นทริกมาตรฐานสำหรับ filter property ตาม value type ของมัน
+การ remap key เป็น `never` จะ **ลบ** key นั้นออกจากผลลัพธ์ — เป็นทริกมาตรฐานสำหรับ filter property ตาม value type
 
 <Callout title="สรุปบรรทัดเดียว">
-mapped type `{ [K in keyof T]: ... }` คือ loop ระดับ type บน key ของ `T`; ภายในนั้น `T[K]` ให้ value type เดิมมา transform คุณเพิ่ม modifier ด้วยการเขียน `readonly`/`?` และลบด้วย `-readonly`/`-?` clause `as` remap key — rename มัน (ด้วย template literal) หรือ filter ออกด้วยการ remap เป็น `never` construct เดียวนี้คือวิธีที่ `Partial`, `Readonly`, `Required` และ utility type ส่วนใหญ่ถูกสร้าง
+mapped type `{ [K in keyof T]: ... }` คือ loop ระดับ type บน key ของ `T`; ภายในนั้น `T[K]` ให้ value type เดิมมา transform คุณเพิ่ม modifier ด้วยการเขียน `readonly`/`?` และลบด้วย `-readonly`/`-?` clause `as` remap key — rename key (ด้วย template literal) หรือ filter ออกด้วยการ remap เป็น `never` construct เดียวนี้คือวิธีที่ `Partial`, `Readonly`, `Required` และ utility type ส่วนใหญ่ถูกสร้าง
 </Callout>
 
 export const quizMapped = [

@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## strictNullChecks: setting ที่สำคัญที่สุด
 
-flag ที่มีค่ามากที่สุดตัวเดียวคือ `strictNullChecks` (เป็นส่วนหนึ่งของ `strict`) ถ้าไม่มีมัน `null` และ `undefined` assign เข้า *ทุก* type ได้ — billion-dollar mistake แบบเต็มพิกัด พอเปิด มันจะกลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างชัดเจน
+flag ที่มีค่ามากที่สุดตัวเดียวคือ `strictNullChecks` (เป็นส่วนหนึ่งของ `strict`) ถ้าไม่เปิด `null` และ `undefined` assign เข้า *ทุก* type ได้ — billion-dollar mistake แบบเต็มพิกัด พอเปิด จะกลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างชัดเจน
 
 ```ts
 // เมื่อเปิด strictNullChecks:
@@ -22,7 +22,7 @@ let maybe: string | undefined;
 len(maybe); // ❌ Argument of type 'string | undefined' is not assignable to 'string'
 ```
 
-error นี่แหละคือประเด็น: compiler บังคับให้คุณจัดการเคส `undefined` *ก่อน* จะ dereference เปิดมันไว้ ถ้าคุณรับ codebase ที่ไม่มีมันมา การเปิดมันคือ migration ที่ให้ผลตอบแทนสูงสุดที่คุณทำได้
+error นี่แหละคือประเด็น: compiler บังคับให้คุณจัดการเคส `undefined` *ก่อน* จะ dereference เปิด flag นี้ไว้ ถ้าคุณรับ codebase ที่ยังไม่ได้เปิดมา การเปิดคือ migration ที่ให้ผลตอบแทนสูงสุดที่คุณทำได้
 
 ## `?.` และ `??` เข้าใจ type
 
@@ -48,11 +48,11 @@ const el = document.getElementById("app")!; // assert ว่าไม่ null
 el.innerHTML = "hi"; // ไม่ error — แต่ crash ถ้า #app ไม่มีอยู่
 ```
 
-มัน **ลบ** check จริงทิ้งโดยไม่มีการ verify ตอน runtime เลย บางครั้งคุณรู้มากกว่า compiler จริง ๆ — แต่ทุก `!` คือจุดที่คุณ override safety net ไว้ และเป็นจุดที่การเปลี่ยนแปลงในอนาคตทำให้พังเงียบ ๆ ได้ เลือก check จริง (`if (!el) throw ...`) ที่ narrow อย่างซื่อสัตย์ดีกว่า เก็บ `!` ไว้สำหรับเคสที่พิสูจน์ได้
+`!` **ลบ** check จริงทิ้งโดยไม่มีการ verify ตอน runtime เลย บางครั้งคุณรู้มากกว่า compiler จริง ๆ — แต่ทุก `!` คือจุดที่คุณ override safety net ไว้ และเป็นจุดที่การเปลี่ยนแปลงในอนาคตทำให้พังเงียบ ๆ ได้ เลือก check จริง (`if (!el) throw ...`) ที่ narrow อย่างซื่อสัตย์ดีกว่า เก็บ `!` ไว้สำหรับเคสที่พิสูจน์ได้
 
 ## การ model error: Result vs throw
 
-exception ที่ throw มองไม่เห็นจาก type system — signature ของ function ไม่เคยบอกว่ามันอาจ throw อะไร **Result type** ทำให้ failure ชัดเจนและ type-checked:
+exception ที่ throw มองไม่เห็นจาก type system — signature ของ function ไม่เคยบอกว่าอาจ throw อะไร **Result type** ทำให้ failure ชัดเจนและ type-checked:
 
 ```ts
 type Result<T, E> =
@@ -70,7 +70,7 @@ if (r.ok) r.value; // narrow เป็น number
 else r.error;      // narrow เป็น string
 ```
 
-ตอนนี้ caller *ต้อง* จัดการทั้งสอง branch — compiler ไม่ยอมให้ลืม มันคือ discriminated union (field `ok` เป็น tag) ซึ่งพาเราไปสู่เครื่องมือสุดท้าย
+ตอนนี้ caller *ต้อง* จัดการทั้งสอง branch — compiler ไม่ยอมให้ลืม นี่คือ discriminated union (field `ok` เป็น tag) ซึ่งพาเราไปสู่เครื่องมือสุดท้าย
 
 ## Exhaustiveness ด้วย `never`
 
@@ -113,7 +113,7 @@ export const quizNull = [
     q: '`strictNullChecks` เปลี่ยนอะไร?',
     options: [
       'ทำให้ null เร็วขึ้น',
-      'null และ undefined เลิก assign เข้าทุก type — คุณต้องจัดการมันอย่างชัดเจน',
+      'null และ undefined เลิก assign เข้าทุก type — คุณต้องจัดการทั้งสองอย่างชัดเจน',
       'ลบ null ออกจากภาษา',
       'มีผลกับ array เท่านั้น',
     ],
@@ -133,18 +133,18 @@ export const quizNull = [
     q: 'ความเสี่ยงของ non-null assertion `!` คืออะไร?',
     options: [
       'ทำให้ code ช้าลง',
-      'มันลบ null check ทิ้งโดยไม่มีการ verify ตอน runtime จึง crash ได้ถ้าคุณคิดผิด',
+      'ลบ null check ทิ้งโดยไม่มีการ verify ตอน runtime จึง crash ได้ถ้าคุณคิดผิด',
       'ใช้ได้แค่ใน strict mode',
-      'มันเปลี่ยน value ตอน runtime',
+      'เปลี่ยน value ตอน runtime',
     ],
     answer: 1,
   },
   {
     q: 'ทริก exhaustiveness ของ `never` ช่วยอย่างไรเมื่อเพิ่ม variant ใหม่?',
     options: [
-      'มันจัดการเคสใหม่ให้อัตโนมัติ',
+      'จัดการเคสใหม่ให้อัตโนมัติ',
       'variant ที่ยังไม่ได้จัดการจะ assign เข้า never ไม่ได้ branch default จึง compile ไม่ผ่าน',
-      'มัน log warning ตอน runtime',
+      'log warning ตอน runtime',
       'ไม่มีผลอะไร',
     ],
     answer: 1,

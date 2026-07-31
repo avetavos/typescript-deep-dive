@@ -12,7 +12,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## type มี cost ตอน compile
 
-การ type check คือการคำนวณจริง และ type ที่ฉลาดเกินไปทำให้ `tsc` คลานหรือ editor หน่วงได้ type system (ที่ขึ้นชื่อว่า) ทรงพลังพอที่จะเป็นภาษาโปรแกรมของตัวเอง — และเหมือน runtime code มันเขียนในแบบที่ evaluate แพงได้
+การ type check คือการคำนวณจริง และ type ที่ฉลาดเกินไปทำให้ `tsc` คลานหรือ editor หน่วงได้ type system (ที่ขึ้นชื่อว่า) ทรงพลังพอที่จะเป็นภาษาโปรแกรมของตัวเอง — และเหมือน runtime code คือเขียนแบบที่ evaluate แพงได้เหมือนกัน
 
 ตัวการที่พบบ่อย:
 
@@ -28,7 +28,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 นอกจาก performance เหล่านี้กัดทีมจริง:
 
 - **type ฉลาดเกินจนไม่มีใครอ่านออก** conditional type 40 บรรทัดที่ประหยัด duplicate ไปสามบรรทัด มักขาดทุนสุทธิ ความฉลาดคือ cost ที่ผู้อ่านในอนาคตทุกคนต้องจ่าย
-- **`any` leak** `any` ตัวเดียวลาม: `any.foo` เป็น `any` มันจึงปิดการ check เงียบ ๆ ทุกที่ที่มันแตะ แบนมันด้วย `noImplicitAny` และ lint rule
+- **`any` leak** `any` ตัวเดียวลาม: `any.foo` เป็น `any` จึงปิดการ check เงียบ ๆ ทุกที่ที่แตะ แบนด้วย `noImplicitAny` และ lint rule
 - **cast ที่โกหก** `x as Foo` บอก compiler ให้เลิก check — ถ้า `x` ไม่ใช่ `Foo` จริง คุณเพิ่งซ่อน bug ไว้ double cast (`x as unknown as Foo`) คือธงแดงขนาดยักษ์
 - **เรื่องเซอร์ไพรส์ของ enum** numeric `enum` ยอมให้ number อะไรก็ได้เป็น value และ emit runtime code; `const` object กับ `as const` หรือ string-literal union มักชัดกว่าและถูกกว่า
 - **ใช้ `as` เกินจำเป็น** การคว้า `as` มา silence error มักหมายความว่าคุณเลิก model ปัญหาแล้วเริ่มเถียงกับ compiler
@@ -68,10 +68,10 @@ export const quizPerf = [
   {
     q: 'ทำไม `any` ตัวเดียวถึงอันตราย?',
     options: [
-      'มัน throw ตอน runtime',
-      'มัน leak — เข้าถึงอะไรบน any ก็ยังเป็น any ปิดการ check downstream เงียบ ๆ',
-      'มันทำให้ compile time เพิ่มเป็นสองเท่า',
-      'มัน assign ไม่ได้',
+      'throw ตอน runtime',
+      'leak — เข้าถึงอะไรบน any ก็ยังเป็น any ปิดการ check downstream เงียบ ๆ',
+      'ทำให้ compile time เพิ่มเป็นสองเท่า',
+      'assign ไม่ได้',
     ],
     answer: 1,
   },
@@ -79,7 +79,7 @@ export const quizPerf = [
     q: '`x as Foo` ทำอะไรจริง ๆ?',
     options: [
       'validate ตอน runtime ว่า x เป็น Foo',
-      'บอก compiler ให้ปฏิบัติต่อ x เป็น Foo โดยไม่ check — ซ่อน bug ถ้ามันผิด',
+      'บอก compiler ให้ปฏิบัติต่อ x เป็น Foo โดยไม่ check — ซ่อน bug ถ้า assert ผิด',
       'แปลง x เป็น instance ของ Foo',
       'สร้าง copy ของ x',
     ],

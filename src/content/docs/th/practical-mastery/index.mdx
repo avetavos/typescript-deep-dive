@@ -12,9 +12,9 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## จุดที่ความรู้กลายเป็น judgment
 
-ตอนนี้คุณรู้แล้วว่า type system *ทำงานอย่างไร* โมดูลนี้ว่าด้วยการใช้มัน *ให้ดี* — คือ judgment ที่แยกคนที่ผ่าน compiler ได้ ออกจากคนที่ ship TypeScript ที่ maintain ได้จริง
+ตอนนี้คุณรู้แล้วว่า type system *ทำงานอย่างไร* โมดูลนี้ว่าด้วยการใช้ type system *ให้ดี* — คือ judgment ที่แยกคนที่ผ่าน compiler ได้ ออกจากคนที่ ship TypeScript ที่ maintain ได้จริง
 
-แกนหลักคือความจริงที่ไม่ค่อยสบายใจนัก: **compiler รู้แค่สิ่งที่คุณบอกมันเท่านั้น** type คือ model ของโปรแกรมคุณ และ model ผิดได้ ทั้ง `any`, cast ที่ผิด หรือ JSON blob จาก network ล้วนโกหก checker ได้ ความเชี่ยวชาญคือการรู้ว่า model เจอกับความจริงตรงไหน แล้วปกป้อง boundary นั้น
+แกนหลักคือความจริงที่ไม่ค่อยสบายใจนัก: **compiler รู้แค่สิ่งที่คุณบอกเท่านั้น** type คือ model ของโปรแกรมคุณ และ model ผิดได้ ทั้ง `any`, cast ที่ผิด หรือ JSON blob จาก network ล้วนโกหก checker ได้ ความเชี่ยวชาญคือการรู้ว่า model เจอกับความจริงตรงไหน แล้วปกป้อง boundary นั้น
 
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
@@ -33,10 +33,10 @@ export const boundaryDiagram = `flowchart LR
   world["untyped world\nnetwork, JSON, any, casts"] -->|validate at the edge| edge["boundary\n(guards, schemas)"]
   edge -->|trusted types| inside["your typed code\n(safe to trust)"]`;
 
-ทุกอย่างในนี้เป็นรูปแบบหนึ่งของ **validate at the edge, trust inside** ผลักความไม่แน่นอนไปไว้ที่ boundary ของโปรแกรม เปลี่ยนมันเป็น type จริงตรงนั้น แล้วปล่อยให้ทั้งภายในได้รับการการันตี ทำ boundary ให้ถูก แล้ว type system จะตอบแทนคุณในทุกที่ที่เหลือ
+ทุกอย่างในนี้เป็นรูปแบบหนึ่งของ **validate at the edge, trust inside** ผลักความไม่แน่นอนไปไว้ที่ boundary ของโปรแกรม เปลี่ยนให้เป็น type จริงตรงนั้น แล้วปล่อยให้ทั้งภายในได้รับการการันตี ทำ boundary ให้ถูก แล้ว type system จะตอบแทนคุณในทุกที่ที่เหลือ
 
 <Callout title="การเปลี่ยน mindset">
-เลิกมองว่า compiler สีเขียว = ถูกต้อง มันพิสูจน์แค่ว่า code ของคุณ *internally consistent* กับ type ที่คุณเขียน — ไม่มากกว่านั้น ถ้า type เหล่านั้นไม่ตรงกับความจริงตอน runtime (input ที่ไม่ได้ validate, `as` ที่ผิด, `any` ที่หลุดมา) compiler ก็จะผิดอย่างมั่นใจ หน้าที่ของมือโปรคือทำให้ type *สมควรได้รับความเชื่อใจ* ตรง edge
+เลิกมองว่า compiler สีเขียว = ถูกต้อง compiler พิสูจน์แค่ว่า code ของคุณ *internally consistent* กับ type ที่คุณเขียน — ไม่มากกว่านั้น ถ้า type เหล่านั้นไม่ตรงกับความจริงตอน runtime (input ที่ไม่ได้ validate, `as` ที่ผิด, `any` ที่หลุดมา) compiler ก็จะผิดอย่างมั่นใจ หน้าที่ของมือโปรคือทำให้ type *สมควรได้รับความเชื่อใจ* ตรง edge
 </Callout>
 
 export const quizIndex = [
@@ -44,7 +44,7 @@ export const quizIndex = [
     q: 'ความจริงหลักของโมดูลนี้คืออะไร?',
     options: [
       'TypeScript ทำให้ runtime error เป็นไปไม่ได้',
-      'compiler รู้แค่สิ่งที่คุณบอกมัน — type คือ model ที่ผิดได้',
+      'compiler รู้แค่สิ่งที่คุณบอก — type คือ model ที่ผิดได้',
       'type ตรงกับความจริงตอน runtime เสมอ',
       'ไม่จำเป็นต้อง validate ถ้าใช้ strict mode',
     ],

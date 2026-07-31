@@ -39,7 +39,7 @@ n.toUpperCase(); // ❌ Error: number has no toUpperCase — the bug is caught
 
 ## จริง ๆ แล้ว generics คืออะไร
 
-generic คือ **function ในระดับ type** — มันรับ type เป็น input แล้วผลิต type เป็น output `identity<T>` บอกว่า "สำหรับ type `T` ใด ๆ ก็ตาม รับ `T` แล้วคืน `T`" อันนี้เรียกว่า *parametric polymorphism* — implementation เดียว ที่ parameterize ด้วย type
+generic คือ **function ในระดับ type** — รับ type เป็น input แล้วผลิต type เป็น output `identity<T>` บอกว่า "สำหรับ type `T` ใด ๆ ก็ตาม รับ `T` แล้วคืน `T`" อันนี้เรียกว่า *parametric polymorphism* — implementation เดียว ที่ parameterize ด้วย type
 
 <Mermaid title="A generic is one implementation over many types" code={genDiagram} />
 
@@ -58,7 +58,7 @@ export const genDiagram = `flowchart LR
 | Inference & `infer` | type argument ถูก infer อย่างไร และการดึง type ออกด้วย `infer` |
 
 <Callout title="The one-line takeaway">
-Generics ทำให้ implementation เดียวทำงานได้กับหลาย type **โดยไม่เสียข้อมูล type** — ซึ่งเป็นสิ่งที่ `any` ทิ้งไป type parameter อย่าง `T` คือตัวยึดที่ผู้เรียกหรือ inference เติมค่าให้ ดังนั้น `identity<T>` จึงคืน type เดียวกับที่รับเข้ามาเป๊ะ มอง generic เป็น function ที่รันในระดับ type
+Generics ทำให้ implementation เดียวทำงานได้กับหลาย type **โดยไม่เสียข้อมูล type** — นั่นคือสิ่งที่ `any` ทิ้งไป type parameter อย่าง `T` คือตัวยึดที่ผู้เรียกหรือ inference เติมค่าให้ ดังนั้น `identity<T>` จึงคืน type เดียวกับที่รับเข้ามาเป๊ะ มอง generic เป็น function ที่รันในระดับ type
 </Callout>
 
 export const quizIndex = [
