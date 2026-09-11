@@ -1,6 +1,6 @@
 ---
 title: 'Performance & Pitfalls'
-description: 'ทำไม type checker ช้าลง, footgun ที่กัด codebase จริง และวิธี diagnose กับ simplify เมื่อ type ฉลาดเกินไป'
+description: 'ทำไม type checker ช้าลง, native compiler ของ TypeScript 7 แก้อะไรได้และไม่ได้, footgun ที่กัด codebase จริง, การเปลี่ยนพฤติกรรมล่าสุดที่ทำให้ error ใหม่โผล่ และวิธี diagnose กับ simplify เมื่อ type ฉลาดเกินไป'
 sidebar:
   order: 4
 ---
@@ -23,6 +23,15 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 คุณมักไม่สังเกตจนกว่าไฟล์หนึ่งใช้เวลา check เป็นวินาที หรือ red squiggle ใน editor ตามการพิมพ์ไม่ทัน นั่นคือสัญญาณให้มองที่ type ไม่ใช่แค่ code
 
+## TypeScript 7 แก้อะไรได้ — และแก้อะไรไม่ได้
+
+native compiler (7.0, กรกฎาคม 2026) ทำให้การ check *ทั้งโปรแกรม* เร็วขึ้น 8–12 เท่า และลดเวลาที่ editor ใช้ก่อนเห็น error แรกจาก 17.5 s เหลือราว 1.3 s บน codebase ของ VS Code มันทำได้ด้วย checker แบบขนาน (`tsc --checkers 4` เป็น default; `--checkers 8` สำหรับเครื่อง CI ใหญ่ ๆ) และ native file watcher คำแนะนำเก่าที่ว่า "เอา `tsc` ออกจาก hot path เพราะมันช้า" จึงหมดอายุแล้ว — รันมันทุกครั้งที่ save ได้เลย
+
+สิ่งที่มัน **ไม่ได้** แก้คือ type ที่ผิดธรรมชาติ instantiation แบบ exponential ก็ยัง exponential ใน Go เหมือนกัน recursive conditional type ที่เคยใช้ 30 s ใน TypeScript 6 ใช้ไม่กี่วินาทีใน 7 และยังกินเวลา build ส่วนใหญ่อยู่ดี และ union 5,000 member ก็ยังทวีคูณทุก operation ที่แตะมัน มีสองเรื่องที่เกี่ยวกัน:
+
+- 5.9 cache type instantiation ระหว่างทาง ซึ่งกำจัด error "excessive depth" ส่วนใหญ่ใน library หนัก ๆ อย่าง Zod และ tRPC ถ้าคุณยังเจออยู่ แปลว่า type นั้นลึกเกินไปจริง ๆ
+- editor check region ที่มองเห็นก่อน (region-prioritised diagnostics, 5.6) — squiggle โผล่ในสิ่งที่คุณกำลังดูภายในเสี้ยวของการ check เต็ม — ดังนั้น *editor* ที่หน่วงแทบทุกครั้งหมายถึง type ที่แพงใน *ไฟล์ที่เปิดอยู่* ไม่ใช่ทั้งโปรเจกต์
+
 ## footgun ที่พบบ่อย
 
 นอกจาก performance เหล่านี้กัดทีมจริง:
@@ -32,6 +41,17 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 - **cast ที่โกหก** `x as Foo` บอก compiler ให้เลิก check — ถ้า `x` ไม่ใช่ `Foo` จริง คุณเพิ่งซ่อน bug ไว้ double cast (`x as unknown as Foo`) คือธงแดงขนาดยักษ์
 - **เรื่องเซอร์ไพรส์ของ enum** numeric `enum` ยอมให้ number อะไรก็ได้เป็น value และ emit runtime code; `const` object กับ `as const` หรือ string-literal union มักชัดกว่าและถูกกว่า
 - **ใช้ `as` เกินจำเป็น** การคว้า `as` มา silence error มักหมายความว่าคุณเลิก model ปัญหาแล้วเริ่มเถียงกับ compiler
+
+## การเปลี่ยนล่าสุดที่ทำให้ error ใหม่โผล่
+
+การ upgrade compiler บางครั้งเปลี่ยน code ที่เคยเงียบให้กลายเป็น error นี่คือรายการที่คนเจอในปี 2025–2026 และทุกข้อคือ checker ที่ถูกต้อง:
+
+- **`ArrayBuffer` ไม่ใช่ supertype ของ typed array อีกต่อไป (5.9)** `Uint8Array` เป็น generic บน buffer ของมัน ดังนั้น function ที่รับ `ArrayBuffer` จะปฏิเสธ `Uint8Array` (และ `Buffer` ของ Node) ส่ง `data.buffer` แทน หรือ type parameter เป็น `Uint8Array<ArrayBuffer>` / `ArrayBufferLike`
+- **check ที่ truthy เสมอเป็น error (5.6)** `if (/regex/)` หรือ `if (x => 0)` ถูก flag เช่นเดียวกับ `a < b ?? c` ที่ฝั่งซ้ายไม่มีวัน nullish
+- **แต่ละ branch ของ `return` ถูก check แยกกัน (5.8)** `return cond ? untyped.get(k) : "fallback"` เคยถูก `any` ใน branch หนึ่งบังไว้ ตอนนี้แต่ละ branch ต้องตรงกับ return type ที่ประกาศ
+- **ตัวแปรที่ถูกใช้ก่อน initialise ถูกจับใน nested function (5.7)**
+- **`infer` ใน template literal แยกตาม code point (7.0)** `HeadTail<"😀abc">` เป็น `["😀", "abc"]` — type ที่เคยสมมติว่าเป็นครึ่ง UTF-16 จะเปลี่ยน shape
+- **JSDoc ในไฟล์ JavaScript เข้มขึ้น (7.0)** `@enum` แบบ Closure, type `?` เดี่ยว ๆ, postfix `!` และ `@class` ไม่ถูกยอมรับภายใต้ `checkJs` อีกต่อไป
 
 <Mermaid title="any ตัวเดียว leak ทั่ว codebase อย่างไร" code={anyDiagram} />
 
@@ -45,13 +65,15 @@ export const anyDiagram = `flowchart LR
 เมื่อการ check รู้สึกช้า ให้วัดแทนการเดา:
 
 - `tsc --extendedDiagnostics` พิมพ์ว่าเวลาและ memory ไปไหน (check time, instantiation count, memory)
-- `tsc --generateTrace traceDir` สร้าง trace ที่เปิดใน profiler เพื่อหา type ที่แพงได้
+- `tsc --generateTrace traceDir` สร้าง trace ที่เปิดใน profiler เพื่อหา type ที่แพงได้ รันพร้อม `--singleThreaded` เพื่อให้ตัวเลขไม่ถูกกระจายไปตาม checker worker
+- `tsc --noCheck` บอกคุณว่า build ส่วนไหนเป็น emit และส่วนไหนเป็น check ถ้า `noCheck` ก็ยังช้า ปัญหาคือ I/O หรือ glob ใน `include` ไม่ใช่ type ของคุณ
+- `skipLibCheck: true` ยังเป็นชัยชนะที่ถูกที่สุด: มันหยุดการ check ซ้ำทุก `.d.ts` ใน `node_modules`
 - bisect: comment type ที่สงสัยออกแล้วดูตัวเลขขยับ
 
 การแก้เกือบทุกครั้งคือ **simplify**: แทน conditional type ที่วีรบุรุษด้วย union ธรรมดา, แตก type ยักษ์เป็นชิ้นเล็กที่มีชื่อ หรือยอมรับ type ที่หลวมกว่านิดหน่อยแต่ถูกกว่า 10 เท่าและปลอดภัยพอ ๆ กันในทางปฏิบัติ
 
 <Callout title="สรุปหนึ่งบรรทัด">
-การ type check คือการคำนวณ union ใหญ่, recursion ลึก และ distributive conditional จึงทำให้ `tsc` และ editor ช้าได้ footgun ประจำวัน — `any` ที่ leak, cast ที่โกหก, type ฉลาดจนอ่านไม่ออก และ numeric enum — ทำให้เสียทั้งความถูกต้องและความชัดเจน เมื่ออะไรช้า ให้วัดด้วย `--extendedDiagnostics` / `--generateTrace` แล้ว **simplify**: type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ไม่มีใคร maintain ได้
+การ type check คือการคำนวณ union ใหญ่, recursion ลึก และ distributive conditional จึงทำให้ `tsc` และ editor ช้าได้ — และ native compiler แบบขนานของ TypeScript 7 ทำให้ *โปรแกรม* เร็วขึ้นสิบเท่าโดยไม่ได้ทำให้ *type* ที่ผิดธรรมชาติถูกลง footgun ประจำวัน — `any` ที่ leak, cast ที่โกหก, type ฉลาดจนอ่านไม่ออก และ numeric enum — ทำให้เสียทั้งความถูกต้องและความชัดเจน และ release ล่าสุดเปลี่ยนความผิดพลาดที่เคยเงียบหลายอย่าง (check ที่ truthy เสมอ, `ArrayBuffer` เทียบ typed array, branch ของ return ที่ไม่ถูก check) ให้เป็น error เมื่ออะไรช้า ให้วัดด้วย `--extendedDiagnostics` / `--generateTrace --singleThreaded` แล้ว **simplify**: type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ไม่มีใคร maintain ได้
 </Callout>
 
 export const quizPerf = [
@@ -82,6 +104,16 @@ export const quizPerf = [
       'บอก compiler ให้ปฏิบัติต่อ x เป็น Foo โดยไม่ check — ซ่อน bug ถ้า assert ผิด',
       'แปลง x เป็น instance ของ Foo',
       'สร้าง copy ของ x',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'build ของคุณลดจาก 60 s เหลือ 6 s บน TypeScript 7 แต่ไฟล์เดียวที่มี recursive conditional type ยังใช้ 4 s เพราะอะไร?',
+    options: [
+      'native compiler ไม่รองรับ conditional type',
+      'การ check แบบขนานเร่งทั้งโปรแกรม แต่ type แบบ exponential ก็ยัง exponential — ต้อง simplify type',
+      'ต้องตั้ง `--checkers` เป็น 1 สำหรับ recursive type',
+      'ไฟล์นั้นต้องการ `skipLibCheck`',
     ],
     answer: 1,
   },

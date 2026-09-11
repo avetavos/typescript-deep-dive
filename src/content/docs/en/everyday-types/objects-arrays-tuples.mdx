@@ -1,6 +1,6 @@
 ---
 title: 'Objects, Arrays & Tuples'
-description: 'Object types in depth — optional and readonly properties, index signatures — plus the real difference between arrays and tuples.'
+description: 'Object types in depth — optional and readonly properties, index signatures — plus the real difference between arrays and tuples, the es2025 built-ins (Set algebra, iterator helpers, groupBy), generic typed arrays, and using.'
 sidebar:
   order: 4
 ---
@@ -86,6 +86,52 @@ function paint(color: readonly number[]) { /* can't mutate color */ }
 
 Preferring `readonly` array parameters is a cheap, high-value habit: it prevents a whole class of accidental-mutation bugs and communicates ownership.
 
+## Newer built-ins your `lib` already types (es2024 / es2025)
+
+With `target` and `lib` at `es2025` (the TypeScript 7 default), a lot of collection code that used to need a helper library is typed out of the box:
+
+- **Set algebra (5.5):** `a.union(b)`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` — all return correctly typed `Set`s.
+- **Iterator helpers (5.6):** generators and built-in iterators have `.map`, `.filter`, `.take`, `.drop`, `.flatMap`, `.reduce`, `.toArray`, plus `Iterator.from(...)`. Their type is `IteratorObject<T>` (and `AsyncIteratorObject<T>`), distinct from the `Iterator` interface you implement by hand:
+
+  ```ts
+  function* naturals() { let i = 1; while (true) yield i++; }
+  const evens = naturals().map((n) => n * 2).take(3).toArray(); // number[]
+
+  const byEmail = new Map(userById.entries().map(([id, u]) => [u.email, id]));
+  ```
+
+- **Grouping (es2024):** `Object.groupBy(items, (x) => x.kind)` returns `Partial<Record<K, T[]>>`; `Map.groupBy` returns a `Map`.
+- **Upsert (6.0):** `map.getOrInsert(key, fallback)` and `map.getOrInsertComputed(key, () => …)`.
+- **Also in `es2025`:** `RegExp.escape`, `Promise.try`, `Promise.withResolvers`, and built-in **Temporal** types (`Temporal.Now.instant()`), so you no longer need extra `@types` for them.
+
+## Typed arrays are generic now (5.7 / 5.9)
+
+`Uint8Array` and friends became generic over their buffer — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — and in 5.9 `ArrayBuffer` stopped being a supertype of the typed arrays. The practical effect: APIs that want a `BufferSource` reject `ArrayBufferLike`-typed values, and Node's `Buffer` is no longer assignable to `Uint8Array<ArrayBuffer>`. Fix it by naming the buffer type or passing `.buffer`:
+
+```ts
+const data = new Uint8Array([1, 2, 3]);      // Uint8Array<ArrayBuffer>
+send(data.buffer);                            // ✅ ArrayBuffer
+function send(b: Uint8Array<ArrayBuffer>) {}  // be explicit when you own the API
+```
+
+## `using`: scoped cleanup for resources (5.2)
+
+Explicit Resource Management — `using` and `await using` — shipped in TypeScript 5.2, and Node.js 24+ and modern browsers now run it natively. A value with `[Symbol.dispose]` (or `[Symbol.asyncDispose]`) is cleaned up when the block exits, in reverse order, even on `throw`:
+
+```ts
+function openFile(path: string) {
+  const fd = fs.openSync(path, "r");
+  return { fd, [Symbol.dispose]() { fs.closeSync(fd); } };
+}
+
+function read() {
+  using file = openFile("data.txt"); // closed automatically at block end
+  return fs.readFileSync(file.fd);
+}
+```
+
+`Disposable` and `AsyncDisposable` are the interfaces to implement, and `DisposableStack` collects several. Model resources this way instead of `try`/`finally` ladders.
+
 <Callout title="The one-line takeaway">
 Object types are shapes with `readonly` and optional (`?`) modifiers — remember an optional property is `T \| undefined` and must be handled. Index signatures type unknown keys uniformly (turn on `noUncheckedIndexedAccess` so absent keys read as `T \| undefined`). An **array** is variable-length and homogeneous; a **tuple** is fixed-length with a type per position. Prefer `readonly` arrays for parameters you won't mutate.
 </Callout>
@@ -128,6 +174,16 @@ export const quizOAT = [
       'readonly [255, 128, 0] — a readonly tuple of literals',
       '[number, number, number]',
       'any[]',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'What type do iterator helper methods such as `.map` and `.take` return in TypeScript 5.6+?',
+    options: [
+      'An Array',
+      'IteratorObject<T> — the built-in iterator type that carries the helper methods',
+      'Promise<T[]>',
+      'unknown',
     ],
     answer: 1,
   },

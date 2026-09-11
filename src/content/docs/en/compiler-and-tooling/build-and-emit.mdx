@@ -1,6 +1,6 @@
 ---
 title: 'Build & Emit'
-description: 'tsc as type-checker versus bundlers that strip types, isolatedModules, type-only imports, and project references for monorepos.'
+description: 'tsc as type-checker versus bundlers that strip types, the native TypeScript 7 compiler and its parallel checkers, running .ts directly in Node, isolatedModules, type-only imports, noCheck and isolatedDeclarations, and project references for monorepos.'
 sidebar:
   order: 5
 ---
@@ -22,14 +22,64 @@ export const trackDiagram = `flowchart LR
   bundler --> out["shipped JavaScript"]
   tsc --> ci["pass/fail in CI"]`;
 
-- The **bundler** (esbuild, swc, Vite) transpiles each file, stripping types. It is extremely fast because it never checks anything — it looks at one file at a time and deletes the types.
+- The **bundler** (esbuild, swc, Vite/Rolldown) transpiles each file, stripping types. It is fast because it never checks anything — it looks at one file at a time and deletes the types.
 - **`tsc --noEmit`** does the whole-program type check and produces no output. This is what actually catches your bugs, and you run it in CI (and your editor runs it continuously).
 
-Ship what the bundler emits; trust what `tsc` reports. `noEmit` tells `tsc` to be a pure checker.
+Ship what the bundler emits; trust what `tsc` reports. `noEmit` tells `tsc` to be a pure checker. The split used to be justified by speed — "tsc is too slow to be in the hot path" — and that argument has mostly evaporated, as the next section explains. The split still stands for a better reason: bundlers do things `tsc` never will (tree-shaking, code-splitting, asset handling), and the checker should not care how you bundle.
+
+## The native compiler (TypeScript 7)
+
+TypeScript 7.0 (July 2026) is the compiler and language server **rewritten in Go**. From your side almost nothing changes: `npm install -D typescript` installs it, the binary is still `tsc`, `tsconfig.json` is the same file, and it reports the same errors. What changes is the clock:
+
+| Codebase | TypeScript 6 | TypeScript 7 (`--checkers 4`) | Speed-up |
+|----------|--------------|-------------------------------|----------|
+| VS Code | 125.7 s | 10.6 s | 11.9× |
+| Sentry | 139.8 s | 15.7 s | 8.9× |
+| Playwright | 12.8 s | 1.47 s | 8.7× |
+| tldraw | 11.2 s | 1.46 s | 7.7× |
+
+Memory drops 6–26% at the same time, and the editor reports its first error in the VS Code repo in about 1.3 s instead of 17.5 s. Where the speed comes from, and what it means for you:
+
+- **Parallel type-checking.** The checker splits the program across worker threads: `tsc --checkers 4` is the default, `--checkers 8` pushes VS Code to 16.7× faster, and `--singleThreaded` turns it off when you want deterministic profiling. In `--build` mode, `--builders N` checks independent project references in parallel.
+- **Rebuilt `--watch`.** File watching now uses a native watcher (the Parcel watcher ported to Go) instead of polling, so watch mode on a large repo no longer pins a CPU core.
+- **Deterministic type ordering.** Types in error messages and `.d.ts` output are printed in a stable order regardless of which thread saw them first. TypeScript 6.0 exposes this as `--stableTypeOrdering` so you can diff the two compilers' output before switching.
+- **No programmatic API in 7.0.** `import ts from "typescript"` for custom transformers, linters, and language-tool plugins does not exist yet — 7.1 will ship a new one. Until then, tools that need the API (typescript-eslint, Volar) run TypeScript 6 via the `@typescript/typescript6` package, and you can install both side by side:
+
+```json
+{
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@typescript/typescript6": "^6.0.2"
+  }
+}
+```
+
+- **Editors.** VS Code ships the TypeScript 7 language server (a "Disable TypeScript 7 Language Server" command falls back to 6 if needed); anything LSP-based works with it. Frameworks whose template checking embeds the compiler — Vue, Svelte, Astro, Angular — keep using 6.0 in the editor until the 7.1 API lands, so a hybrid setup (7 for `tsc`, 6 for the editor) is normal in those projects for now.
+
+Two behavioural changes are worth knowing: JSDoc-only JavaScript loses the Closure-style forms (`@enum`, a bare `?` type, postfix `!`, `@class`), and template-literal `infer` now splits strings by Unicode code point, so `HeadTail<"😀abc">` is `["😀", "abc"]` rather than a pair of surrogate halves.
+
+## Run TypeScript without a build
+
+Node 22.6+ (default since 23.6, and in every Node 24 LTS) runs `node app.ts` directly by *stripping* the type annotations — no `tsc`, no bundler, no loader. Deno and Bun have done this for years. The catch is the word *stripping*: the runtime deletes types; it does not transform syntax. Anything TypeScript adds that needs real JavaScript emitted — `enum`, `namespace` with code in it, class parameter properties, `import x = require()` — is rejected.
+
+`erasableSyntaxOnly: true` (5.8) makes `tsc` enforce exactly that rule at check time, so the code you type-check is the code Node can run:
+
+```ts
+// with erasableSyntaxOnly
+class Point {
+  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit
+}
+enum Color { Red, Green }                             // ❌ enums need emit
+
+class Point2 { constructor(readonly x: number) {} }   // ✅ readonly is erasable
+const Color2 = { Red: "red", Green: "green" } as const; // ✅ a const object instead
+```
+
+Pair it with `rewriteRelativeImportExtensions` and you can develop against `.ts` files in place and still emit a clean `.js` package with `tsc` for publishing.
 
 ## isolatedModules: making single-file transpilation safe
 
-Because bundlers transpile **one file at a time**, they cannot see types from other files. A few TypeScript constructs are ambiguous under single-file transpilation — most importantly, re-exporting a type looks identical to re-exporting a value. `isolatedModules: true` makes `tsc` flag anything a single-file transpiler could get wrong, so your code stays compatible with esbuild and swc.
+Because bundlers and type-strippers work **one file at a time**, they cannot see types from other files. A few TypeScript constructs are ambiguous under single-file transpilation — most importantly, re-exporting a type looks identical to re-exporting a value. `isolatedModules: true` makes `tsc` flag anything a single-file transpiler could get wrong, so your code stays compatible with esbuild, swc, and Node's stripper.
 
 ```ts
 // with isolatedModules, tsc forces you to be explicit here:
@@ -46,7 +96,19 @@ import type { User } from "./user";     // erased entirely at emit
 import { type User, save } from "./db"; // User erased, save kept
 ```
 
-`verbatimModuleSyntax: true` enforces this discipline: any import that is *not* marked `type` is emitted verbatim as a runtime import. It removes a whole category of surprises where the compiler silently dropped or kept an import, and it is the recommended setting for new projects.
+`verbatimModuleSyntax: true` enforces this discipline: any import that is *not* marked `type` is emitted verbatim as a runtime import. It removes a whole category of surprises where the compiler silently dropped or kept an import, and `tsc --init` turns it on for you.
+
+## Splitting emit from checking the other way: `noCheck` and `isolatedDeclarations`
+
+`noEmit` is "check, don't emit". Since 5.6 there is the mirror image: **`noCheck`** is "emit, don't check" — `tsc` runs only the syntactic passes it needs to produce output. On its own it is a slower esbuild, but combined with **`isolatedDeclarations`** (5.5) it becomes useful: if every export carries an explicit type, `.d.ts` files can be generated per file without the checker, which means declaration emit can run in parallel with type-checking, or be done by a bundler plugin entirely.
+
+```ts
+// with isolatedDeclarations
+export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
+export function parse(input: string): unknown { return JSON.parse(input); } // ✅
+```
+
+The cost is annotating your public API — which, for a library, you should be doing anyway.
 
 ## Project references for monorepos
 
@@ -59,10 +121,10 @@ In a large repo with several packages, type-checking everything from scratch on 
 }
 ```
 
-With `composite: true`, `tsc --build` checks each referenced project once, caches the result, and only rechecks what changed. It turns an O(whole-repo) check into an incremental one — the standard way to keep type-checking fast as a monorepo grows.
+With `composite: true`, `tsc --build` checks each referenced project once, caches the result in `.tsbuildinfo` (always written since 5.6), and only rechecks what changed. Since 5.6 a build **continues past errors** in an upstream project so you see every failure in one run — pass `--stopOnBuildErrors` for the old fail-fast behaviour — and TypeScript 7 checks independent projects concurrently with `--builders`. It turns an O(whole-repo) check into an incremental, parallel one.
 
 <Callout title="The one-line takeaway">
-Split the build: let a fast bundler strip types and emit JavaScript, and run `tsc --noEmit` separately to actually check. Turn on `isolatedModules` and `verbatimModuleSyntax` so your code is safe for single-file transpilers and your type-only imports are explicit. In a monorepo, project references with `composite: true` make `tsc --build` incremental.
+Let a bundler emit and let `tsc` check — and with TypeScript 7's native, parallel compiler (`--checkers`, `--builders`, a native watcher) the check is 8–12× faster than a year ago. Run `.ts` directly in Node by keeping to erasable syntax (`erasableSyntaxOnly`), stay single-file-safe with `isolatedModules` and `verbatimModuleSyntax`, use `noCheck` + `isolatedDeclarations` when you want declarations without the checker, and use project references so `tsc --build` is incremental in a monorepo. No programmatic API ships in 7.0 — tools that need one use `@typescript/typescript6` until 7.1.
 </Callout>
 
 export const quizBuild = [
@@ -77,12 +139,32 @@ export const quizBuild = [
     answer: 1,
   },
   {
-    q: 'Why is `isolatedModules` recommended when using a bundler?',
+    q: 'What is the main thing TypeScript 7 changed about `tsc`?',
     options: [
-      'It makes types run at runtime',
-      'Bundlers transpile one file at a time, and `isolatedModules` flags constructs a single-file transpiler could get wrong',
-      'It disables strict mode',
-      'It bundles faster',
+      'A new tsconfig file format',
+      'The compiler was rewritten in Go and type-checks in parallel (`--checkers`), making builds roughly 10× faster with the same errors',
+      'It emits WebAssembly instead of JavaScript',
+      'It no longer needs a tsconfig.json',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'A lint plugin does `import ts from "typescript"` and breaks after upgrading to TypeScript 7. Why?',
+    options: [
+      'TypeScript 7 removed `.d.ts` support',
+      'TypeScript 7.0 ships no programmatic API; such tools must use the `@typescript/typescript6` package until 7.1',
+      'The import must be `require`',
+      'Lint plugins are no longer allowed',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Why does `erasableSyntaxOnly` reject `enum` and constructor parameter properties?',
+    options: [
+      'They are slow to type-check',
+      'They need real JavaScript emitted, and runtimes like Node that only strip types cannot execute them',
+      'They are deprecated in TypeScript 7',
+      'They break `isolatedModules`',
     ],
     answer: 1,
   },
@@ -93,16 +175,6 @@ export const quizBuild = [
       'That the import is erased at emit and never becomes a runtime import',
       'That User is loaded lazily',
       'That User is validated at runtime',
-    ],
-    answer: 1,
-  },
-  {
-    q: 'What problem do project references with `composite: true` solve?',
-    options: [
-      'They shrink the output bundle',
-      'They make type-checking a large monorepo incremental instead of rechecking everything each time',
-      'They add runtime type checks',
-      'They replace the bundler',
     ],
     answer: 1,
   },

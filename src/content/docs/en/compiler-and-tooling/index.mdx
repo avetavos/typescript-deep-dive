@@ -1,6 +1,6 @@
 ---
 title: 'The Compiler & Tooling'
-description: 'How tsc actually works, the tsconfig options that matter, module resolution, declaration files, and separating type-checking from emitting code.'
+description: 'How tsc actually works in the TypeScript 7 era, the tsconfig options that matter, module resolution, declaration files, and separating type-checking from emitting code.'
 sidebar:
   order: 1
 ---
@@ -16,14 +16,16 @@ Everything you learned about types is enforced by one program: the TypeScript co
 
 Your `tsconfig.json` is where you decide how strict the checker is, which JavaScript features to target, how modules are resolved, and what (if anything) gets emitted. Getting this file right is the difference between TypeScript catching bugs and TypeScript quietly waving them through.
 
+This module is written against **TypeScript 7** — the compiler rewritten in Go (July 2026) — and the **6.0** release that preceded it, which flipped the defaults (`strict` on, ESM out, no auto-loaded `@types`) and retired a decade of legacy options. Where a lesson mentions an older behaviour, it is labelled as such.
+
 ## What this module covers
 
 | Lesson | What you'll learn |
 |--------|-------------------|
-| tsconfig, deep | The high-value flags — `strict` and its family, `target`, `module`, and the strict-adjacent options |
-| Modules & resolution | ESM vs CJS, and how `tsc` finds the files you import |
-| Declaration files | What `.d.ts` files are, how to write them, and where `@types` comes from |
-| Build & emit | `tsc` vs bundlers, `isolatedModules`, type-only imports, and project references |
+| tsconfig, deep | The 6/7 defaults, what `tsc --init` writes, `strict` and its family, and the options that were removed |
+| Modules & resolution | ESM vs CJS, `nodenext` / `node20` / `bundler`, import attributes, `import defer`, and why `esModuleInterop` is history |
+| Declaration files | What `.d.ts` files are, `types: []`, `isolatedDeclarations`, and where `@types` comes from |
+| Build & emit | The native compiler and `--checkers`, `tsc` vs bundlers, running `.ts` in Node, `isolatedModules`, and project references |
 
 ## The two jobs of tsc
 
@@ -36,7 +38,7 @@ export const jobsDiagram = `flowchart LR
   check --> ci["run in CI to catch bugs"]
   emit --> ship["run or bundle the JS"]`;
 
-Keep these two jobs distinct and the whole toolchain makes sense. A bundler like esbuild can do job 2 in milliseconds because it just strips the types without understanding them — which means it will happily emit code that does not type-check. That is why the standard advice is: **let the bundler emit, and run `tsc --noEmit` in CI to actually check.** The rest of this module unpacks the config that controls both jobs.
+Keep these two jobs distinct and the whole toolchain makes sense. A bundler like esbuild can do job 2 in milliseconds because it just strips the types without understanding them — which means it will happily emit code that does not type-check. That is why the standard advice is: **let the bundler emit, and run `tsc --noEmit` in CI to actually check.** With TypeScript 7 that check is roughly ten times faster than it was, so the pattern costs seconds, not minutes. The rest of this module unpacks the config that controls both jobs.
 
 <Callout title="The one-line takeaway">
 `tsc` does two separable jobs: **type-checking** and **emitting JavaScript**. Your `tsconfig.json` controls both, plus how modules resolve and how strict the checks are. Bundlers can emit far faster by skipping the check entirely — so the durable pattern is to bundle with one tool and type-check with `tsc` separately.

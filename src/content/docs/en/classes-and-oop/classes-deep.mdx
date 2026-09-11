@@ -66,6 +66,29 @@ class User {
 
 This is equivalent to declaring `id` and `name` as fields and assigning them in the body. It is purely a convenience, but a widely used one.
 
+### Parameter properties vs erasable syntax
+
+Parameter properties are one of the few TypeScript features that *generate* code: the compiler has to emit the `this.id = id` assignments. That matters more than it used to. Node runs `.ts` files directly by **stripping** types (Node 22.6+ behind a flag, on by default since Node 23.6 / 24), and TypeScript 5.8 added `--erasableSyntaxOnly` to enforce that your code only uses syntax that can be erased — so under either, parameter properties are an error, alongside `enum`, `namespace`s with runtime code, and `import =`.
+
+```ts
+// ❌ under --erasableSyntaxOnly / node file.ts
+class User {
+  constructor(public readonly id: string) {}
+  //          ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  // This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+}
+
+// ✅ the explicit form — same runtime shape, pure erasable syntax
+class User {
+  readonly id: string;
+  constructor(id: string) {
+    this.id = id;
+  }
+}
+```
+
+Two related notes. Since TypeScript 6.0, `strict` is on by default, so `strictPropertyInitialization` is too: a field declared without an initializer must be definitely assigned in the constructor (or marked `id!: string` if you assign it elsewhere). And the `accessor` keyword (5.0) declares an *auto-accessor* — a getter/setter pair backed by a private slot — which, like stage-3 decorators, is standard ECMAScript syntax and therefore erasable-safe. Since 5.6 the `override` checks also apply to members with computed names such as `[sym]() {}`.
+
 ## `static` members
 
 `static` members belong to the **class itself**, not to instances. They exist at runtime as properties on the constructor function.
@@ -131,6 +154,16 @@ export const quizDeep = [
       'It declares a field and assigns it from the parameter automatically',
       'It makes the parameter global',
       'It marks the class abstract',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Under `--erasableSyntaxOnly` (or Node type stripping), what happens to `constructor(public id: string)`?',
+    options: [
+      'It works — the modifier is erased',
+      'It is an error, because parameter properties require the compiler to emit code; declare the field and assign it explicitly instead',
+      'It becomes a static member',
+      'It is silently ignored',
     ],
     answer: 1,
   },

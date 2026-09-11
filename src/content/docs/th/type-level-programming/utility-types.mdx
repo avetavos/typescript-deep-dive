@@ -71,6 +71,23 @@ type P = Parameters<(a: string, b: number) => void>; // [string, number]
 
 `infer R` match ตำแหน่ง return ของ function แล้ว bind เข้า `R`; `infer P` match parameter list ทั้งหมดเป็น tuple `Awaited` เพิ่ม recursion เพื่อลอก promise ที่ซ้อนกัน
 
+## built-in รุ่นใหม่ที่ควรรู้
+
+ตารางข้างบนคือชุดคลาสสิก มีตัวที่เพิ่มมาทีหลังอีกไม่กี่ตัวที่ใช้ primitive ชุดเดิมเป๊ะ — หรือเป็น intrinsic ของ compiler ที่ไม่มีนิยามระดับ TypeScript เลย:
+
+- `Awaited<T>` (4.5) — recursive conditional ที่ใช้ `infer` บน `PromiseLike` และเป็นตัวที่ compiler ใช้กำหนด type ของ `await` ด้วย
+- `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` — intrinsic ที่พูดถึงใน [Template Literal Types](/typescript/th/type-level-programming/template-literal-types/)
+- `NoInfer<T>` (5.4) — intrinsic ที่กันไม่ให้ตำแหน่งนั้นมีส่วนใน inference เพื่อให้ argument ตัวหนึ่งถูก *เช็คกับ* type parameter โดยไม่ *ขยาย* มัน รายละเอียดอยู่ใน [Inference and infer](/typescript/th/generics/inference-and-infer/)
+
+```ts
+function createFSM<S extends string>(config: { states: S[]; initial: NoInfer<S> }) {}
+
+createFSM({ states: ["idle", "busy"], initial: "idle" });  // ✅ S = "idle" | "busy"
+createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" assign ให้ "idle" | "busy" ไม่ได้
+```
+
+ถ้าไม่มี `NoInfer` `initial: "bogus"` จะแค่ขยาย `S` เป็น `"idle" | "busy" | "bogus"` แล้ว compile ผ่านเฉย ๆ
+
 <Mermaid title="แต่ละ utility map ไปยัง primitive ที่คุณรู้แล้ว" code={utilDiagram} />
 
 export const utilDiagram = `flowchart TB

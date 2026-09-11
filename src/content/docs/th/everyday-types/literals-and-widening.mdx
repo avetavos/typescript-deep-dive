@@ -1,6 +1,6 @@
 ---
 title: 'Literals & Widening'
-description: 'literal type, TypeScript widen เมื่อไร และ as const ล็อก type แบบแคบที่คุณต้องการจริง ๆ ได้อย่างไร'
+description: 'literal type, TypeScript widen เมื่อไร และ as const ล็อก type แบบแคบที่คุณต้องการจริง ๆ ได้อย่างไร — และ satisfies สำหรับเช็คโดยไม่ widen'
 sidebar:
   order: 2
 ---
@@ -88,6 +88,24 @@ type Route = typeof ROUTES[keyof typeof ROUTES];
 ```
 
 ถ้าไม่มี `as const` `ROUTES` จะเป็น `{ home: string; profile: string; settings: string }` แล้วคุณก็เสีย path เฉพาะทั้งหมด แต่พอมี คุณ derive union type ที่แม่นยำจากตัวข้อมูลได้ตรง ๆ — pattern ที่คุณจะเจอตลอดในโมดูล type-level
+
+## `satisfies`: เช็คโดยไม่ widen (4.9)
+
+`as const` ล็อก literal ไว้แต่ไม่เช็คว่า object ตรงกับ contract หรือไม่ annotation เช็คให้แต่ *แทนที่* type ที่ infer ได้ด้วย annotation นั้น `satisfies` เช็คให้และยังคง type แคบ ๆ ที่ infer ได้ไว้:
+
+```ts
+type Theme = Record<string, string | [number, number, number]>;
+
+const theme = {
+  primary: "#0af",
+  accent: [255, 128, 0],
+} satisfies Theme;
+
+theme.accent[0]; // ✅ number — ยังเป็น tuple ไม่ถูก widen เป็น value type ของ Theme
+theme.typo;      // ❌ property ไม่มี — object รู้จักครบทุก key
+```
+
+ใช้คู่กับ `as const` (`{ … } as const satisfies Theme`) เมื่ออยากได้ทั้ง member แบบ readonly literal *และ* การ validate ส่วนการรักษา literal ผ่าน generic function call ดู `const` type parameter ในโมดูล Generics
 
 <Callout title="สรุปหนึ่งบรรทัด">
 literal type คือเซตที่มีค่าเดียว และ union ของ literal คือการ model "หนึ่งในค่าที่ระบุพวกนี้" TypeScript จะ **widen** literal ทุกที่ที่ value อาจเปลี่ยน — รวมถึง property ของ object ที่แก้ค่าได้ นั่นคือเหตุผลว่าทำไม `const config = { method: "GET" }` ถึงให้ `method: string` หยิบ `as const` มาใช้เพื่อเก็บ literal ให้แคบ ทำ property เป็น `readonly` และเปลี่ยน array เป็น tuple — กุญแจสำคัญของการ derive type ที่แม่นยำจากข้อมูล

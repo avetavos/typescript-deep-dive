@@ -1,6 +1,6 @@
 ---
 title: 'Literals & Widening'
-description: 'Literal types, when TypeScript widens them, and how as const locks in the narrow type you actually want.'
+description: 'Literal types, when TypeScript widens them, and how as const locks in the narrow type you actually want — and satisfies for checking without widening.'
 sidebar:
   order: 2
 ---
@@ -88,6 +88,24 @@ type Route = typeof ROUTES[keyof typeof ROUTES];
 ```
 
 Without `as const`, `ROUTES` would be `{ home: string; profile: string; settings: string }` and you'd lose every specific path. With it, you can derive precise union types straight from the data — a pattern you'll see constantly in the type-level module.
+
+## `satisfies`: check without widening (4.9)
+
+`as const` freezes the literals but gives you no check that the object matches a contract. An annotation gives you the check but *replaces* the inferred type with the annotation. `satisfies` does the check and keeps the narrow inferred type:
+
+```ts
+type Theme = Record<string, string | [number, number, number]>;
+
+const theme = {
+  primary: "#0af",
+  accent: [255, 128, 0],
+} satisfies Theme;
+
+theme.accent[0]; // ✅ number — still a tuple, not widened to the Theme value type
+theme.typo;      // ❌ property does not exist — the object is fully known
+```
+
+Combine it with `as const` (`{ … } as const satisfies Theme`) when you want readonly literal members *and* validation. To keep literals through a generic function call, see `const` type parameters in the Generics module.
 
 <Callout title="The one-line takeaway">
 A literal type is a one-value set, and unions of literals model "one of these exact values." TypeScript **widens** literals wherever a value could change — including mutable object properties, which is why `const config = { method: "GET" }` gives `method: string`. Reach for `as const` to keep literals narrow, make properties `readonly`, and turn arrays into tuples — the key to deriving precise types from data.

@@ -75,6 +75,8 @@ type BuildTuple<N extends number, Acc extends unknown[] = []> =
   Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
 ```
 
+มีสองการเปลี่ยนแปลงฝั่ง compiler ที่เกี่ยวตรงนี้ TypeScript 5.9 เริ่ม **cache instantiation ระหว่างทาง** ตอนแทน type argument ทำให้ error "excessively deep" จำนวนมากใน library อย่าง Zod และ tRPC หายไปโดยไม่ต้องแตะ type ของพวกมันเลย และ TypeScript 7 ใช้ **stable type ordering** เสมอ (flag `--stableTypeOrdering` ที่มาใน 6.0 กลายเป็นค่าถาวร) ดังนั้น recursive type ลึก ๆ จะให้ผลเดิม — และ error ข้อความเดิม — ไม่ว่าไฟล์จะถูกเช็คตามลำดับไหน recursion ที่ "พังเฉพาะบางเครื่อง" ส่วนใหญ่คือเรื่องนี้
+
 ## รู้ว่าเมื่อไรควรหยุด
 
 recursive type คือเครื่องมือที่คมที่สุดในกล่อง type-level และใช้ผิดง่ายที่สุด ก่อนเขียนถามตัวเองว่า:

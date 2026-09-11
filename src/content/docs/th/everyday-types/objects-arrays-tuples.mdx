@@ -1,6 +1,6 @@
 ---
 title: 'Objects, Arrays & Tuples'
-description: 'object type แบบเจาะลึก — optional และ readonly property, index signature — พร้อมความต่างจริง ๆ ระหว่าง array กับ tuple'
+description: 'object type แบบเจาะลึก — optional และ readonly property, index signature — พร้อมความต่างจริง ๆ ระหว่าง array กับ tuple, built-in ของ es2025 (Set algebra, iterator helper, groupBy), typed array แบบ generic และ using'
 sidebar:
   order: 4
 ---
@@ -86,6 +86,52 @@ function paint(color: readonly number[]) { /* mutate color ไม่ได้ */
 
 การเลือกใช้ `readonly` array parameter เป็นนิสัยราคาถูกที่ได้ค่ามาก: กันบั๊ก mutate โดยไม่ตั้งใจทั้งชุด และสื่อเรื่อง ownership
 
+## built-in ใหม่ ๆ ที่ `lib` ใส่ type ให้แล้ว (es2024 / es2025)
+
+เมื่อ `target` และ `lib` เป็น `es2025` (ค่าเริ่มต้นของ TypeScript 7) โค้ดจัดการ collection หลายอย่างที่เคยต้องพึ่ง helper library ก็มี type มาให้ทันที:
+
+- **Set algebra (5.5):** `a.union(b)`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` — ทุกตัว return `Set` ที่ type ถูกต้อง
+- **Iterator helper (5.6):** generator และ built-in iterator มี `.map`, `.filter`, `.take`, `.drop`, `.flatMap`, `.reduce`, `.toArray` และ `Iterator.from(...)` type ของมันคือ `IteratorObject<T>` (และ `AsyncIteratorObject<T>`) แยกจาก interface `Iterator` ที่คุณ implement เอง:
+
+  ```ts
+  function* naturals() { let i = 1; while (true) yield i++; }
+  const evens = naturals().map((n) => n * 2).take(3).toArray(); // number[]
+
+  const byEmail = new Map(userById.entries().map(([id, u]) => [u.email, id]));
+  ```
+
+- **grouping (es2024):** `Object.groupBy(items, (x) => x.kind)` return `Partial<Record<K, T[]>>`; `Map.groupBy` return `Map`
+- **upsert (6.0):** `map.getOrInsert(key, fallback)` และ `map.getOrInsertComputed(key, () => …)`
+- **อยู่ใน `es2025` ด้วย:** `RegExp.escape`, `Promise.try`, `Promise.withResolvers` และ type ของ **Temporal** ในตัว (`Temporal.Now.instant()`) ไม่ต้องลง `@types` เพิ่มแล้ว
+
+## typed array เป็น generic แล้ว (5.7 / 5.9)
+
+`Uint8Array` และพวกพ้องกลายเป็น generic เหนือ buffer ของมัน — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — และใน 5.9 `ArrayBuffer` เลิกเป็น supertype ของ typed array ผลในทางปฏิบัติ: API ที่ต้องการ `BufferSource` จะปฏิเสธค่าที่มี type `ArrayBufferLike` และ `Buffer` ของ Node assign ให้ `Uint8Array<ArrayBuffer>` ไม่ได้อีก แก้ด้วยการระบุ type ของ buffer หรือส่ง `.buffer`:
+
+```ts
+const data = new Uint8Array([1, 2, 3]);      // Uint8Array<ArrayBuffer>
+send(data.buffer);                            // ✅ ArrayBuffer
+function send(b: Uint8Array<ArrayBuffer>) {}  // ระบุให้ชัดเมื่อคุณเป็นเจ้าของ API
+```
+
+## `using`: cleanup resource ตาม scope (5.2)
+
+Explicit Resource Management — `using` และ `await using` — มาใน TypeScript 5.2 และตอนนี้ Node.js 24+ กับ browser สมัยใหม่รันได้ native ค่าที่มี `[Symbol.dispose]` (หรือ `[Symbol.asyncDispose]`) จะถูก cleanup เมื่อออกจาก block ในลำดับย้อนกลับ แม้จะ `throw`:
+
+```ts
+function openFile(path: string) {
+  const fd = fs.openSync(path, "r");
+  return { fd, [Symbol.dispose]() { fs.closeSync(fd); } };
+}
+
+function read() {
+  using file = openFile("data.txt"); // ปิดให้อัตโนมัติเมื่อจบ block
+  return fs.readFileSync(file.fd);
+}
+```
+
+`Disposable` และ `AsyncDisposable` คือ interface ที่ต้อง implement ส่วน `DisposableStack` รวมหลายตัวไว้ด้วยกัน model resource แบบนี้แทนบันได `try`/`finally`
+
 <Callout title="สรุปหนึ่งบรรทัด">
 object type คือ shape ที่มี modifier `readonly` และ optional (`?`) — จำว่า optional property เป็น `T \| undefined` และต้อง handle index signature type key ที่ยังไม่รู้แบบ uniform (เปิด `noUncheckedIndexedAccess` เพื่อให้ key ที่ไม่มีอ่านได้เป็น `T \| undefined`) **array** ยืดหยุ่นและ homogeneous; **tuple** ความยาวคงที่ มี type ต่อตำแหน่ง เลือกใช้ `readonly` array สำหรับ parameter ที่จะไม่ mutate
 </Callout>
@@ -128,6 +174,16 @@ export const quizOAT = [
       'readonly [255, 128, 0] — readonly tuple ของ literal',
       '[number, number, number]',
       'any[]',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'iterator helper method อย่าง `.map` และ `.take` ใน TypeScript 5.6+ return type อะไร?',
+    options: [
+      'Array',
+      'IteratorObject<T> — type ของ built-in iterator ที่มี helper method ติดมา',
+      'Promise<T[]>',
+      'unknown',
     ],
     answer: 1,
   },

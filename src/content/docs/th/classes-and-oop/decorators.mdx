@@ -1,6 +1,6 @@
 ---
 title: 'Decorators'
-description: 'decorator แบบ stage-3 สมัยใหม่ใน TypeScript 5 — class, method, accessor และ field decorator, context object และ decorator factory'
+description: 'decorator แบบ stage-3 สมัยใหม่ (ตั้งแต่ TypeScript 5.0 และยังเป็นโมเดลหลักใน TypeScript 7) — class, method, accessor และ field decorator, context object, decorator factory และจุดที่ design แบบเก่ายังหลงเหลืออยู่'
 sidebar:
   order: 4
 ---
@@ -14,9 +14,23 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 **decorator** คือ function ที่ wrap หรือสังเกต class หรือ member ของ class ให้คุณเพิ่ม behavior แบบ declarative ด้วย syntax `@name` มีสอง design ที่เข้ากันไม่ได้ และสำคัญว่าคุณหมายถึงอันไหน:
 
 - **legacy decorator** — design เก่าแบบ experimental ที่เปิดด้วย `experimentalDecorators` ใน `tsconfig` ใช้เยอะใน Angular และ NestJS รุ่นเก่า signature ต่างกัน และพึ่ง `reflect-metadata`
-- **stage-3 decorator** — design ECMAScript ที่เป็นมาตรฐาน รองรับ native ตั้งแต่ **TypeScript 5.0** โดยไม่ต้องใช้ flag พิเศษ อันนี้คือตัวที่ควรเรียนสำหรับ code ใหม่
+- **stage-3 decorator** — design ECMAScript ที่เป็นมาตรฐาน รองรับ native ตั้งแต่ **TypeScript 5.0** โดยไม่ต้องใช้ flag พิเศษ และไม่เปลี่ยนเลยจนถึง TypeScript 7 เพราะ syntax เป็น ECMAScript ล้วน ๆ ไม่ใช่ส่วนขยายของ TypeScript อันนี้จึงเป็นตัวที่ควรเรียนสำหรับ code ใหม่
 
 บทเรียนนี้ครอบคลุม decorator แบบ **stage-3**
+
+### parse เข้มขึ้นตั้งแต่ 5.5
+
+TypeScript 5.5 จำกัดสิ่งที่ตามหลัง `@` ได้: มีแค่ identifier, dotted name หรือการเรียก function อย่างอื่น — เช่น การเข้าถึงผ่าน `super` หรือ index expression — ต้องใส่วงเล็บ:
+
+```ts
+class C {
+  @super.decorate      // ❌ error ตั้งแต่ 5.5
+  method1() {}
+
+  @(super.decorate)    // ✅ วงเล็บทำให้ expression ชัดเจน
+  method2() {}
+}
+```
 
 ## method decorator
 
@@ -76,7 +90,7 @@ class Api {
 ```
 
 <Callout title="สรุปหนึ่งบรรทัด">
-เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) แล้ว wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
+เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5.0 และไม่เปลี่ยนจนถึง TypeScript 7 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) แล้ว wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
 </Callout>
 
 export const quizDecorators = [

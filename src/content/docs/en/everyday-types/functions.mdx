@@ -1,6 +1,6 @@
 ---
 title: 'Functions'
-description: 'Function types in depth — parameters, overloads and why unions often beat them, this typing, and the surprising void return rule.'
+description: 'Function types in depth — parameters, overloads and why unions often beat them, this typing, the surprising void return rule, and the 5.7–5.8 initialization and return-branch checks.'
 sidebar:
   order: 5
 ---
@@ -88,6 +88,35 @@ export const voidDiagram = `flowchart LR
   target --> use["callers treat result\nas void — safe"]`;
 
 This is exactly why `array.forEach(x => arr.push(x))` type-checks even though `push` returns a number: `forEach` wants a `void` callback and simply ignores whatever comes back. Once you know the rule it stops being mysterious — but almost everyone hits it confused first.
+
+## What the checker catches now (TypeScript 5.7–5.8)
+
+Three recent checks change how functions type-check, with no new syntax:
+
+- **Never-initialized variables (5.7).** A `let` declared with a type but never assigned is an error even when the use sits inside a nested function:
+
+  ```ts
+  function report() {
+    let result: number; // declared, never assigned
+    function print() {
+      console.log(result); // ❌ Variable 'result' is used before being assigned
+    }
+  }
+  ```
+
+- **Each branch of a returned conditional is checked (5.8).** Previously an `any` on one side of `cond ? a : b` masked a wrong type on the other; now every branch must satisfy the declared return type:
+
+  ```ts
+  declare const cache: Map<any, any>;
+  function getUrl(s: string): URL {
+    return cache.has(s) ? cache.get(s) : s;
+    //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
+  }
+  ```
+
+- **Callbacks that only return `null` or `undefined` (5.7).** Under `noImplicitAny`, `p.catch(() => null)` is an implicit-`any` return error when the generic return type can't be inferred — annotate the callback (`(): number | null => null`) or the receiving variable.
+
+And a reminder from the narrowing lesson: since 5.5 a boolean-returning function whose result is tied to its parameter gets an **inferred type predicate**, so many small guards no longer need `x is T` written out.
 
 <Callout title="The one-line takeaway">
 Type functions with parameter and return types; parameters can be optional, defaulted, or rest. Prefer a **union parameter** over **overloads** unless the return type truly depends on the input shape. A `this` parameter types `this` and vanishes at the call site. And the big gotcha: a `void` return type means "the caller ignores the return," so functions returning a value are still assignable to it — which is why `forEach` callbacks work.

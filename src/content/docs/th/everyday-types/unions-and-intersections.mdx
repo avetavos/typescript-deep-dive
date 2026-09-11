@@ -81,6 +81,10 @@ type Both = A & B;
 
 ตัวสุดท้ายเป็นสัญญาณ: เวลาคุณอยากได้ "หนึ่งใน object shape พวกนี้" คุณเกือบทุกครั้งต้องการ **union** (`A | B`) ที่มี discriminant field ร่วมกัน — ไม่ใช่ intersection นั่นคือ discriminated-union pattern ในบท narrowing
 
+## หมายเหตุเรื่องการแสดงผลใน TypeScript 7
+
+TypeScript 7 เรียงลำดับ member ของ union แบบ deterministic (`--stableTypeOrdering` เปิดถาวร) hover หรือ error message จึงอาจแสดง `string | number` ในจุดที่ 6.0 เคยแสดง `number | string` เรื่อง assignability ไม่เปลี่ยนเลย — union คือเซต — แต่ test ที่ snapshot ข้อความ error หรือ output `.d.ts` อาจต้อง generate ใหม่
+
 <Callout title="สรุปหนึ่งบรรทัด">
 `A \| B` คือ **union** — OR — และกว้างกว่า ระหว่างที่ถือ union คุณแตะได้แค่ member ที่ทุก branch มีร่วมกันจนกว่าจะ narrow `A & B` คือ **intersection** — AND — และสำหรับ object จะแคบกว่า ต้องมีทุก property ของทั้งสอง ในฐานะวิธีประกอบ object type ทั้งสองชี้ไปคนละทาง: union เพิ่ม value แต่จำกัดการเข้าถึง; intersection จำกัด value แต่เพิ่ม member
 </Callout>

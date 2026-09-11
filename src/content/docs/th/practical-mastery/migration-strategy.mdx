@@ -1,6 +1,6 @@
 ---
 title: 'Migration Strategy'
-description: 'ย้าย JavaScript codebase ไป TypeScript โดยไม่ต้อง rewrite ทีเดียว — allowJs, การ ratchet strictness, การจัดการ any และการเขียน library'
+description: 'ย้าย JavaScript codebase ไป TypeScript โดยไม่ต้อง rewrite ทีเดียว — allowJs, การ ratchet strictness, การจัดการ any, การเขียน library และการ upgrade โปรเจกต์เดิมไป TypeScript 6 และ 7'
 sidebar:
   order: 5
 ---
@@ -26,7 +26,7 @@ export const migrateDiagram = `flowchart LR
 1. **เปิด `allowJs`** ตอนนี้ TypeScript compile project แบบผสมได้ — ไฟล์ `.js` build เหมือนเดิม และคุณเริ่มเพิ่มไฟล์ `.ts` ข้าง ๆ ได้
 2. **เพิ่ม `checkJs` (และ `// @ts-check`)** TypeScript type-check *JavaScript* ของคุณด้วย inference และ JSDoc คุณได้ error จริงก่อนแปลงไฟล์สักไฟล์ — first pass ฟรี ๆ
 3. **แปลงทีละไฟล์** rename `.js` เป็น `.ts`, แก้ error ที่โผล่, commit เริ่มจาก leaf (utility ที่ dependency น้อย) แล้วไล่เข้าหา core
-4. **ratchet strictness** อย่าเริ่มด้วย `strict` เต็ม เปิด flag ทีละตัว — `noImplicitAny` ก่อน แล้ว `strictNullChecks` แล้วที่เหลือ แก้แต่ละ wave ให้เสร็จก่อนเปิดตัวถัดไป
+4. **ratchet strictness** `strict` เป็น default ตั้งแต่ TypeScript 6.0 โปรเจกต์ที่กำลัง migrate จึงเริ่มด้วย `"strict": false` *อย่างชัดเจน* แล้วค่อยถอดออกเป็นขั้น: เปิด flag ทีละตัว — `noImplicitAny` ก่อน แล้ว `strictNullChecks` แล้วที่เหลือ แก้แต่ละ wave ให้เสร็จก่อนเปิดตัวถัดไป พอ flag ตัวสุดท้ายเปิดแล้ว ลบบรรทัด `strict: false` ทิ้ง คุณก็อยู่บน default แล้ว
 
 แต่ละ step ship ได้ คุณไม่เคยติดอยู่ในสภาพ migrate ค้างครึ่ง ๆ นาน ๆ
 
@@ -48,6 +48,19 @@ legacyCall(weirdValue);
 
 ทั้งคู่ silence error ในบรรทัดถัดไป แต่ `@ts-expect-error` **จะ error ด้วยถ้าบรรทัดนั้นเลิกมี error** ดังนั้นเมื่อคุณแก้ type ที่เป็นต้นเหตุทีหลัง suppression ที่ไม่จำเป็นแล้วจะทำให้ build พัง และบอกให้คุณลบทิ้ง ส่วน `@ts-ignore` แค่เน่าเงียบ ๆ
 
+## migrate ไป TypeScript 6 และ 7
+
+migration อีกแบบที่คุณจะได้ทำปีนี้คือการ upgrade โปรเจกต์ TypeScript ที่มีอยู่ 6.0 (มีนาคม 2026) deprecate option ชุดหนึ่งและเปลี่ยน default; 7.0 (กรกฎาคม 2026) ถอด option ที่ deprecate ออกและสลับเป็น native compiler ทำเป็นสองก้าว:
+
+1. **upgrade เป็น 6.0 ก่อน** แล้วเพิ่ม `"ignoreDeprecations": "6.0"` ใน `tsconfig.json` build กลับมาทำงานทันที และ deprecation กลายเป็น warning ที่คุณค่อย ๆ กำจัดตามจังหวะตัวเองแทนที่จะเป็นกำแพง error
+2. **แก้ default ที่ขยับไปใต้เท้าคุณ** ตั้ง `"types": ["node", "jest", …]` ให้ชัด (default ตอนนี้คือ `[]`), ตั้ง `"rootDir": "./src"` ถ้าเคยพึ่ง inference และเช็คว่า `strict: true` กับ `module: esnext` คือสิ่งที่คุณต้องการ — โปรเจกต์ CJS ตั้ง `module: commonjs` (หรือ `nodenext` พร้อม `"type": "commonjs"`) อย่างตั้งใจ
+3. **แทน option ที่ deprecate ทีละตัว:** ยุบ `baseUrl` เข้า `paths` (`"@app/*": ["./src/app/*"]`); `moduleResolution: node` → `nodenext` หรือ `bundler`; เลิกใช้ `outFile` แล้วใช้ bundler; ยก `target` ขึ้นจาก `es5` และลบ `downlevelIteration`; ลบบรรทัด `esModuleInterop`/`allowSyntheticDefaultImports`/`alwaysStrict` ที่ตั้งเป็น `false` (ตอนนี้เปิดตลอดแล้ว); เปลี่ยน `import … asserts {}` เป็น `with {}` และ `module Foo {}` เป็น `namespace Foo {}`
+4. **แก้ code ที่พึ่งพา interop แบบเก่า:** `import * as express from "express"` กลายเป็น `import express from "express"` และ script ที่เคยรัน `tsc some-file.ts` ข้าง ๆ tsconfig ต้องใส่ `--ignoreConfig`
+5. **ถอด `ignoreDeprecations` ออก แล้ว upgrade เป็น 7.0** ถ้า build สะอาดบน 6.0 โดยไม่มีมัน 7.0 คือ drop-in รัน `tsc --stableTypeOrdering` บน 6.0 ก่อนถ้าคุณ diff output `.d.ts` ใน CI — 7 เรียง member ของ union แบบ deterministic และ flag นี้ให้คุณเห็นลำดับใหม่ก่อนสลับ
+6. **เก็บ 6.0 ไว้สำหรับเครื่องมือที่ต้องใช้ API** `typescript-eslint`, Volar (Vue) และ language tooling ของ Svelte/Astro/Angular ยังต้องใช้ programmatic API ซึ่ง 7.0 ไม่ ship จนกว่า 7.1 ติดตั้ง `@typescript/typescript6` คู่กับ 7 แล้วชี้เครื่องมือพวกนั้นไปที่มัน; ใน VS Code language server ทั้งสองอยู่ด้วยกันได้ และ "Disable TypeScript 7 Language Server" ถอยกลับไป 6 สำหรับ workspace ที่ต้องการ
+
+ทุกก้าว ship ได้ ซึ่งเป็นหลักการเดียวกับเส้นทาง JS ไป TS ข้างบน: อย่าอยู่ในสภาพที่ build พังนานเกินหนึ่งวัน
+
 ## การเขียน library
 
 ถ้าคุณ publish package มีกฎเพิ่มอีกไม่กี่ข้อ:
@@ -57,7 +70,7 @@ legacyCall(weirdValue);
 - **มอง type เป็น semver** การเปลี่ยนที่ทำให้ *type checking* ของผู้ใช้พังคือ breaking change แม้ runtime behavior จะเหมือนเดิม การ widen parameter มักปลอดภัย; การ narrow parameter หรือเปลี่ยน return type ทำให้ build ของ downstream พังได้
 
 <Callout title="สรุปหนึ่งบรรทัด">
-migrate ทีละส่วน: `allowJs` ให้อยู่ด้วยกัน, `checkJs` เพื่อ type-check JS ฟรี ๆ แล้วแปลงทีละไฟล์จาก leaf เข้าใน พร้อม ratchet flag ของ `strict` ทีละตัว มอง `any` เป็นหนี้ที่ track ไว้ (ทำให้ explicit, เปิด `noImplicitAny`), เลือก `@ts-expect-error` (ที่ลบตัวเองเมื่อแก้แล้ว) มากกว่า `@ts-ignore` และถ้า publish library ให้ ship `.d.ts`, ซ่อน internal type และ version type ของคุณตาม semver
+migrate ทีละส่วน: `allowJs` ให้อยู่ด้วยกัน, `checkJs` เพื่อ type-check JS ฟรี ๆ แล้วแปลงทีละไฟล์จาก leaf เข้าใน พร้อม ratchet flag ของ `strict` ทีละตัว มอง `any` เป็นหนี้ที่ track ไว้ (ทำให้ explicit, เปิด `noImplicitAny`), เลือก `@ts-expect-error` (ที่ลบตัวเองเมื่อแก้แล้ว) มากกว่า `@ts-ignore` และถ้า publish library ให้ ship `.d.ts`, ซ่อน internal type และ version type ของคุณตาม semver สำหรับการ upgrade TypeScript 6 → 7 ให้ก้าวผ่าน 6.0 ด้วย `ignoreDeprecations`, ตั้ง `types` กับ `rootDir`, แทน option ที่ถูกถอด แล้วค่อยไป 7 — เก็บ `@typescript/typescript6` ไว้ให้เครื่องมือที่ยังต้องใช้ API
 </Callout>
 
 export const quizMigrate = [
@@ -88,6 +101,16 @@ export const quizMigrate = [
       'จะ error ด้วยถ้าบรรทัดนั้นเลิกมี error แล้ว จึง flag suppression ที่ค้างเมื่อ type ถูกแก้',
       'suppress error ได้มากกว่า',
       'ทำงานตอน runtime',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'step แรกที่แนะนำเมื่อ upgrade โปรเจกต์เก่าไป TypeScript 6/7 คืออะไร?',
+    options: [
+      'ลบ tsconfig.json แล้วเริ่มใหม่',
+      'upgrade เป็น 6.0 พร้อม `"ignoreDeprecations": "6.0"`, แก้ default ที่ขยับ (`types`, `rootDir`) กับ option ที่ deprecate ทีละตัว แล้วค่อยไป 7.0',
+      'กระโดดไป 7.0 เลยแล้วแก้ทุกอย่างทีเดียว',
+      'อยู่กับ 5.x ตลอดไป',
     ],
     answer: 1,
   },

@@ -75,6 +75,8 @@ type BuildTuple<N extends number, Acc extends unknown[] = []> =
   Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
 ```
 
+Two compiler-side changes matter here. TypeScript 5.9 started **caching intermediate instantiations** when it substitutes type arguments, which made many "excessively deep" errors in libraries such as Zod and tRPC disappear without touching their types. And TypeScript 7 always uses **stable type ordering** (the `--stableTypeOrdering` flag introduced in 6.0 is now permanent), so a deep recursive type produces the same result — and the same error text — no matter which order files were checked in. A recursion that only failed "on some machines" was usually this.
+
 ## Knowing when to stop
 
 Recursive types are the sharpest tool in the type-level box, and the easiest to misuse. Before writing one, ask:

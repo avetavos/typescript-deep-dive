@@ -39,6 +39,8 @@ export const lensDiagram = `flowchart TB
 
 When an assignment is allowed, it's because one type's set of values fits inside another's. When two objects are interchangeable, it's because their shapes match. Hold those two ideas and TypeScript stops surprising you.
 
+**Version note.** Everything in this course targets **TypeScript 7** — the native Go compiler released in July 2026, with `strict` on by default. Where a feature is recent, the lesson names the version that introduced it (for example "inferred type predicates, 5.5") so you know what changed since the TypeScript you may have learned.
+
 <Callout title="The mental shift">
 Coming from other languages, you might think of a type as a **label** attached to a variable. In TypeScript it's more useful to think of a type as a **set** — the collection of all values that are legal for that slot. `boolean` is the set `{true, false}`. `string` is the set of all strings. This one reframe makes unions, narrowing, and `never` obvious instead of mysterious.
 </Callout>

@@ -1,6 +1,6 @@
 ---
 title: 'Decorators'
-description: 'The modern stage-3 decorators in TypeScript 5 — class, method, accessor, and field decorators, their context object, and decorator factories.'
+description: 'The modern stage-3 decorators (TypeScript 5.0 onward, still the model in TypeScript 7) — class, method, accessor, and field decorators, their context object, decorator factories, and where the legacy design still lingers.'
 sidebar:
   order: 4
 ---
@@ -13,10 +13,24 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 A **decorator** is a function that wraps or observes a class or a class member, letting you add behavior declaratively with `@name` syntax. There are two incompatible designs, and it matters which you mean:
 
-- **Legacy decorators** — the old, experimental design enabled by `experimentalDecorators` in `tsconfig`. Used heavily by older Angular and NestJS. Different signatures, relies on `reflect-metadata`.
-- **Stage-3 decorators** — the standardized ECMAScript design, supported natively since **TypeScript 5.0** with no special flag. This is the one to learn for new code.
+- **Legacy decorators** — the old, experimental design enabled by `experimentalDecorators` in `tsconfig`. Still used by NestJS and Angular, so the flag remains a supported opt-in in TypeScript 7. Different signatures, relies on `reflect-metadata`, and depends on `tsc`'s own emit — a build that only *strips* types (`--erasableSyntaxOnly`, Node's type stripping, most bundlers' fast paths) cannot run them.
+- **Stage-3 decorators** — the standardized ECMAScript design, supported natively since **TypeScript 5.0** with no special flag and unchanged through TypeScript 7. Because the syntax is plain ECMAScript rather than a TypeScript extension, it is the one to learn for new code.
 
 This lesson covers **stage-3** decorators.
+
+### Stricter parsing since 5.5
+
+TypeScript 5.5 tightened what may follow the `@`: only an identifier, a dotted name, or a call. Anything else — a `super` access, an index expression — must be parenthesized:
+
+```ts
+class C {
+  @super.decorate      // ❌ error since 5.5
+  method1() {}
+
+  @(super.decorate)    // ✅ parentheses make the expression explicit
+  method2() {}
+}
+```
 
 ## A method decorator
 
@@ -76,7 +90,7 @@ class Api {
 ```
 
 <Callout title="The one-line takeaway">
-Prefer **stage-3 decorators** (native since TypeScript 5, no `experimentalDecorators` flag) over the legacy experimental design. A decorator is a function taking the decorated thing plus a **context** object (`kind`, `name`, `static`, `private`, `addInitializer`); it can wrap or replace behavior. Wrap the decorator in another function — a **factory** — when you need to pass configuration with `@name(args)`.
+Prefer **stage-3 decorators** (native since TypeScript 5.0 and unchanged through TypeScript 7, no `experimentalDecorators` flag) over the legacy experimental design. A decorator is a function taking the decorated thing plus a **context** object (`kind`, `name`, `static`, `private`, `addInitializer`); it can wrap or replace behavior. Wrap the decorator in another function — a **factory** — when you need to pass configuration with `@name(args)`.
 </Callout>
 
 export const quizDecorators = [

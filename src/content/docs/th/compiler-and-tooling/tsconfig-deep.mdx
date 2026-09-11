@@ -1,6 +1,6 @@
 ---
 title: 'tsconfig, Deep'
-description: 'compiler option ที่เปลี่ยนความปลอดภัยและ output ของคุณจริง ๆ — strict และครอบครัวของตัวเอง, target, module และ flag ข้าง ๆ strict ที่ควรเปิด'
+description: 'compiler option ที่เปลี่ยนความปลอดภัยและ output ของคุณจริง ๆ — default ใหม่ของ TypeScript 6/7, สิ่งที่ tsc --init generate ตอนนี้, strict และครอบครัวของตัวเอง, target, module, flag ข้าง ๆ strict และ option ที่ถูกถอดออกไป'
 sidebar:
   order: 2
 ---
@@ -9,31 +9,55 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-## เริ่มจาก strict
+## default เปลี่ยนไปใน TypeScript 6
 
-`tsconfig.json` มี option เป็นสิบ ๆ ตัว แต่มีไม่กี่ตัวที่ตัดสินว่า TypeScript ปกป้องคุณจริงหรือเปล่า ตัวสำคัญที่สุดคือ `strict` ไม่ใช่ check ตัวเดียว — แต่เป็นชุดที่เปิด flag ทั้งครอบครัวพร้อมกัน และทุกตัวจับ bug จริงได้
+ตลอดสิบปี `tsconfig.json` ที่ว่างเปล่าแปลว่า compiler แบบ *หลวม*: ไม่มี `strict`, output เป็น CommonJS, ES target เก่า และ package `@types/*` ทุกตัวใน `node_modules` ถูกโหลดเงียบ ๆ TypeScript 6.0 (มีนาคม 2026) พลิก default ให้เป็นสิ่งที่แทบทุกโปรเจกต์เขียนเองอยู่แล้ว และ TypeScript 7.0 (กรกฎาคม 2026, native compiler) ทำให้มันเป็นของถาวร:
+
+| Option | ก่อน 6.0 | default ใน 6.0 / 7.0 |
+|--------|------------|-------------------|
+| `strict` | `false` | `true` |
+| `module` | `commonjs` | `esnext` |
+| `target` | ประมาณ `es2020` | `es2025` — ขยับตาม ECMAScript ของปีปัจจุบัน |
+| `types` | `@types/*` ทุกตัวใน `node_modules` | `[]` — ไม่โหลดอะไรเลยนอกจากที่คุณระบุ |
+| `rootDir` | infer จาก source ของคุณ | `.` — directory ของ `tsconfig.json` |
+| `noUncheckedSideEffectImports` | `false` | `true` |
+| `libReplacement` | `true` | `false` |
+
+สองตัวในนี้กัดโปรเจกต์จริงตอน upgrade `types: []` แปลว่า `@types/node` ไม่ถูกหยิบมาใช้แค่เพราะ install ไว้ — ต้องเขียน `"types": ["node"]` (หรือ `["*"]` ถ้าอยากได้พฤติกรรมเดิม) ส่วน `rootDir: "."` แปลว่า layout แบบ `src/` จะ emit ไปที่ `dist/src/` ถ้าไม่ตั้ง `"rootDir": "./src"` ให้ชัด
+
+## `tsc --init` เขียนอะไรให้ตอนนี้
+
+ตั้งแต่ 5.9 `tsc --init` generate ไฟล์สั้น ๆ ที่มีความเห็นชัดเจน แทนกำแพง option ที่ comment ไว้ เป็นจุดเริ่มที่ดีสำหรับโปรเจกต์ Node หรือ library:
 
 ```json
 {
   "compilerOptions": {
-    "strict": true,
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "module": "nodenext",
+    "target": "esnext",
+    "types": [],
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "noImplicitOverride": true,
-    "verbatimModuleSyntax": true
+    "strict": true,
+    "jsx": "react-jsx",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
   }
 }
 ```
 
-เปิด `strict` ตั้งแต่วันแรก การมาเปิดทีหลังบน codebase ใหญ่ ๆ แปลว่าต้องแก้ error เป็นร้อยพร้อมกัน — ยากกว่าการไม่ปล่อยให้ error สะสมตั้งแต่แรกมาก
+หลายบรรทัดในนี้ซ้ำกับ default อยู่แล้ว (`strict`, `noUncheckedSideEffectImports`) — generator ตั้งใจเขียนให้ชัดเพื่อให้ไฟล์อธิบายตัวเองได้ ที่เหลือของบทนี้อธิบายว่าทำไมบรรทัดเหล่านี้ถึงเป็นบรรทัดที่คุ้มค่าจะเขียน
 
 ## `strict` เปิดอะไรให้จริง ๆ
 
-`strict: true` เป็นตัวย่อของครอบครัวนี้ทั้งหมด:
+`strict` เป็น default แล้ว แต่ก็ยังควรรู้ว่ามันรวมอะไรไว้ เพราะคุณจะเจอ codebase ที่ปิดบางส่วนของมันไป:
 
 | Flag (อยู่ใน `strict`) | สิ่งที่จับได้ |
 |------------------------|-----------------|
@@ -43,17 +67,20 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | `strictBindCallApply` | `bind`, `call` และ `apply` ถูก type-check กับ signature ของ function |
 | `strictPropertyInitialization` | field ของ class ต้องถูก assign ใน constructor (หรือ mark เป็น optional) |
 | `useUnknownInCatchVariables` | `catch (e)` ให้ `unknown` ไม่ใช่ `any` บังคับให้คุณ narrow |
-| `alwaysStrict` | emit `"use strict"` และ parse ใน strict mode |
+| `strictBuiltinIteratorReturn` | iterator built-in return `undefined` ตอนจบ ไม่ใช่ `any` (5.6) |
+| `alwaysStrict` | parse ใน strict mode และ emit `"use strict"` — ปิดไม่ได้อีกแล้ว |
 
 พระเอกคือ `strictNullChecks` ถ้าไม่เปิด `string` จะแอบรวม `null` และ `undefined` ไว้ด้วย และ compiler เตือนคุณเรื่อง runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย พอเปิดแล้ว `null` และ `undefined` กลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างตั้งใจ
+
+ถ้าคุณรับช่วงโปรเจกต์ที่มี `"strict": false` ให้มองเป็นงาน migration (ดู [Migration Strategy](/typescript/th/practical-mastery/migration-strategy/)) — เปิด flag ทีละตัว อย่าลบบรรทัดนั้นทิ้งแล้วจมอยู่กับ error
 
 ## `target`, `module` และ `lib`
 
 สาม option นี้อธิบายโลกที่ code ของคุณรันอยู่:
 
-- **`target`** — JavaScript version ที่ `tsc` emit ออกมา `ES2022` เป็น default สมัยใหม่ที่ปลอดภัย ถ้า target ต่ำกว่าจะ down-level syntax ใหม่ ๆ ให้เป็นของเทียบเท่าเวอร์ชันเก่า
-- **`module`** — module format ของ output (`NodeNext`, `ESNext`, `CommonJS`, ...) ควรตรงกับวิธีที่ code ถูกโหลดจริง
-- **`lib`** — type declaration built-in ตัวไหนที่ใช้ได้ (เช่น `DOM` สำหรับ global ของ browser, `ES2022` สำหรับ method ใหม่ ๆ ของ runtime) ถ้าคุณใช้ `structuredClone` หรือ `Array.prototype.at` ตัว `lib` ต้องรวมเวอร์ชันที่ declare API เหล่านั้นไว้
+- **`target`** — JavaScript version ที่ `tsc` emit ออกมา default `es2025` (และ `esnext`) แปลว่า *ไม่ down-level*: syntax สมัยใหม่ถูกส่งผ่านไปตรง ๆ ซึ่งเป็นสิ่งที่ runtime ปัจจุบันทุกตัวต้องการ target ที่ต่ำกว่ายัง down-level syntax ใหม่ ๆ ได้ — แต่ `es5` หายไปแล้ว (เป็น hard error ใน 7.0; ES2015 คือพื้น) และ `downlevelIteration` ก็หายไปด้วย
+- **`module`** — module format ของ output ใช้ `nodenext` เมื่อ Node รัน output โดยตรง, `esnext` หรือ `preserve` เมื่อ bundler เป็นคนจัดการ และ `node18` / `node20` แบบ stable เมื่ออยาก pin พฤติกรรมไว้กับ Node สายใดสายหนึ่ง บทถัดไปลงลึกเรื่องนี้
+- **`lib`** — type declaration built-in ตัวไหนที่ใช้ได้ ตอนนี้ `lib.dom` รวมสิ่งที่เคยอยู่ใน `dom.iterable` และ `dom.asynciterable` ไว้แล้ว; `es2025` เพิ่ม `RegExp.escape`, helper method ของ `Iterator`, method พีชคณิตของ `Set` และ method upsert ของ `Map` (`getOrInsert`, `getOrInsertComputed`) และ type ของ `Temporal` มาพร้อม 6.0 ถ้าคุณใช้ API แล้วเจอ "does not exist" แปลว่า `lib` ของคุณเก่าเกินไป
 
 ## flag ข้าง ๆ strict ที่ควรเพิ่ม
 
@@ -68,19 +95,48 @@ x.toFixed(); // ❌ Object is possibly 'undefined' — exactly the bug you want 
 
 - **`noUncheckedIndexedAccess`** — การ index array หรือ record อาจ return `undefined` ได้ (index 10 ของ array 3 ตัวก็ return) type จึงสะท้อนความจริงนั้น มีประสิทธิภาพมากในการกัน bug out-of-bounds
 - **`exactOptionalPropertyTypes`** — แยกความต่างระหว่าง property ที่ set เป็น `undefined` กับ property ที่หายไปเลย ทำให้ optional `name?: string` ไม่แอบรับ `name: undefined` อีกต่อไป
+- **`noUncheckedSideEffectImports`** (default ตั้งแต่ 6.0) — เมื่อก่อน `import "./styles.css"` ที่ path ผิดจะ resolve เป็นความว่างเปล่าเงียบ ๆ ตอนนี้พิมพ์ผิดคือ error ประกาศ `declare module "*.css" {}` ครั้งเดียวสำหรับ asset import ที่ bundler จัดการให้
+- **`erasableSyntaxOnly`** (5.8) — ห้าม syntax ของ TypeScript ที่ต้อง *transform* ไม่ใช่แค่ *ลบ*: `enum`, `namespace` ที่มี runtime code, parameter property ใน class, `import x = require()` เปิดไว้ถ้าคุณรันไฟล์ `.ts` ตรง ๆ ใน Node (type stripping), Deno หรือ Bun ที่ runtime แค่ strip type ออก
+
+## option ที่ถูกถอดออก และอะไรมาแทน
+
+TypeScript 6.0 deprecate option ชุดหนึ่ง และ 7.0 ถอดออกไปเลย ใน 6.x ซื้อเวลาได้ด้วย `"ignoreDeprecations": "6.0"` แต่ทุกตัวมีของแทนตรง ๆ:
+
+| ถูกถอด | แทนด้วย |
+|---------|--------------|
+| `baseUrl` | ยุบ prefix เข้าไปใน `paths`: `"@app/*": ["./src/app/*"]` |
+| `moduleResolution: node` / `node10` / `classic` | `nodenext` (Node รัน) หรือ `bundler` (bundler จัดการ) |
+| `module: amd` / `umd` / `system` / `none` | `esnext` หรือ `preserve` แล้วให้ bundler ผลิต format อื่น |
+| `outFile` | bundler |
+| `target: es5`, `downlevelIteration` | `es2015` หรือใหม่กว่า |
+| `esModuleInterop: false`, `allowSyntheticDefaultImports: false`, `alwaysStrict: false` | ไม่ต้องทำอะไร — เปิดตลอดเวลาแล้ว |
+| `import x from "./data.json" asserts { type: "json" }` | `with { type: "json" }` |
+| `module Foo {}` (keyword namespace แบบเก่า) | `namespace Foo {}` |
+| `/// <reference no-default-lib="true" />` | `noLib` หรือ `libReplacement` |
+
+มีการเปลี่ยน CLI อีกเรื่องที่อยู่ตรงนี้ด้วย: การรัน `tsc file.ts` ใน directory ที่มี `tsconfig.json` ตอนนี้เป็น error (TS5112) เพราะมันแอบ ignore config มาหลายปี ใส่ `--ignoreConfig` ถ้าตั้งใจแบบนั้นจริง ๆ
+
+## option เล็ก ๆ ที่คุณจะได้ใช้จริง
+
+- **`${configDir}`** (5.5) — template variable สำหรับ path ใน base config ที่ share กัน ทำให้ `"outDir": "${configDir}/dist"` resolve เทียบกับโปรเจกต์ที่ *extend* ไม่ใช่ไฟล์ base
+- **`noCheck`** (5.6) — emit โดยไม่ type-check เป็นภาพสะท้อนของ `noEmit` มีประโยชน์เมื่อ step อื่นเป็นคน check
+- **`isolatedDeclarations`** (5.5) — บังคับ type ชัดเจนบน export เพื่อให้ผลิต `.d.ts` ทีละไฟล์แบบขนานได้โดยไม่ต้องใช้ checker
+- **`rewriteRelativeImportExtensions`** (5.7) — ให้คุณเขียน `import "./util.ts"` แล้ว `tsc` emit เป็น `./util.js`
+- **`libReplacement`** (5.8) — opt in ให้แทน `lib.dom` ด้วย npm package เช่น `@typescript/lib-dom`; ปิดเป็น default ตั้งแต่ 6.0
+- **`skipLibCheck`** — ข้ามการ check ไฟล์ `.d.ts` ใน `node_modules` ยังเป็นการเร่งความเร็วที่ถูกที่สุดตัวเดียว แม้บน native compiler
 
 <Callout title="The one-line takeaway">
-เปิด `strict: true` ตั้งแต่วันแรก — flag นี้รวมชุดของ check ไว้ และแค่ `strictNullChecks` ตัวเดียวก็กำจัด class ของ JavaScript crash ที่พบบ่อยที่สุดได้ ตั้ง `target`, `module` และ `lib` ให้ตรงกับ runtime ของคุณ แล้วเพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` เพื่อจับ bug ที่ strict ไม่จับ
+TypeScript 6/7 default เป็น `strict`, `module: esnext`, `target` ของปีปัจจุบัน, `types: []` และ `rootDir: "."` — ดังนั้นตั้ง `types` กับ `rootDir` ให้ชัด และใช้ config สั้น ๆ จาก `tsc --init` เป็น template `strictNullChecks` ยังเป็น check ที่สำคัญที่สุด เพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` ทับลงไป และแทน option ที่ถูกถอด (`baseUrl`, `moduleResolution: node`, `outFile`, `es5`) ด้วย `paths`, `nodenext`/`bundler`, bundler และ target สมัยใหม่
 </Callout>
 
 export const quizTsconfig = [
   {
-    q: '`strict: true` คืออะไร?',
+    q: 'ตั้งแต่ TypeScript 6.0 ค่า default ของ `strict` คืออะไร?',
     options: [
-      'check ตัวเดียวสำหรับค่า null',
-      'ตัวย่อที่เปิดครอบครัวของ strict check ทั้งชุดพร้อมกัน',
-      'flag ที่ปิด type-checking',
-      'การ optimize performance',
+      '`false` เหมือนที่เป็นมาตลอด',
+      '`true` — ครอบครัว strict ทั้งชุดเปิดอยู่ถ้าคุณไม่ปิดเอง',
+      'ขึ้นกับ `target`',
+      'ไม่มี default ต้องตั้งเอง',
     ],
     answer: 1,
   },
@@ -105,12 +161,22 @@ export const quizTsconfig = [
     answer: 1,
   },
   {
-    q: 'ทำไมควรเปิด `strict` ตั้งแต่เริ่มโปรเจกต์ ไม่ใช่มาเปิดทีหลัง?',
+    q: 'หลัง upgrade เป็น TypeScript 6/7 มี `@types/node` install อยู่แต่หา global ของ Node ไม่เจอ เพราะอะไร?',
     options: [
-      'เปิดทีหลังไม่ได้เลย',
-      'การมาเปิดทีหลังบน codebase ใหญ่แปลว่าต้องแก้ error ที่สะสมไว้เป็นร้อยพร้อมกัน',
-      'เปลี่ยน behavior ตอน runtime',
-      'ฟรีเฉพาะโปรเจกต์ใหม่',
+      '`@types/node` ใช้กับ TypeScript 7 ไม่ได้แล้ว',
+      'default ของ `types` ตอนนี้คือ `[]` จึงต้องระบุ `"types": ["node"]` (หรือ `["*"]`) ให้ชัด',
+      '`lib` ต้องมี `node`',
+      '`strict` ซ่อน global type ไว้',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'tsconfig ของคุณมี `"baseUrl": "./src"` ของแทนใน TypeScript 7 คืออะไร?',
+    options: [
+      '`"rootDir": "./src"`',
+      'ยุบ prefix เข้าไปในแต่ละ entry ของ `paths` เช่น `"@app/*": ["./src/app/*"]`',
+      '`"moduleResolution": "node"`',
+      'ไม่ต้องทำอะไร — `baseUrl` ยังใช้ได้',
     ],
     answer: 1,
   },

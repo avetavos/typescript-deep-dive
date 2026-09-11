@@ -22,7 +22,7 @@ let maybe: string | undefined;
 len(maybe); // ❌ Argument of type 'string | undefined' is not assignable to 'string'
 ```
 
-error นี่แหละคือประเด็น: compiler บังคับให้คุณจัดการเคส `undefined` *ก่อน* จะ dereference เปิด flag นี้ไว้ ถ้าคุณรับ codebase ที่ยังไม่ได้เปิดมา การเปิดคือ migration ที่ให้ผลตอบแทนสูงสุดที่คุณทำได้
+error นี่แหละคือประเด็น: compiler บังคับให้คุณจัดการเคส `undefined` *ก่อน* จะ dereference ตั้งแต่ TypeScript 6.0 `strict` — และ `strictNullChecks` ที่มากับมัน — **เปิดเป็นค่าเริ่มต้น** โปรเจกต์ต้องตั้งใจ *ปิด* เอง ถ้าคุณรับ codebase ที่ตั้ง `strictNullChecks: false` ไว้ การเปิดกลับคือ migration ที่ให้ผลตอบแทนสูงสุดที่คุณทำได้
 
 ## `?.` และ `??` เข้าใจ type
 
@@ -38,6 +38,27 @@ function avatar(u: User) {
 ```
 
 `?.` short-circuit เป็น `undefined` ถ้าฝั่งซ้าย nullish และ *type* ก็สะท้อนสิ่งนั้น (ผลลัพธ์รวม `undefined`) `??` ให้ fallback เฉพาะกรณี `null`/`undefined` (ต่างจาก `||` ที่ trigger กับ `0` และ `""` ด้วย) และ narrow type โดยตัดส่วน nullish ออก
+
+## compiler narrow ได้มากกว่าเดิม
+
+การปรับปรุง checker สามอย่างตั้งแต่ 5.5 ตัด boilerplate จัดการ null ที่เจอบ่อยออกไป — และจับความผิดพลาดเพิ่มได้อีกหน่อย:
+
+- **inferred type predicate (5.5)** callback อย่าง `x => x !== undefined` ถูก infer เป็น `x is Bird` ให้เอง `.filter` จึง narrow ได้โดยไม่ต้องเขียน guard เอง ท่า `.filter(Boolean) as Bird[]` แบบเก่าไม่จำเป็นแล้ว
+- **ตัวแปรที่ไม่เคยถูก assign (5.7)** การอ่าน `let` ที่ไม่มี code path ไหน assign เลยเป็น error แม้จะอ่านจากใน nested function
+- **เช็คที่ truthy หรือ nullish เสมอ (5.6)** expression ที่ไม่มีทาง nullish ทางซ้ายของ `??` หรือ function / regex literal ที่ถูกใช้เป็นเงื่อนไข เป็น error
+
+```ts
+const birds = names.map(n => registry.get(n)).filter(b => b !== undefined);
+//    ^? Bird[]  — predicate ถูก infer ให้ ไม่ต้อง cast
+
+let result: number;
+function print() { console.log(result); } // ❌ used before being assigned (5.7)
+
+function limit(value: number, max?: number) {
+  return value < max ?? 100; // ❌ ฝั่งซ้ายของ ?? ไม่มีทาง nullish (5.6)
+  //     value < (max ?? 100) คือสิ่งที่ตั้งใจ
+}
+```
 
 ## non-null assertion `!` — ปืนที่บรรจุกระสุน
 
@@ -105,7 +126,7 @@ export const neverDiagram = `flowchart TB
   d --> err["new variant unhandled = compile error"]`;
 
 <Callout title="สรุปหนึ่งบรรทัด">
-เปิด `strictNullChecks` เพื่อให้ `null` และ `undefined` ต้องถูกจัดการ ไม่ใช่ถูกเมิน ใช้ `?.` และ `??` (ที่ type เข้าใจ) เพื่อจัดการ null อย่างสะดวก และมองทุก `!` ว่าเป็น safety check ที่ถูก override model failure ด้วย **Result** discriminated union แทน throw ที่มองไม่เห็น และใช้ทริก exhaustiveness ของ `never` เพื่อให้การเพิ่ม variant ใหม่กลายเป็น compile error ไม่ใช่ช่องโหว่ที่เงียบหาย
+เปิด `strictNullChecks` ไว้เสมอ (เป็นค่าเริ่มต้นตั้งแต่ TypeScript 6.0) เพื่อให้ `null` และ `undefined` ต้องถูกจัดการ ไม่ใช่ถูกเมิน ตั้งแต่ 5.5 checker ยัง infer type predicate ให้เอง `.filter(x => x != null)` จึง narrow ได้เอง ใช้ `?.` และ `??` (ที่ type เข้าใจ) เพื่อจัดการ null อย่างสะดวก และมองทุก `!` ว่าเป็น safety check ที่ถูก override model failure ด้วย **Result** discriminated union แทน throw ที่มองไม่เห็น และใช้ทริก exhaustiveness ของ `never` เพื่อให้การเพิ่ม variant ใหม่กลายเป็น compile error ไม่ใช่ช่องโหว่ที่เงียบหาย
 </Callout>
 
 export const quizNull = [

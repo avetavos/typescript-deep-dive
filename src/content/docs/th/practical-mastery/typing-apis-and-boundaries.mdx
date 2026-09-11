@@ -30,6 +30,8 @@ u.user.name; // ❌ Error: 'u' is of type 'unknown'.
 
 สังเกตว่า `JSON.parse` ถูก type ให้ return `any` — ผลลัพธ์จึงแอบวางยา downstream ทั้งหมด เว้นแต่คุณจะ assign เป็น `unknown` ทันทีแล้ว validate
 
+`catch` clause ก็คือ boundary เดียวกันในอีกหน้ากาก ด้วย `useUnknownInCatchVariables` — ซึ่งเป็นส่วนหนึ่งของ `strict` จึงเปิดเป็นค่าเริ่มต้นตั้งแต่ TypeScript 6.0 — ค่าที่ catch ได้เป็น `unknown` ไม่ใช่ `any` ดังนั้น `err.message` ต้องผ่าน `err instanceof Error` ก่อน
+
 ## เปลี่ยน `unknown` ให้เป็น type ที่เชื่อถือได้
 
 การ narrow `unknown` ต้องใช้ runtime check ที่ compiler เข้าใจ สำหรับ shape ง่าย ๆ ใช้ **type guard** ที่เขียนเอง:
@@ -70,6 +72,24 @@ source of truth เดียว, check ตอน runtime, infer ตอน compil
 export const validateDiagram = `flowchart LR
   raw["unknown\n(JSON, network, storage)"] -->|schema.parse / type guard| typed["trusted type\n(User)"]
   typed --> use["use freely\nno more checks needed"]`;
+
+## edge เพิ่มอีกสอง: ไฟล์ JSON กับวันที่
+
+**JSON import** การ import ไฟล์ `.json` ให้ type ที่ได้มาจากเนื้อหาไฟล์โดยตรง — ไม่ต้องมี schema เพราะ compiler อ่านไฟล์ได้ ภายใต้ `--module nodenext` (TypeScript 5.7+) การ import ต้องมี attribute `type: "json"` และใช้ได้แค่ default import เท่านั้น ตรงตามที่ Node บังคับ:
+
+```ts
+import config from "./config.json" with { type: "json" };
+config.default.port; // type มาจากไฟล์; named import เป็น error
+```
+
+สำหรับ config object ที่เขียนเอง `satisfies` เก็บ literal type ไว้พร้อมกับเช็ค shape:
+
+```ts
+const routes = { home: "/", user: "/users/:id" } satisfies Record<string, `/${string}`>;
+routes.home; // ยังเป็น literal "/" — ไม่ถูกขยายเป็น string
+```
+
+**วันที่** library `es2025` ของ TypeScript 6.0 มาพร้อม type ของ **Temporal** API เมื่อ boundary ส่ง ISO timestamp มาให้ `Temporal.Instant.from(iso)` ให้ค่าที่ immutable และระบุ timezone ชัดเจน — เป็น type ภายในที่ดีกว่า `Date` ที่ mutable มาก และ Node 26 เปิด Temporal เป็นค่าเริ่มต้นแล้ว
 
 ## Branded type สำหรับ nominal ID
 

@@ -1,6 +1,6 @@
 ---
 title: 'Generic Functions & Constraints'
-description: 'Type parameters, constraining them with extends, default type parameters, multiple parameters, and how to avoid over-generalizing.'
+description: 'Type parameters, constraining them with extends, default type parameters, multiple parameters, const type parameters, and how to avoid over-generalizing.'
 sidebar:
   order: 2
 ---
@@ -94,6 +94,21 @@ function log(x: unknown): void { console.log(x); }
 ```
 
 A generic earns its keep when the type parameter connects two or more positions (input to output, or one parameter to another). If it doesn't create a *relationship*, drop it.
+
+## `const` type parameters (5.0)
+
+Inference through a generic call widens literals the same way `let` does: `first(["a", "b"])` infers `T` as `string`, not `"a" | "b"`. Callers used to fix that with `as const` at every call site; a `const` modifier on the type parameter asks for literal inference by default:
+
+```ts
+function tuple<const T extends readonly unknown[]>(...items: T): T {
+  return items;
+}
+
+const t = tuple("a", 1, true);
+//    ^? readonly ["a", 1, true]   — without const: (string | number | boolean)[]
+```
+
+The constraint usually needs `readonly` (the inferred literal is a readonly tuple or object). Use it for APIs that key off literal values — route tables, enum-like configs, builders — and leave ordinary generics alone.
 
 <Callout title="The one-line takeaway">
 Type parameters are usually **inferred** from arguments, not written. Constrain them with `extends` when you need `T` to have a certain shape (`T extends { length: number }`) or to be a key of another type (`K extends keyof T`, returning `T[K]`). Give defaults where a sensible fallback exists. And drop any type parameter that appears only once — a generic should link positions, not decorate one.

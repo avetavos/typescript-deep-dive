@@ -1,6 +1,6 @@
 ---
 title: 'Build & Emit'
-description: 'tsc ในฐานะ type-checker เทียบกับ bundler ที่ strip type ออก, isolatedModules, type-only import และ project references สำหรับ monorepo'
+description: 'tsc ในฐานะ type-checker เทียบกับ bundler ที่ strip type ออก, native compiler ของ TypeScript 7 กับ checker แบบขนาน, การรัน .ts ตรง ๆ ใน Node, isolatedModules, type-only import, noCheck กับ isolatedDeclarations และ project references สำหรับ monorepo'
 sidebar:
   order: 5
 ---
@@ -22,14 +22,64 @@ export const trackDiagram = `flowchart LR
   bundler --> out["shipped JavaScript"]
   tsc --> ci["pass/fail in CI"]`;
 
-- **bundler** (esbuild, swc, Vite) transpile ไฟล์แต่ละไฟล์ โดย strip type ออก เร็วมากเพราะไม่เคย check อะไรเลย — แค่ดูทีละไฟล์แล้วลบ type ทิ้ง
+- **bundler** (esbuild, swc, Vite/Rolldown) transpile ไฟล์แต่ละไฟล์ โดย strip type ออก เร็วเพราะไม่เคย check อะไรเลย — แค่ดูทีละไฟล์แล้วลบ type ทิ้ง
 - **`tsc --noEmit`** ทำ type check ทั้งโปรแกรมและไม่ produce output ออกมา นี่คือตัวที่จับ bug ของคุณจริง ๆ และคุณควรรันใน CI (และ editor ก็รันให้คุณตลอดเวลา)
 
-ship สิ่งที่ bundler emit; เชื่อสิ่งที่ `tsc` รายงาน `noEmit` บอก `tsc` ให้เป็น checker ล้วน ๆ
+ship สิ่งที่ bundler emit; เชื่อสิ่งที่ `tsc` รายงาน `noEmit` บอก `tsc` ให้เป็น checker ล้วน ๆ เมื่อก่อนการแยกแบบนี้มีเหตุผลเรื่องความเร็ว — "tsc ช้าเกินกว่าจะอยู่ใน hot path" — และข้ออ้างนั้นแทบระเหยไปแล้วอย่างที่ section ถัดไปอธิบาย แต่การแยกยังคงอยู่ด้วยเหตุผลที่ดีกว่า: bundler ทำสิ่งที่ `tsc` ไม่มีวันทำ (tree-shaking, code-splitting, จัดการ asset) และ checker ไม่ควรต้องสนใจว่าคุณ bundle อย่างไร
+
+## native compiler (TypeScript 7)
+
+TypeScript 7.0 (กรกฎาคม 2026) คือ compiler และ language server ที่ **เขียนใหม่ด้วย Go** จากฝั่งคุณแทบไม่มีอะไรเปลี่ยน: `npm install -D typescript` ติดตั้งมันให้, binary ยังชื่อ `tsc`, `tsconfig.json` ยังเป็นไฟล์เดิม และรายงาน error ชุดเดิม สิ่งที่เปลี่ยนคือนาฬิกา:
+
+| Codebase | TypeScript 6 | TypeScript 7 (`--checkers 4`) | เร็วขึ้น |
+|----------|--------------|-------------------------------|----------|
+| VS Code | 125.7 s | 10.6 s | 11.9× |
+| Sentry | 139.8 s | 15.7 s | 8.9× |
+| Playwright | 12.8 s | 1.47 s | 8.7× |
+| tldraw | 11.2 s | 1.46 s | 7.7× |
+
+memory ลดลง 6–26% พร้อมกัน และ editor รายงาน error แรกใน repo ของ VS Code ที่ราว 1.3 s แทนที่จะเป็น 17.5 s ความเร็วมาจากไหน และมันหมายถึงอะไรสำหรับคุณ:
+
+- **type-check แบบขนาน** checker แบ่งโปรแกรมไปหลาย worker thread: `tsc --checkers 4` คือ default, `--checkers 8` ดัน VS Code ไปถึง 16.7× และ `--singleThreaded` ปิดมันเมื่อคุณอยากได้ profiling แบบ deterministic ใน `--build` mode `--builders N` check project reference ที่เป็นอิสระต่อกันแบบขนาน
+- **`--watch` ที่สร้างใหม่** การ watch ไฟล์ตอนนี้ใช้ native watcher (Parcel watcher ที่ port มาเป็น Go) แทนการ poll ดังนั้น watch mode บน repo ใหญ่ไม่กิน CPU core ค้างไว้อีกต่อไป
+- **การเรียงลำดับ type แบบ deterministic** type ใน error message และ output `.d.ts` ถูกพิมพ์ด้วยลำดับที่คงที่ ไม่ว่า thread ไหนจะเจอมันก่อน TypeScript 6.0 เปิดเรื่องนี้ให้ใช้ผ่าน `--stableTypeOrdering` เพื่อให้คุณ diff output ของ compiler ทั้งสองก่อนสลับ
+- **ไม่มี programmatic API ใน 7.0** `import ts from "typescript"` สำหรับ custom transformer, linter และ plugin ของ language tool ยังไม่มี — 7.1 จะ ship API ตัวใหม่ ระหว่างนี้เครื่องมือที่ต้องใช้ API (typescript-eslint, Volar) รัน TypeScript 6 ผ่าน package `@typescript/typescript6` และคุณติดตั้งทั้งสองตัวคู่กันได้:
+
+```json
+{
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "@typescript/typescript6": "^6.0.2"
+  }
+}
+```
+
+- **editor** VS Code ship language server ของ TypeScript 7 มาให้ (มีคำสั่ง "Disable TypeScript 7 Language Server" ให้ถอยกลับไป 6 ถ้าจำเป็น); อะไรที่เป็น LSP ใช้กับมันได้หมด framework ที่ template checking ฝัง compiler ไว้ — Vue, Svelte, Astro, Angular — ยังใช้ 6.0 ใน editor จนกว่า API ของ 7.1 จะมา ดังนั้น setup แบบ hybrid (7 สำหรับ `tsc`, 6 สำหรับ editor) เป็นเรื่องปกติในโปรเจกต์พวกนั้นตอนนี้
+
+มีการเปลี่ยนพฤติกรรมสองเรื่องที่ควรรู้: JavaScript ที่ใช้แค่ JSDoc เสีย form แบบ Closure ไป (`@enum`, type `?` เดี่ยว ๆ, postfix `!`, `@class`) และ `infer` ใน template literal ตอนนี้แยก string ตาม Unicode code point ดังนั้น `HeadTail<"😀abc">` เป็น `["😀", "abc"]` ไม่ใช่ surrogate ครึ่งซีกสองตัว
+
+## รัน TypeScript โดยไม่ต้อง build
+
+Node 22.6+ (เป็น default ตั้งแต่ 23.6 และในทุก Node 24 LTS) รัน `node app.ts` ได้ตรง ๆ ด้วยการ *strip* type annotation ออก — ไม่ต้องมี `tsc`, bundler หรือ loader Deno กับ Bun ทำแบบนี้มาหลายปีแล้ว จุดที่ต้องระวังคือคำว่า *strip*: runtime ลบ type ทิ้ง ไม่ได้ transform syntax อะไรก็ตามที่ TypeScript เพิ่มเข้ามาแล้วต้อง emit JavaScript จริง — `enum`, `namespace` ที่มี code ข้างใน, parameter property ของ class, `import x = require()` — จะถูกปฏิเสธ
+
+`erasableSyntaxOnly: true` (5.8) ทำให้ `tsc` บังคับกฎนั้นตอน check เลย เพื่อให้ code ที่คุณ type-check คือ code ที่ Node รันได้:
+
+```ts
+// with erasableSyntaxOnly
+class Point {
+  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit
+}
+enum Color { Red, Green }                             // ❌ enums need emit
+
+class Point2 { constructor(readonly x: number) {} }   // ✅ readonly is erasable
+const Color2 = { Red: "red", Green: "green" } as const; // ✅ a const object instead
+```
+
+จับคู่กับ `rewriteRelativeImportExtensions` แล้วคุณ develop กับไฟล์ `.ts` ตรง ๆ ได้ และยัง emit package `.js` สะอาด ๆ ด้วย `tsc` เพื่อ publish
 
 ## isolatedModules: ทำให้ transpile ทีละไฟล์ปลอดภัย
 
-เพราะ bundler transpile **ทีละไฟล์** จึงมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild และ swc
+เพราะ bundler และ type-stripper ทำงาน **ทีละไฟล์** จึงมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild, swc และ stripper ของ Node
 
 ```ts
 // with isolatedModules, tsc forces you to be explicit here:
@@ -46,7 +96,19 @@ import type { User } from "./user";     // erased entirely at emit
 import { type User, save } from "./db"; // User erased, save kept
 ```
 
-`verbatimModuleSyntax: true` บังคับวินัยนี้: import ตัวไหนที่ *ไม่* ถูก mark `type` จะถูก emit ตรง ๆ เป็น runtime import setting นี้กำจัด class ของเรื่องเซอร์ไพรส์ที่ compiler แอบ drop หรือเก็บ import ไว้ และเป็น setting ที่แนะนำสำหรับโปรเจกต์ใหม่
+`verbatimModuleSyntax: true` บังคับวินัยนี้: import ตัวไหนที่ *ไม่* ถูก mark `type` จะถูก emit ตรง ๆ เป็น runtime import setting นี้กำจัด class ของเรื่องเซอร์ไพรส์ที่ compiler แอบ drop หรือเก็บ import ไว้ และ `tsc --init` เปิดให้คุณอยู่แล้ว
+
+## แยก emit ออกจาก check อีกทาง: `noCheck` และ `isolatedDeclarations`
+
+`noEmit` คือ "check แต่ไม่ emit" ตั้งแต่ 5.6 มีภาพสะท้อนของมัน: **`noCheck`** คือ "emit แต่ไม่ check" — `tsc` รันเฉพาะ pass ระดับ syntax ที่ต้องใช้ผลิต output ตัวมันเองเป็นแค่ esbuild ที่ช้ากว่า แต่พอรวมกับ **`isolatedDeclarations`** (5.5) มันมีประโยชน์ขึ้นมา: ถ้าทุก export มี type ระบุชัด ไฟล์ `.d.ts` จะถูก generate ทีละไฟล์ได้โดยไม่ต้องใช้ checker ซึ่งแปลว่า declaration emit รันขนานกับ type-checking ได้ หรือให้ bundler plugin ทำทั้งหมดก็ได้
+
+```ts
+// with isolatedDeclarations
+export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
+export function parse(input: string): unknown { return JSON.parse(input); } // ✅
+```
+
+ราคาคือต้อง annotate public API ของคุณ — ซึ่งสำหรับ library คุณควรทำอยู่แล้ว
 
 ## project references สำหรับ monorepo
 
@@ -59,10 +121,10 @@ import { type User, save } from "./db"; // User erased, save kept
 }
 ```
 
-เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ และ recheck เฉพาะสิ่งที่เปลี่ยน วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental — วิธีมาตรฐานในการทำให้ type-checking เร็วเมื่อ monorepo โตขึ้น
+เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ใน `.tsbuildinfo` (เขียนเสมอตั้งแต่ 5.6) และ recheck เฉพาะสิ่งที่เปลี่ยน ตั้งแต่ 5.6 การ build **เดินต่อแม้เจอ error** ในโปรเจกต์ upstream เพื่อให้คุณเห็นทุก failure ในการรันเดียว — ใส่ `--stopOnBuildErrors` ถ้าอยากได้พฤติกรรม fail-fast แบบเดิม — และ TypeScript 7 check โปรเจกต์ที่เป็นอิสระต่อกันพร้อมกันด้วย `--builders` วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental และขนาน
 
 <Callout title="The one-line takeaway">
-แยก build ออก: ให้ bundler เร็ว ๆ strip type แล้ว emit JavaScript และรัน `tsc --noEmit` แยกเพื่อ check จริง ๆ เปิด `isolatedModules` กับ `verbatimModuleSyntax` เพื่อให้ code ปลอดภัยกับ single-file transpiler และ type-only import ชัดเจน ใน monorepo project references พร้อม `composite: true` ทำให้ `tsc --build` เป็น incremental
+ให้ bundler emit และให้ `tsc` check — และด้วย native compiler แบบขนานของ TypeScript 7 (`--checkers`, `--builders`, native watcher) การ check เร็วกว่าปีที่แล้ว 8–12 เท่า รัน `.ts` ตรง ๆ ใน Node ได้โดยยึด syntax ที่ erase ได้ (`erasableSyntaxOnly`), รักษาความปลอดภัยแบบ single-file ด้วย `isolatedModules` และ `verbatimModuleSyntax`, ใช้ `noCheck` + `isolatedDeclarations` เมื่ออยากได้ declaration โดยไม่ผ่าน checker และใช้ project references ให้ `tsc --build` เป็น incremental ใน monorepo 7.0 ไม่มี programmatic API — เครื่องมือที่ต้องใช้ให้ใช้ `@typescript/typescript6` จนกว่า 7.1 จะมา
 </Callout>
 
 export const quizBuild = [
@@ -77,12 +139,32 @@ export const quizBuild = [
     answer: 1,
   },
   {
-    q: 'ทำไม `isolatedModules` ถึงแนะนำเมื่อใช้ bundler?',
+    q: 'สิ่งหลักที่ TypeScript 7 เปลี่ยนเกี่ยวกับ `tsc` คืออะไร?',
     options: [
-      'ทำให้ type รันตอน runtime',
-      'bundler transpile ทีละไฟล์ และ `isolatedModules` flag construct ที่ single-file transpiler อาจทำพลาด',
-      'ปิด strict mode',
-      'bundle เร็วขึ้น',
+      'format ใหม่ของไฟล์ tsconfig',
+      'compiler ถูกเขียนใหม่ด้วย Go และ type-check แบบขนาน (`--checkers`) ทำให้ build เร็วขึ้นราว 10 เท่าโดยได้ error ชุดเดิม',
+      'emit WebAssembly แทน JavaScript',
+      'ไม่ต้องใช้ tsconfig.json อีกต่อไป',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'lint plugin ตัวหนึ่งทำ `import ts from "typescript"` แล้วพังหลัง upgrade เป็น TypeScript 7 เพราะอะไร?',
+    options: [
+      'TypeScript 7 ถอดการรองรับ `.d.ts` ออก',
+      'TypeScript 7.0 ไม่ ship programmatic API เครื่องมือแบบนี้ต้องใช้ package `@typescript/typescript6` จนกว่า 7.1 จะมา',
+      'ต้อง import ด้วย `require`',
+      'lint plugin ไม่ได้รับอนุญาตอีกต่อไป',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ทำไม `erasableSyntaxOnly` ถึงปฏิเสธ `enum` และ parameter property ใน constructor?',
+    options: [
+      'type-check ช้า',
+      'ทั้งคู่ต้อง emit JavaScript จริง และ runtime อย่าง Node ที่แค่ strip type ออกรันมันไม่ได้',
+      'ถูก deprecate ใน TypeScript 7',
+      'ทำให้ `isolatedModules` พัง',
     ],
     answer: 1,
   },
@@ -93,16 +175,6 @@ export const quizBuild = [
       'ว่า import ถูก erase ตอน emit และไม่กลายเป็น runtime import เลย',
       'ว่า User ถูกโหลดแบบ lazy',
       'ว่า User ถูก validate ตอน runtime',
-    ],
-    answer: 1,
-  },
-  {
-    q: 'project references พร้อม `composite: true` แก้ปัญหาอะไร?',
-    options: [
-      'ลดขนาด output bundle',
-      'ทำให้ type-check monorepo ใหญ่ ๆ เป็น incremental แทนที่จะ recheck ทุกอย่างใหม่ทุกครั้ง',
-      'เพิ่ม runtime type check',
-      'แทนที่ bundler',
     ],
     answer: 1,
   },

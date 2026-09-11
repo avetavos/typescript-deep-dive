@@ -1,6 +1,6 @@
 ---
 title: 'Functions'
-description: 'function type แบบเจาะลึก — parameter, overload และทำไม union มักดีกว่า, this typing และกฎ void return ที่ทำให้คนงง'
+description: 'function type แบบเจาะลึก — parameter, overload และทำไม union มักดีกว่า, this typing กฎ void return ที่ทำให้คนงง และ check เรื่อง initialization กับ return branch ใน 5.7–5.8'
 sidebar:
   order: 5
 ---
@@ -88,6 +88,35 @@ export const voidDiagram = `flowchart LR
   target --> use["callers treat result\nas void — safe"]`;
 
 นี่แหละคือเหตุผลว่าทำไม `array.forEach(x => arr.push(x))` ถึง type-check ผ่านทั้งที่ `push` return number: `forEach` ต้องการ callback แบบ `void` และเมินสิ่งที่ return กลับมา พอรู้กฎแล้วก็เลิกลึกลับ — แต่แทบทุกคนต้องงงกับเรื่องนี้ก่อน
+
+## สิ่งที่ checker จับได้แล้วตอนนี้ (TypeScript 5.7–5.8)
+
+สาม check ใหม่ที่เปลี่ยนวิธี type-check function โดยไม่มี syntax ใหม่:
+
+- **ตัวแปรที่ไม่เคยถูก initialize (5.7)** `let` ที่ประกาศ type ไว้แต่ไม่เคย assign เป็น error แม้จุดที่ใช้จะอยู่ใน nested function:
+
+  ```ts
+  function report() {
+    let result: number; // ประกาศไว้ ไม่เคย assign
+    function print() {
+      console.log(result); // ❌ Variable 'result' is used before being assigned
+    }
+  }
+  ```
+
+- **แต่ละ branch ของ conditional ที่ return ถูกเช็คแยก (5.8)** เมื่อก่อน `any` ฝั่งหนึ่งของ `cond ? a : b` กลบ type ผิดของอีกฝั่ง ตอนนี้ทุก branch ต้องเข้ากับ return type ที่ประกาศ:
+
+  ```ts
+  declare const cache: Map<any, any>;
+  function getUrl(s: string): URL {
+    return cache.has(s) ? cache.get(s) : s;
+    //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
+  }
+  ```
+
+- **callback ที่ return แค่ `null` หรือ `undefined` (5.7)** ภายใต้ `noImplicitAny` `p.catch(() => null)` เป็น error implicit-`any` return เมื่อ infer generic return type ไม่ได้ — annotate callback (`(): number | null => null`) หรือตัวแปรที่รับค่า
+
+และย้ำจากบท narrowing: ตั้งแต่ 5.5 function ที่ return boolean ซึ่งผูกกับ parameter จะได้ **inferred type predicate** guard เล็ก ๆ หลายตัวจึงไม่ต้องเขียน `x is T` อีก
 
 <Callout title="สรุปหนึ่งบรรทัด">
 type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ `this` parameter type `this` และหายไปที่ call site และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้ได้ — นั่นคือเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้

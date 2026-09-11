@@ -1,6 +1,6 @@
 ---
 title: 'Why TypeScript?'
-description: 'static type system ให้อะไรกับเราจริง ๆ, เส้นแบ่ง compile-time กับ runtime, type erasure และต้นทุนที่ต้องยอมรับ'
+description: 'static type system ให้อะไรกับเราจริง ๆ, เส้นแบ่ง compile-time กับ runtime, type erasure และต้นทุนที่ต้องยอมรับ — เขียนอิง TypeScript 7'
 sidebar:
   order: 2
 ---
@@ -89,6 +89,15 @@ TypeScript ไม่ได้ฟรี และการแกล้งทำ�
 - **ช่องว่างระหว่าง type กับ runtime** compiler อาจ *ผิด* เรื่องความจริงตอน runtime ได้ — `any`, cast ที่ผิด หรือ external data ที่ไม่ผ่านการ validate โกหก compiler ได้ type คือ model ไม่ใช่การการันตีเรื่องโลกภายนอก (โมดูล Practical Mastery พูดเรื่องนี้เป็นหลัก)
 
 การแลกเปลี่ยนนี้เกือบจะคุ้มเสมอสำหรับอะไรก็ตามที่มากกว่า script ใช้แล้วทิ้ง: คุณจ่ายภาษีก้อนคงที่ แล้วได้ผลตอบแทนที่ทบต้นก้อนใหญ่กลับมาในรูปของ bug ที่ถูกจับ, การ refactor ที่ปลอดภัย และความฉลาดของ editor
+
+## TypeScript 7 กับ native compiler
+
+คอร์สนี้เขียนอิง **TypeScript 7** (กรกฎาคม 2026) compiler ถูก port จาก TypeScript ไปเป็น Go: ภาษาเดิม คำสั่ง `tsc` เดิม แต่การ type-check ตอนนี้รันแบบ native และขนานกัน (`--checkers 4` เป็นค่าเริ่มต้น) ทำให้ full build เร็วขึ้นราว 8–12 เท่า และ "เวลาถึง error แรก" ใน editor ลดจากหลายวินาทีเหลือไม่ถึงวินาทีบน codebase ใหญ่ ๆ มีสองเรื่องที่กระทบตอนเรียน:
+
+- **`strict` เปิดเป็นค่าเริ่มต้น** ตั้งแต่ 6.0 `tsconfig.json` เปล่า ๆ ก็หมายถึง `noImplicitAny`, `strictNullChecks` และเพื่อน ๆ เปิดหมดแล้ว — ทุกตัวอย่างในคอร์สนี้ตั้งสมมติฐานแบบนั้น
+- **ทางหนีเก่า ๆ หายไปแล้ว** `target: "es5"`, `moduleResolution: "node"`, `baseUrl` และ `esModuleInterop: false` ถูก deprecate ใน 6.0 และถอดออกใน 7.0 โมดูล Compiler & Tooling อธิบายวิธี migrate
+
+ถ้าคุณเรียน TypeScript มาจากยุค 4.x หรือ 5.x type system ที่รู้จักยังเหมือนเดิม สิ่งที่เปลี่ยนคือความเร็วและค่าเริ่มต้น บทเรียนจะแปะเวอร์ชันที่ feature ใหม่ ๆ เข้ามา (เช่น "5.5") ให้รู้ว่าอะไรเพิ่งมา
 
 <Callout title="สรุปบรรทัดเดียว">
 TypeScript เช็ค type ตอน **compile time** แล้ว **ลบ** type ทิ้ง — JavaScript ที่ emit ออกมาไม่มี type และไม่มี runtime cost ที่เกี่ยวกับ type เลย หน้าที่ของ type system คือย้าย bug จาก "เจอทีหลังบน production" ไปเป็น "เจอตอนนี้ใน editor" ราคาที่จ่ายคือ build step และ learning curve ที่มีจริง ส่วนผลตอบแทนคือการ refactor ที่ปลอดภัยและ bug ทั้งกลุ่มที่ compile ไม่ผ่านตั้งแต่แรก

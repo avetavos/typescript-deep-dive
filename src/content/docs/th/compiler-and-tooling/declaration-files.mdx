@@ -53,7 +53,21 @@ declare module "legacy-lib" {
 npm install --save-dev @types/lodash
 ```
 
-`tsc` หยิบ package `@types/*` จาก `node_modules` มาใช้อัตโนมัติ การ install `@types/lodash` จึงทำให้ `import _ from "lodash"` มี type ทันที library สมัยใหม่หลายตัว ship type ของตัวเองมาใน package (declare ผ่าน field `"types"` ใน `package.json` ของตัวเอง) ซึ่งกรณีนั้นคุณไม่ต้องใช้ package `@types` เลย
+เมื่อคุณ *import* package `tsc` จะหา `@types/*` คู่ของมันใน `node_modules` ให้อัตโนมัติ การ install `@types/lodash` จึงทำให้ `import _ from "lodash"` มี type ทันที library สมัยใหม่หลายตัว ship type ของตัวเองมาใน package (declare ผ่าน field `"types"` ใน `package.json` ของตัวเอง) ซึ่งกรณีนั้นคุณไม่ต้องใช้ package `@types` เลย
+
+package ที่ให้ **global** แทนที่จะเป็น module — `@types/node` สำหรับ `process` และ `Buffer`, `@types/jest` สำหรับ `describe` และ `expect` — เป็นอีกเรื่องตั้งแต่ TypeScript 6.0 default ของ `types` ตอนนี้คือ `[]` จึงไม่ถูกโหลดแค่เพราะ install ไว้ ต้องระบุ:
+
+```json
+{ "compilerOptions": { "types": ["node", "jest"] } }
+```
+
+(`"types": ["*"]` คืนพฤติกรรมโหลดทุกอย่างแบบเดิม) การเปลี่ยนนี้หยุดโปรเจกต์จากการแอบดึง package `@types/*` ที่ไม่เกี่ยวข้องเป็นร้อยจาก transitive dependency ซึ่งทั้งช้าและเป็นต้นตอของ error "duplicate global"
+
+## ไฟล์ lib และการแทนที่มัน
+
+ไฟล์ `.d.ts` built-in ของ platform — `lib.es2025.d.ts`, `lib.dom.d.ts` — ถูกเลือกด้วย `target` และ `lib` มีการเปลี่ยนสองเรื่องล่าสุด: `lib.dom.d.ts` ตอนนี้รวมทุกอย่างที่เคยแยกอยู่ใน `dom.iterable` และ `dom.asynciterable` (entry พวกนั้นเป็น stub ว่างที่เก็บไว้ให้ config เก่า) และ declaration ของ DOM มี summary จาก MDN ติดมาด้วย hover จึงแสดงคำอธิบายบรรทัดเดียวของแต่ละ API
+
+ถ้า `lib.dom` ที่มากับ compiler ไม่ตรงกับคุณ — เก่าเกินไป หรืออยากใช้ type ของ `@types/web` — `libReplacement: true` (5.8) ทำให้ `tsc` หา package `@typescript/lib-dom` ใน `node_modules` แล้วใช้แทน ปิดเป็น default ตั้งแต่ 6.0 เพราะโปรเจกต์ส่วนใหญ่ไม่เคยต้องใช้ และการค้นหาเสียเวลา
 
 ## การ emit declaration ของตัวเอง
 
@@ -65,8 +79,13 @@ npm install --save-dev @types/lodash
 
 ตอนนี้ `tsc` ผลิต `.d.ts` ไว้ข้าง ๆ `.js` ที่ emit แต่ละไฟล์ แล้วคุณชี้ field `"types"` ใน `package.json` ไปที่ entry declaration ผู้ใช้ของคุณ import library แล้วได้ type information ครบ — กลไกเดียวกับที่ทั้ง ecosystem ใช้
 
+มีสอง option ที่ทำให้สิ่งที่ emit ดีขึ้น:
+
+- **`isolatedDeclarations`** (5.5) บังคับให้ทุก export มี type ระบุชัด แลกกับการที่ไฟล์ `.d.ts` generate ได้ทีละไฟล์โดยไม่ต้องรัน checker — แบบขนาน หรือให้ bundler plugin ทำ — ซึ่งเป็นสิ่งที่ monorepo ใหญ่ ๆ และเครื่องมืออย่าง `esbuild` ต้องการเพื่อ emit declaration ได้เร็ว
+- ตั้งแต่ 5.8 computed property name ที่เป็น identifier ธรรมดาหรือชื่อแบบมีจุดถูก **คงไว้** ใน declaration (`[propName]: number`) แทนที่จะถูก widen เป็น index signature (`[x: string]: number`) ผู้ใช้จึงเห็น shape จริง
+
 <Callout title="The one-line takeaway">
-`.d.ts` คือ type ที่ไม่มี runtime code `declare` แนะนำ ambient declaration แบบนั้น (global หรือ `declare module` สำหรับ package ที่ไม่มี type) library ส่วนใหญ่ถูกครอบคลุมทั้งจาก type ที่ ship มาใน package หรือจาก package `@types/*` จาก DefinitelyTyped ที่ `tsc` หยิบมาใช้อัตโนมัติ เมื่อคุณ publish library ตั้ง `declaration: true` เพื่อให้ผู้ใช้ได้ type ด้วย
+`.d.ts` คือ type ที่ไม่มี runtime code `declare` แนะนำ ambient declaration แบบนั้น (global หรือ `declare module` สำหรับ package ที่ไม่มี type) library ส่วนใหญ่ถูกครอบคลุมทั้งจาก type ที่ ship มาใน package หรือจาก package `@types/*` จาก DefinitelyTyped — ถูกหาให้อัตโนมัติสำหรับ import แต่ตั้งแต่ TypeScript 6.0 package แบบ global อย่าง `@types/node` ต้องระบุใน `types` เมื่อคุณ publish library ตั้ง `declaration: true` (และพิจารณา `isolatedDeclarations`) เพื่อให้ผู้ใช้ได้ type ด้วย
 </Callout>
 
 export const quizDecl = [
@@ -97,6 +116,16 @@ export const quizDecl = [
       'DefinitelyTyped, repository ชุมชนของ declaration file ที่ publish ภายใต้ `@types/*`',
       'npm registry generate ให้อัตโนมัติ',
       'ship มาข้างใน TypeScript compiler',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'คุณ install `@types/node` แล้ว แต่ `process` ยัง "not defined" ใน TypeScript 7 ขาดอะไรไป?',
+    options: [
+      '`lib` ต้องมี `dom`',
+      '`"types": ["node"]` — package `@types` แบบ global ไม่ถูกโหลดอัตโนมัติแล้วตั้งแต่ default กลายเป็น `[]`',
+      'ต้อง import package นั้นในทุกไฟล์',
+      '`declaration: true`',
     ],
     answer: 1,
   },

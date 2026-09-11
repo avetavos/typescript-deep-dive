@@ -1,6 +1,6 @@
 ---
 title: 'Why TypeScript?'
-description: 'What a static type system actually buys you, the compile-time vs runtime split, type erasure, and the honest costs.'
+description: 'What a static type system actually buys you, the compile-time vs runtime split, type erasure, and the honest costs — written against TypeScript 7.'
 sidebar:
   order: 2
 ---
@@ -89,6 +89,15 @@ TypeScript is not free, and pretending otherwise does you a disservice:
 - **Type/runtime gap.** The compiler can be *wrong* about runtime reality — an `any`, a bad cast, or unvalidated external data can lie to it. Types are a model, not a guarantee about the outside world (the Practical Mastery module is largely about this).
 
 The trade is almost always worth it for anything beyond a throwaway script: you pay a fixed tax and get a large, compounding return in caught bugs, safe refactoring, and editor intelligence.
+
+## TypeScript 7 and the native compiler
+
+This course is written against **TypeScript 7** (July 2026). The compiler was ported from TypeScript to Go: same language, same `tsc` command, but type-checking now runs natively and in parallel (`--checkers 4` by default), which makes full builds roughly 8–12× faster and cuts the editor's "time to first error" from seconds to under a second on large codebases. Two consequences matter while you learn:
+
+- **`strict` is on by default.** Since 6.0 a bare `tsconfig.json` already means `noImplicitAny`, `strictNullChecks` and friends are enabled — every example in this course assumes that.
+- **Old escape hatches are gone.** `target: "es5"`, `moduleResolution: "node"`, `baseUrl` and `esModuleInterop: false` were deprecated in 6.0 and removed in 7.0. The Compiler & Tooling module covers the migration.
+
+If you learned TypeScript on 4.x or 5.x, the type system you know is unchanged; what changed is speed and defaults. Lessons tag newer features with the version that introduced them (for example "5.5") so you can tell what is recent.
 
 <Callout title="The one-line takeaway">
 TypeScript checks types at **compile time** and then **erases** them — the emitted JavaScript has no types and zero type-related runtime cost. Its job is to move bugs from "discovered later in production" to "discovered now in your editor." The price is a build step and a real learning curve; the payoff is safe refactoring and whole categories of bugs that simply can't compile.

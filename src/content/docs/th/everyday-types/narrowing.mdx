@@ -1,6 +1,6 @@
 ---
 title: 'Narrowing'
-description: 'control flow เปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะได้อย่างไร — typeof, in, discriminated union, exhaustiveness ด้วย never, type guard และ assertion function'
+description: 'control flow เปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะได้อย่างไร — typeof, in, discriminated union, exhaustiveness ด้วย never, type guard, assertion function — และของใหม่ตั้งแต่ 5.5: inferred type predicate, switch (true) และ check ที่ compiler ปฏิเสธแล้ว'
 sidebar:
   order: 6
 ---
@@ -127,6 +127,66 @@ function use(v: string | null) {
 
 หลังเรียก compiler รู้ว่าเงื่อนไขที่ assert เป็นจริง (ไม่งั้นคง throw ไปแล้ว) เลย narrow ตาม นี่คือวิธีที่ helper แบบ `assert` และ `assert` ของ Node ให้ type narrowing มาฟรี ๆ
 
+## Inferred type predicate (TypeScript 5.5)
+
+guard ง่าย ๆ ไม่ต้องเขียน `x is T` เองอีกแล้ว เมื่อ function return boolean ที่ *เกี่ยวกับ* parameter ของมัน TypeScript จะ infer predicate ให้:
+
+```ts
+function isBirdReal(bird: Bird | undefined) {
+  return bird !== undefined;
+}
+// infer ได้: (bird: Bird | undefined) => bird is Bird
+
+const birds = countries
+  .map((c) => nationalBirds.get(c))
+  .filter((b) => b !== undefined);
+//    ^? Bird[]   — ก่อน 5.5 ได้ (Bird | undefined)[]
+```
+
+compiler จะ infer predicate ก็ต่อเมื่อครบทั้งสี่ข้อ: function ไม่มี return-type annotation, มี `return` เดียว (และไม่มี implicit return `undefined`), boolean ที่ return ผูกกับ narrowing check บน parameter และ parameter ไม่ถูก assign ใหม่ อะไรที่ซับซ้อนกว่านั้น — หลาย return, check บน property ของตัวแปรที่ mutable — ยังต้องเขียน `x is T` เอง
+
+## narrowing ที่ฉลาดขึ้น
+
+สามการปรับปรุงใหม่ ๆ ที่ลบจังหวะ "ทำไมมันไม่ narrow?" ที่เจอบ่อย:
+
+- **`switch (true)` (5.3)** แต่ละ `case` expression narrow เหมือนเป็น `if`:
+
+  ```ts
+  switch (true) {
+    case typeof x === "string": x.toUpperCase(); break;
+    case x instanceof Date:     x.getTime();     break;
+  }
+  ```
+
+- **closure หลัง assignment สุดท้าย (5.4)** `const` หรือ `let`/parameter ที่ไม่ถูก assign ใหม่หลังจากนั้น จะรักษา type ที่ narrow แล้วไว้ใน callback ที่สร้างหลัง check:
+
+  ```ts
+  function getUrls(url: string | URL, names: string[]) {
+    if (typeof url === "string") url = new URL(url);
+    return names.map((n) => new URL(n, url)); // url: URL — ไม่ต้อง cast
+  }
+  ```
+
+- **constant indexed access (5.5)** `obj[key]` narrow ได้เมื่อทั้ง `obj` และ `key` เป็น `const` โดยพฤตินัย:
+
+  ```ts
+  function f(obj: Record<string, unknown>, key: string) {
+    if (typeof obj[key] === "string") obj[key].toUpperCase(); // ✅
+  }
+  ```
+
+## check ที่ compiler ปฏิเสธแล้ว (TypeScript 5.6)
+
+อีกด้านของ narrowing: เงื่อนไขที่ *ไม่มีทาง* narrow ได้แทบจะเป็น bug เสมอ และ 5.6 ทำให้หลายกรณีเป็น error regex หรือ arrow function เปล่า ๆ ใน `if` เป็น truthy ตลอด; `??` ที่ฝั่งซ้ายไม่มีทาง nullish คือ unreachable:
+
+```ts
+if (/0x[0-9a-f]/) { }        // ❌ expression แบบนี้ truthy เสมอ
+if (x => 0) { }              // ❌ (คุณตั้งใจจะเขียน x >= 0)
+return value < max ?? 100;   // ❌ ฝั่งขวาของ ?? unreachable
+```
+
+literal `true`, `false`, `0` และ `1` ยังใช้ได้ (`while (true)` เป็นสำนวนปกติ) regex *literal* ก็ถูกตรวจ syntax ตั้งแต่ 5.5 ด้วย วงเล็บไม่ครบหรือ backreference ไปยัง group ที่ไม่มีจึงเป็น compile error ไม่ใช่เซอร์ไพรส์ตอน runtime
+
 <Callout title="สรุปหนึ่งบรรทัด">
 narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บน tag นั้น แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) ที่ compiler เชื่อถือ
 </Callout>
@@ -179,6 +239,16 @@ export const quizNarrow = [
       'narrow type ให้ตลอด scope ที่เหลือ เพราะไม่งั้นคงจะ throw ไปแล้ว',
       'ไม่ทำอะไรตอน compile',
       'run เฉพาะใน test',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'TypeScript 5.5+ infer type predicate ให้ function ที่ไม่ได้เขียน `x is T` เมื่อไร?',
+    options: [
+      'ทุกครั้งที่ function return boolean',
+      'เมื่อไม่มี return annotation, มี return เดียว, boolean ผูกกับ check บน parameter และ parameter ไม่ถูก assign ใหม่',
+      'เฉพาะ arrow function ที่ส่งให้ filter',
+      'ไม่เคย — ต้องเขียน predicate เองเสมอ',
     ],
     answer: 1,
   },

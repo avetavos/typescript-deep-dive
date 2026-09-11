@@ -3,7 +3,7 @@ title: TypeScript Deep Dive
 description: เชี่ยวชาญ type system ของ TypeScript ตั้งแต่พื้นฐาน — structural typing, inference, generics, conditional และ mapped types, template literals, utility types, classes, compiler และการ type code จริง สำหรับ developer ที่รู้พื้นฐานแล้วและอยากเจาะลึก
 template: splash
 hero:
-  tagline: คอร์สแบบ standalone ระดับ intermediate→advanced ว่าด้วย type system ของ TypeScript ตั้งแต่ structural typing และ inference ไปจนถึง generics, conditional & mapped types, template literals, recursive types, decorators, compiler และการ type API จริง — ทุกหัวข้อสอนผ่าน code ที่ annotate ให้เห็นชัดว่า compiler infer อะไรออกมา
+  tagline: คอร์สแบบ standalone ระดับ intermediate→advanced ว่าด้วย type system ของ TypeScript เขียนสำหรับ TypeScript 7 (native compiler) และ default ของ 6.0 ตั้งแต่ structural typing และ inference ไปจนถึง generics, conditional & mapped types, template literals, recursive types, decorators, compiler และการ type API จริง — ทุกหัวข้อสอนผ่าน code ที่ annotate ให้เห็นชัดว่า compiler infer อะไรออกมา
   actions:
     - text: เริ่มที่นี่
       link: /typescript/th/foundations/
@@ -35,7 +35,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     field และ access, this type, stage-3 decorators และ mixin [ออกแบบ →](/typescript/th/classes-and-oop/)
   </Card>
   <Card title="The Compiler & Tooling" icon="seti:powershell">
-    tsconfig ที่สำคัญ, module resolution, declaration file และ emit [ตั้งค่า →](/typescript/th/compiler-and-tooling/)
+    default ของ TypeScript 6/7, native compiler, module resolution, declaration file และ emit [ตั้งค่า →](/typescript/th/compiler-and-tooling/)
   </Card>
   <Card title="Practical Mastery" icon="approve-check">
     การ type API และ boundary, nullability และ never, pitfall เรื่อง performance และกลยุทธ์ migration [นำไปใช้ →](/typescript/th/practical-mastery/)
@@ -55,6 +55,6 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     ไม่ใช่แค่ "นี่คือ `Partial<T>`" แต่เป็น "นี่คือวิธีที่ `Partial` ถูกสร้างขึ้น และสร้างเองได้อย่างไร" คุณจะอ่านและเขียน type-level code ได้อย่างมั่นใจ
   </Card>
   <Card title="ไดอะแกรมที่อธิบายได้" icon="puzzle">
-    type widening, narrowing flow, conditional-type distribution และ module resolution เป็นไดอะแกรม Mermaid ที่รองรับธีม สองภาษา (English / ไทย) พร้อมบันทึกความคืบหน้า quiz
+    type widening, narrowing flow, conditional-type distribution และ module resolution เป็นไดอะแกรม Mermaid ที่รองรับธีม ทันสมัยตาม TypeScript 7.0 (กรกฎาคม 2026) พร้อมระบุพฤติกรรมแบบเก่าไว้ชัด สองภาษา (English / ไทย) พร้อมบันทึกความคืบหน้า quiz
   </Card>
 </CardGrid>

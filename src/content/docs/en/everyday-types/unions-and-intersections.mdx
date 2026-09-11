@@ -81,6 +81,10 @@ type Both = A & B;
 
 That last one is a hint: when you want "one of these object shapes," you almost always want a **union** (`A | B`) with a shared discriminant field — not an intersection. That's the discriminated-union pattern in the narrowing lesson.
 
+## A display note for TypeScript 7
+
+TypeScript 7 orders the members of a union deterministically (`--stableTypeOrdering`, permanently on), so a hover or error message may show `string | number` where 6.0 showed `number | string`. Nothing about assignability changes — unions are sets — but tests that snapshot error text or `.d.ts` output may need regenerating.
+
 <Callout title="The one-line takeaway">
 `A \| B` is a **union** — OR — and is wider; while you hold it you can only access members common to every branch until you narrow. `A & B` is an **intersection** — AND — and for objects is narrower, requiring all properties of both, which is how you compose object types. They point in opposite directions: unions add values but restrict access; intersections restrict values but add members.
 </Callout>

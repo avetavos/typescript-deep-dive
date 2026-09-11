@@ -70,6 +70,21 @@ type M = Method<"GET /users">; // "GET"
 
 `infer E` says "match anything here and call it `E`." This is genuine parsing at the type level — the technique behind typed routers that extract `:id` params from a path string and libraries that validate format strings.
 
+## TypeScript 7 and Unicode
+
+Until TypeScript 6, `infer` inside a template literal split strings by **UTF-16 code unit** — the unit that JavaScript's `.length` counts. That silently broke on emoji and other astral characters. TypeScript 7 splits by **Unicode code point**:
+
+```ts
+type HeadTail<S extends string> =
+  S extends `${infer Head}${infer Tail}` ? [Head, Tail] : never;
+
+type R = HeadTail<"😀abc">;
+//   ^? TypeScript 7:  ["😀", "abc"]
+//      TypeScript 6:  ["\ud83d", "\ude00abc"]  — a surrogate pair cut in half
+```
+
+Every recursive string type that peels one character at a time — a `Split`, a `Reverse`, a character counter — now sees whole characters. That is almost always what you wanted, but it is a **breaking change** if a type depended on the old count: a type-level "length" compared against runtime `.length` (which still counts code units) will disagree on `"😀"`. If you maintain such a type, test it with non-BMP input when you upgrade.
+
 ## Where this shows up
 
 - **Typed keys**: `` `${Theme}-${Shade}` `` for a design-token type.
@@ -111,6 +126,16 @@ export const quizTemplate = [
       'Capturing the part of the string after "on" into a new type variable E',
       'Checking the string length',
       'Converting the string to a number',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'In TypeScript 7, what is `HeadTail<"😀abc">` when `HeadTail` peels the first character with `${infer Head}${infer Tail}`?',
+    options: [
+      '["\\ud83d", "\\ude00abc"] — split by UTF-16 code unit',
+      '["😀", "abc"] — TypeScript 7 splits by Unicode code point',
+      'never',
+      'string',
     ],
     answer: 1,
   },

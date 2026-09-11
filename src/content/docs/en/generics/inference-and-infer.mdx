@@ -1,6 +1,6 @@
 ---
 title: 'Inference & infer'
-description: 'How TypeScript picks type arguments from inference sites, and how the infer keyword extracts types out of other types.'
+description: 'How TypeScript picks type arguments from inference sites, and how the infer keyword extracts types out of other types — plus NoInfer and what changed in 5.9 and 6.0.'
 sidebar:
   order: 5
 ---
@@ -80,6 +80,13 @@ type M = Merge<{ a: string; b: number }>; // string | number (union)
 ```
 
 For most day-to-day work, one `infer` per pattern is all you need.
+
+## `NoInfer<T>` and other inference refinements
+
+- **`NoInfer<T>` (5.4)** marks an inference site as *non-contributing*: `defaultColor?: NoInfer<C>` is checked against the `C` inferred from the other arguments instead of widening it. It erases to `T` — a hint to the inference engine, not a new type (worked example in the Type Inference lesson of the Foundations module).
+- **Callbacks in object literals (6.0).** Functions that don't use `this` are no longer context-sensitive, so `T` can be inferred from one property's callback and flow into its siblings. Fewer `(x: T)` annotations inside option objects.
+- **Tighter inference in 5.9.** A fix for type variables "leaking" out of inference means some calls that previously accepted a wrong `T` now error. If a call stops compiling after an upgrade, the intended fix is an explicit type argument: `f<Expected>(...)`.
+- **Faster instantiation (5.9).** Intermediate instantiations are cached, which is why heavy generic libraries (Zod, tRPC) hit "excessively deep" errors far less often.
 
 <Callout title="The one-line takeaway">
 Generic inference reads **argument positions** (inference sites) and reconciles them into one type — which is why the arguments, not the return annotation, decide what `T` becomes. The `infer` keyword, used inside a conditional type, introduces a variable that TypeScript solves by pattern-matching structure: put `infer X` where the part you want lives (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) and TypeScript hands you that piece. This is how `ReturnType` and friends are built.

@@ -1,6 +1,6 @@
 ---
 title: 'Modules & Resolution'
-description: 'ESM เทียบ CommonJS, tsc หาไฟล์ที่คุณ import เจอได้อย่างไร, resolution mode ต่าง ๆ และทำไม import extension กับ esModuleInterop ถึงทำให้สับสนบ่อย'
+description: 'ESM เทียบ CommonJS, tsc หาไฟล์ที่คุณ import เจอได้อย่างไร, resolution mode ที่เหลือรอดมาถึง TypeScript 7 (nodenext, bundler, node18/node20), import extension, import attribute, import defer และทำไม esModuleInterop กลายเป็นเรื่องในอดีต'
 sidebar:
   order: 3
 ---
@@ -17,44 +17,87 @@ JavaScript มี module format สองแบบ และ TypeScript ต้�
 - **CommonJS (CJS)** — format เก่าของ Node: `require()` และ `module.exports` โหลดแบบ synchronous ด้วยการ resolve ไฟล์บน disk
 - **ES Modules (ESM)** — มาตรฐาน: `import` และ `export` ใช้ native ใน browser และ Node สมัยใหม่ วิเคราะห์แบบ static ได้
 
-ความสับสนส่วนใหญ่ในโปรเจกต์ TypeScript ย้อนกลับไปที่ความไม่ตรงกันระหว่าง module format ที่คุณ *เขียน*, format ที่ `tsc` *emit* และ format ที่ *runtime* คาดหวัง option `module` และ `moduleResolution` คือวิธีที่คุณทำให้ทั้งสามอย่างนี้ตรงกัน
+ความสับสนส่วนใหญ่ในโปรเจกต์ TypeScript ย้อนกลับไปที่ความไม่ตรงกันระหว่าง module format ที่คุณ *เขียน*, format ที่ `tsc` *emit* และ format ที่ *runtime* คาดหวัง option `module` และ `moduleResolution` คือวิธีที่คุณทำให้ทั้งสามอย่างนี้ตรงกัน ตั้งแต่ 6.0 default ของ `module` คือ `esnext` — ESM คือสมมติฐานตั้งต้น ส่วน CJS คือสิ่งที่คุณต้อง opt in
 
 ## resolution ทำงานอย่างไร
 
-เมื่อคุณเขียน `import { x } from "./util"` `tsc` ต้องแปลง `"./util"` ให้เป็นไฟล์จริง กลยุทธ์ที่ใช้ขึ้นกับ `moduleResolution`:
+เมื่อคุณเขียน `import { x } from "./util"` `tsc` ต้องแปลง `"./util"` ให้เป็นไฟล์จริง กลยุทธ์ที่ใช้ขึ้นกับ `moduleResolution` และใน TypeScript 7 เหลืออยู่แค่สองตระกูลเท่านั้น:
 
 <Mermaid title="การเลือก moduleResolution mode" code={resolveDiagram} />
 
 export const resolveDiagram = `flowchart TB
   q["How is your code loaded?"] --> node["Runs in Node directly"]
   q --> bundled["Goes through a bundler"]
-  node --> nodenext["moduleResolution: NodeNext\nrespects package.json type + exports"]
-  bundled --> bundler["moduleResolution: Bundler\nlets the bundler resolve"]`;
+  node --> nodenext["module: nodenext (or node18 / node20)\nrespects package.json type + exports"]
+  bundled --> bundler["moduleResolution: bundler\nlets the bundler resolve"]`;
 
-- **`NodeNext` / `Node16`** — จำลอง Node สมัยใหม่แบบเป๊ะ: อ่าน `"type": "module"` ใน `package.json`, เคารพ field `"exports"` และบังคับกฎ ESM (รวมถึงต้องเขียน file extension ใน relative import: `import "./util.js"`)
-- **`Bundler`** — สำหรับ code ที่ผ่าน Vite, esbuild หรือ webpack โหมดนี้ผ่อนเรื่อง extension และปล่อยให้ bundler จัดการการหาไฟล์จริง ให้ตรงกับพฤติกรรมของเครื่องมือเหล่านั้น
-- **`Node10`** (เดิมชื่อ `Node`) — algorithm CommonJS แบบเก่า หลีกเลี่ยงในโปรเจกต์ใหม่ ไม่เข้าใจ field `"exports"`
+- **`nodenext`** — จำลอง Node ปัจจุบันแบบเป๊ะ: อ่าน `"type": "module"` ใน `package.json`, เคารพ field `"exports"` และบังคับกฎ ESM (รวมถึงต้องเขียน file extension ใน relative import: `import "./util.js"`) การตั้ง `module: nodenext` implies resolution ที่ตรงกันให้เลย ส่วน `node16` คือไอเดียเดียวกันที่แช่แข็งไว้ที่ Node 16
+- **`node18` (5.8) / `node20` (5.9)** — snapshot แบบ stable ของ `nodenext` สำหรับทีมที่ pin Node ไว้สายใดสายหนึ่ง `nodenext` ขยับตาม Node ส่วน `node20` จะไม่เปลี่ยนใต้เท้าคุณ และ implies `target: es2023` ความต่างที่สำคัญที่สุด: `node18` ยังยอมรับ syntax `assert` ของ import ที่ deprecated แล้ว และห้าม `require()` ของ ESM; `node20` กับ `nodenext` กลับกัน
+- **`bundler`** — สำหรับ code ที่ผ่าน Vite, esbuild, Rolldown หรือ webpack โหมดนี้ผ่อนเรื่อง extension และปล่อยให้ bundler จัดการการหาไฟล์จริง ให้ตรงกับพฤติกรรมของเครื่องมือเหล่านั้น ตั้งแต่ 6.0 จับคู่กับ `module: commonjs` ได้ด้วย นอกจาก `esnext`/`preserve` ซึ่งเปิดทางให้โปรเจกต์ CJS migrate ได้
 
-mental model สำคัญ: **`moduleResolution` ควรอธิบายว่า code ของคุณถูก *โหลดจริง* อย่างไร** Node รันโดยตรงใช่ไหม? ใช้ `NodeNext` ผ่าน bundler ใช่ไหม? ใช้ `Bundler`
+algorithm `node` / `node10` แบบเก่าและ `classic` **หายไปแล้ว** ใน TypeScript 7 (deprecated ใน 6.0) ทั้งคู่เกิดก่อน `"exports"` และ `"type"` ของ package จึงอธิบาย Node ที่ไม่มีอยู่แล้ว
+
+mental model สำคัญ: **`moduleResolution` ควรอธิบายว่า code ของคุณถูก *โหลดจริง* อย่างไร** Node รันโดยตรงใช่ไหม? `nodenext` ผ่าน bundler ใช่ไหม? `bundler`
 
 ## เรื่องเซอร์ไพรส์ของ extension
 
-ภายใต้ `NodeNext` native ESM ต้องมี extension ใน import และ — น่าสับสน — คุณเขียน extension `.js` แม้ไฟล์บน disk จะเป็น `.ts`:
+ภายใต้ `nodenext` native ESM ต้องมี extension ใน import และ — น่าสับสน — คุณเขียน extension `.js` แม้ไฟล์บน disk จะเป็น `.ts`:
 
 ```ts
 // util.ts exists on disk, but the emitted import must point at the emitted .js
-import { helper } from "./util.js"; // ✅ correct under NodeNext ESM
+import { helper } from "./util.js"; // ✅ correct under nodenext ESM
 import { helper } from "./util";    // ❌ ESM needs the extension
 ```
 
 เรื่องนี้ทำทุกคนสะดุดครั้งหนึ่ง เหตุผลคือ `tsc` ไม่ rewrite import path ของคุณ และตอน runtime ไฟล์จะเป็น `util.js` ดังนั้น source ต้องเรียกชื่อไฟล์ตอน runtime ไว้ตั้งแต่แรก
 
-## esModuleInterop
+ตั้งแต่ 5.7 มีทางออก เปิด `rewriteRelativeImportExtensions: true` แล้วคุณเขียน extension จริงได้ และ `tsc` จะ rewrite ให้ตอน emit — เฉพาะ path แบบ *relative* ที่ลงท้ายด้วย extension ของ TypeScript เท่านั้น:
 
-CJS กับ ESM มีความเห็นไม่ตรงกันเรื่อง default export ซึ่งในอดีตทำให้ `import express from "express"` fail กับ module ที่เป็น CommonJS `esModuleInterop: true` แทรก interop shim เล็ก ๆ ที่ทำให้ default และ namespace import ของ CommonJS module ทำงานตามที่คุณคาดหวัง flag นี้เปิดเป็น default ใน config ที่แนะนำ และคุณเกือบจะอยากได้เสมอ — การปิดคือแหล่งของ import error ที่เลี่ยงได้
+```ts
+import { helper } from "./util.ts";      // emitted as "./util.js"
+import { x } from "../lib/thing.mts";    // emitted as "../lib/thing.mjs"
+import pkg from "some-package/file.ts";  // not relative — left alone
+```
+
+นี่คือสิ่งที่ทำให้ "รัน `.ts` ตรง ๆ ใน Node ตอน develop แล้ว emit `.js` สำหรับ production" ทำได้โดยไม่ต้องมี import สองชุด
+
+## `require()` ของ ESM และ import แบบ `#/`
+
+feature ของ Node สองอย่างที่ `nodenext` จำลองไว้:
+
+- **`require("./esm-module.js")` จาก CommonJS** ใช้ได้ใน Node 22+ (ตราบใดที่ไฟล์ ESM ไม่มี top-level `await`) TypeScript 5.8+ เข้าใจเรื่องนี้ภายใต้ `nodenext` library จึง ship แค่ ESM แล้วให้ผู้เรียกฝั่ง CJS ใช้ได้ — ปัญหา dual-package เล็กลงกว่าเดิมมาก
+- **subpath import ที่ขึ้นต้นด้วย `#/`** — Node ให้ `package.json` map `"imports": { "#/*": "./dist/*" }` ได้ และ 6.0 resolve `import { x } from "#/util.js"` ภายใต้ `nodenext` และ `bundler` นี่คือของแทนอย่างเป็นทางการของทริค `baseUrl` โดย scope อยู่ใน package ของคุณเองและ Node เข้าใจด้วยตัวมันเอง
+
+## import attribute, JSON และ `import defer`
+
+keyword `asserts` ของ import assertion ถูก deprecate แล้ว มาตรฐานคือ `with` และภายใต้ `nodenext` การ import JSON *ต้อง* มีมันและ *ต้อง* เป็น default import:
+
+```ts
+import config from "./config.json" with { type: "json" }; // ✅
+import { port } from "./config.json" with { type: "json" }; // ❌ no named exports from JSON
+import config from "./config.json" assert { type: "json" }; // ❌ deprecated syntax
+```
+
+TypeScript 5.9 ยัง type **`import defer`** ซึ่งเป็น ECMAScript proposal สำหรับการ evaluate module แบบ lazy module ถูก link แต่ไม่ถูก *รัน* จนกว่าคุณจะแตะ export ครั้งแรก — มีประโยชน์กับ initialisation ที่แพงและใช้แค่บางครั้ง:
+
+```ts
+import defer * as heavy from "./heavy-feature.js";
+
+if (flag) {
+  heavy.run(); // the module body executes here, not at startup
+}
+```
+
+อนุญาตแค่ namespace import และ `tsc` ไม่ transform มัน จึงต้องใช้ `module: esnext` หรือ `preserve` และ runtime ที่รองรับ
+
+## esModuleInterop เป็นเรื่องในอดีตแล้ว
+
+CJS กับ ESM มีความเห็นไม่ตรงกันเรื่อง default export ซึ่งในอดีตทำให้ `import express from "express"` fail กับ module ที่เป็น CommonJS เว้นแต่ `esModuleInterop` จะแทรก shim เล็ก ๆ ให้ หลายปีที่ทุก tutorial เริ่มด้วย "เปิด `esModuleInterop`"
+
+คุณจะยังเห็นบรรทัดนั้นใน config เก่า แต่มันไม่ทำอะไรแล้ว: **`esModuleInterop` และ `allowSyntheticDefaultImports` เปิดตลอดเวลาใน TypeScript 6/7 และปิดไม่ได้** `import express from "express"` ใช้ได้เลย step migration เดียวที่เหลือคือทางกลับ — ถ้า codebase มี `import * as express from "express"` จากยุคก่อน interop ให้เปลี่ยนเป็น default import
 
 <Callout title="The one-line takeaway">
-ตั้ง `moduleResolution` ให้ตรงกับวิธีที่ code ถูกโหลดจริง — `NodeNext` เมื่อ Node เป็นคนรัน (เคารพ `type` และ `exports` ใน `package.json` และต้องมี extension `.js` ใน import) หรือ `Bundler` เมื่อ bundler resolve ให้ เปิด `esModuleInterop` ไว้ให้ CommonJS default import ทำงาน และจำไว้ว่า module error ส่วนใหญ่คือความไม่ตรงกันระหว่างสิ่งที่คุณเขียน, สิ่งที่ `tsc` emit และสิ่งที่ runtime คาดหวัง
+ตั้ง `module`/`moduleResolution` ให้ตรงกับวิธีที่ code ถูกโหลดจริง — `nodenext` (หรือ `node18`/`node20` แบบ stable) เมื่อ Node เป็นคนรัน เคารพ `type` และ `exports` ใน `package.json` และต้องมี extension `.js` (หรือใช้ `rewriteRelativeImportExtensions`) และ `bundler` เมื่อ bundler resolve ให้ โหมด `node`/`classic` แบบเก่าหายไปแล้ว การ import JSON ต้องมี `with { type: "json" }`, `import defer` evaluate module แบบ lazy และ `esModuleInterop` ก็แค่เปิดตลอดเวลา
 </Callout>
 
 export const quizModules = [
@@ -69,32 +112,42 @@ export const quizModules = [
     answer: 1,
   },
   {
-    q: 'ภายใต้ `NodeNext` ESM คุณเขียน extension อะไรเมื่อ import `./util.ts`?',
+    q: 'ภายใต้ `nodenext` ESM คุณเขียน extension อะไรเมื่อ import `./util.ts`?',
     options: [
-      '`./util.ts`',
-      '`./util.js` — คุณเรียกชื่อไฟล์ตอน runtime ที่ emit ออกมา และ tsc ไม่ rewrite path',
+      '`./util.ts` — ถูก rewrite ให้เสมอ',
+      '`./util.js` — คุณเรียกชื่อไฟล์ตอน runtime ที่ emit ออกมา (หรือเปิด `rewriteRelativeImportExtensions` เพื่อเขียน `.ts`)',
       '`./util` แบบไม่มี extension',
       '`./util.mjs` เสมอ',
     ],
     answer: 1,
   },
   {
-    q: '`esModuleInterop` ทำอะไร?',
+    q: 'สถานะของ `esModuleInterop` ใน TypeScript 7 คืออะไร?',
     options: [
       'แปลง code ทั้งหมดเป็น ESM',
-      'เพิ่ม interop shim ให้ default และ namespace import ของ CommonJS module ทำงานตามที่คาดหวัง',
-      'ปิด CommonJS',
+      'เปิดตลอดเวลาและปิดไม่ได้ — default import ของ CommonJS module ใช้ได้เลย',
+      'ถูกถอดออก ทำให้ default import ของ CommonJS fail',
       'ทำให้ resolution เร็วขึ้น',
     ],
     answer: 1,
   },
   {
-    q: '`moduleResolution` mode ไหนที่เข้าใจ field `exports` ใน `package.json`?',
+    q: 'ค่า `moduleResolution` ตัวไหนเป็น hard error ใน TypeScript 7?',
     options: [
-      '`Node10` (แบบเก่า)',
-      '`NodeNext` / `Node16`',
-      'ไม่มีตัวไหนเลย',
-      '`Classic` เท่านั้น',
+      '`bundler`',
+      '`node` (หรือ `node10`)',
+      '`nodenext`',
+      '`node20`',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'import ไฟล์ JSON ภายใต้ `module: nodenext` อย่างไร?',
+    options: [
+      '`import { port } from "./config.json"`',
+      '`import config from "./config.json" with { type: "json" }` — default import พร้อม attribute `with`',
+      '`import config from "./config.json" asserts { type: "json" }`',
+      'import JSON ภายใต้ nodenext ไม่ได้',
     ],
     answer: 1,
   },

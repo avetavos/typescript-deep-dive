@@ -22,7 +22,7 @@ let maybe: string | undefined;
 len(maybe); // ❌ Argument of type 'string | undefined' is not assignable to 'string'
 ```
 
-The error is the point: the compiler forces you to deal with the `undefined` case *before* you dereference. Turn this on. If you inherit a codebase without it, turning it on is the highest-leverage migration you can do.
+The error is the point: the compiler forces you to deal with the `undefined` case *before* you dereference. Since TypeScript 6.0, `strict` — and with it `strictNullChecks` — is **on by default**; a project has to opt *out*. If you inherit a codebase that set `strictNullChecks: false`, turning it back on is the highest-leverage migration you can do.
 
 ## `?.` and `??` are type-aware
 
@@ -38,6 +38,27 @@ function avatar(u: User) {
 ```
 
 `?.` short-circuits to `undefined` if the left side is nullish, and the *type* reflects that (the result includes `undefined`). `??` supplies a fallback only for `null`/`undefined` (unlike `||`, which also triggers on `0` and `""`), and narrows the type by removing the nullish part.
+
+## The compiler narrows more than it used to
+
+Three checker improvements since 5.5 remove common null-handling boilerplate — and catch a few more mistakes:
+
+- **Inferred type predicates (5.5).** A callback like `x => x !== undefined` is now inferred as `x is Bird`, so `.filter` narrows without a hand-written guard. The old `.filter(Boolean) as Bird[]` dance is unnecessary.
+- **Never-initialized variables (5.7).** Reading a `let` that no code path ever assigns is an error, even from inside a nested function.
+- **Always-truthy and always-nullish checks (5.6).** An expression that can never be nullish on the left of `??`, or a function or regex literal used as a condition, is an error.
+
+```ts
+const birds = names.map(n => registry.get(n)).filter(b => b !== undefined);
+//    ^? Bird[]  — the predicate is inferred, no cast needed
+
+let result: number;
+function print() { console.log(result); } // ❌ used before being assigned (5.7)
+
+function limit(value: number, max?: number) {
+  return value < max ?? 100; // ❌ left of ?? is never nullish (5.6)
+  //     value < (max ?? 100) is what you meant
+}
+```
 
 ## The non-null assertion `!` — a loaded gun
 
@@ -105,7 +126,7 @@ export const neverDiagram = `flowchart TB
   d --> err["new variant unhandled = compile error"]`;
 
 <Callout title="The one-line takeaway">
-Turn on `strictNullChecks` so `null` and `undefined` must be handled, not ignored. Use `?.` and `??` (which the types understand) for ergonomic null handling, and treat every non-null `!` as an overridden safety check. Model failure with **Result** discriminated unions instead of invisible throws, and use the `never` **exhaustiveness** trick so adding a new union variant becomes a compile error, not a silent gap.
+Keep `strictNullChecks` on (the default since TypeScript 6.0) so `null` and `undefined` must be handled, not ignored; since 5.5 the checker also infers type predicates, so `.filter(x => x != null)` narrows on its own. Use `?.` and `??` (which the types understand) for ergonomic null handling, and treat every non-null `!` as an overridden safety check. Model failure with **Result** discriminated unions instead of invisible throws, and use the `never` **exhaustiveness** trick so adding a new union variant becomes a compile error, not a silent gap.
 </Callout>
 
 export const quizNull = [

@@ -1,6 +1,6 @@
 ---
 title: 'The Compiler & Tooling'
-description: 'tsc ทำงานจริงอย่างไร, tsconfig option ที่สำคัญ, module resolution, declaration file และการแยก type-checking ออกจากการ emit code'
+description: 'tsc ทำงานจริงอย่างไรในยุค TypeScript 7, tsconfig option ที่สำคัญ, module resolution, declaration file และการแยก type-checking ออกจากการ emit code'
 sidebar:
   order: 1
 ---
@@ -16,14 +16,16 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 `tsconfig.json` คือที่ที่คุณตัดสินใจว่า checker จะเข้มแค่ไหน, จะ target JavaScript feature รุ่นไหน, module ถูก resolve อย่างไร และจะ emit อะไรออกมา (ถ้ามี) การตั้งไฟล์นี้ให้ถูกคือความต่างระหว่าง TypeScript ที่จับ bug ได้จริง กับ TypeScript ที่ปล่อย bug ผ่านไปเงียบ ๆ
 
+โมดูลนี้เขียนตาม **TypeScript 7** — compiler ที่เขียนใหม่ด้วย Go (กรกฎาคม 2026) — และ release **6.0** ก่อนหน้าที่พลิก default (`strict` เปิด, output เป็น ESM, ไม่โหลด `@types` อัตโนมัติ) และเลิกใช้ option เก่าที่สะสมมาสิบปี ตรงไหนที่บทเรียนพูดถึงพฤติกรรมแบบเก่าจะระบุไว้ชัด
+
 ## โมดูลนี้ครอบคลุมอะไรบ้าง
 
 | บทเรียน | สิ่งที่คุณจะได้เรียนรู้ |
 |--------|-------|
-| tsconfig, deep | flag ที่คุ้มค่าที่สุด — `strict` และครอบครัวของตัวเอง, `target`, `module` และ option ข้าง ๆ `strict` |
-| Modules & resolution | ESM เทียบ CJS และ `tsc` หาไฟล์ที่คุณ import เจอได้อย่างไร |
-| Declaration files | `.d.ts` คืออะไร, เขียนอย่างไร และ `@types` มาจากไหน |
-| Build & emit | `tsc` เทียบ bundler, `isolatedModules`, type-only import และ project references |
+| tsconfig, deep | default ของ 6/7, สิ่งที่ `tsc --init` เขียนให้, `strict` และครอบครัวของตัวเอง และ option ที่ถูกถอดออก |
+| Modules & resolution | ESM เทียบ CJS, `nodenext` / `node20` / `bundler`, import attribute, `import defer` และทำไม `esModuleInterop` กลายเป็นอดีต |
+| Declaration files | `.d.ts` คืออะไร, `types: []`, `isolatedDeclarations` และ `@types` มาจากไหน |
+| Build & emit | native compiler และ `--checkers`, `tsc` เทียบ bundler, การรัน `.ts` ใน Node, `isolatedModules` และ project references |
 
 ## สองงานของ tsc
 
@@ -36,7 +38,7 @@ export const jobsDiagram = `flowchart LR
   check --> ci["run in CI to catch bugs"]
   emit --> ship["run or bundle the JS"]`;
 
-แยกสองงานนี้ให้ชัดแล้วทั้ง toolchain จะเข้าใจง่ายขึ้น bundler อย่าง esbuild ทำงานที่ 2 ได้ในเสี้ยววินาที เพราะแค่ strip type ออกโดยไม่เข้าใจ type เลย — ซึ่งแปลว่าจะ emit code ที่ type-check ไม่ผ่านออกมาได้อย่างสบายใจ นั่นคือเหตุผลที่คำแนะนำมาตรฐานคือ: **ให้ bundler emit แล้วรัน `tsc --noEmit` ใน CI เพื่อ check จริง ๆ** ที่เหลือของโมดูลนี้จะแกะ config ที่ควบคุมทั้งสองงานนี้
+แยกสองงานนี้ให้ชัดแล้วทั้ง toolchain จะเข้าใจง่ายขึ้น bundler อย่าง esbuild ทำงานที่ 2 ได้ในเสี้ยววินาที เพราะแค่ strip type ออกโดยไม่เข้าใจ type เลย — ซึ่งแปลว่าจะ emit code ที่ type-check ไม่ผ่านออกมาได้อย่างสบายใจ นั่นคือเหตุผลที่คำแนะนำมาตรฐานคือ: **ให้ bundler emit แล้วรัน `tsc --noEmit` ใน CI เพื่อ check จริง ๆ** ด้วย TypeScript 7 การ check นั้นเร็วกว่าเดิมราวสิบเท่า pattern นี้จึงเสียเวลาแค่หลักวินาที ไม่ใช่นาที ที่เหลือของโมดูลนี้จะแกะ config ที่ควบคุมทั้งสองงานนี้
 
 <Callout title="The one-line takeaway">
 `tsc` ทำสองงานที่แยกกันได้: **type-checking** และ **emit JavaScript** `tsconfig.json` ของคุณควบคุมทั้งสองอย่าง รวมถึงวิธี resolve module และความเข้มของการ check bundler emit ได้เร็วกว่ามากเพราะข้ามการ check ไปเลย — pattern ที่ยั่งยืนจึงเป็นการ bundle ด้วยเครื่องมือหนึ่ง แล้ว type-check ด้วย `tsc` แยกต่างหาก

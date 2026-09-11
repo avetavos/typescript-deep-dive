@@ -71,6 +71,23 @@ type P = Parameters<(a: string, b: number) => void>; // [string, number]
 
 `infer R` matches the function return position and binds it to `R`; `infer P` matches the whole parameter list as a tuple. `Awaited` adds recursion to peel nested promises.
 
+## Newer built-ins worth knowing
+
+The table above is the classic set. A few later additions use exactly the same primitives — or are compiler intrinsics with no TypeScript-level definition at all:
+
+- `Awaited<T>` (4.5) — a recursive conditional with `infer` over `PromiseLike`; it is also what the compiler uses to type `await`.
+- `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` — intrinsics, covered in [Template Literal Types](/typescript/en/type-level-programming/template-literal-types/).
+- `NoInfer<T>` (5.4) — an intrinsic that stops a position from contributing to inference, so one argument can be *checked against* a type parameter without *widening* it. Details in [Inference and infer](/typescript/en/generics/inference-and-infer/).
+
+```ts
+function createFSM<S extends string>(config: { states: S[]; initial: NoInfer<S> }) {}
+
+createFSM({ states: ["idle", "busy"], initial: "idle" });  // ✅ S = "idle" | "busy"
+createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" is not assignable to "idle" | "busy"
+```
+
+Without `NoInfer`, `initial: "bogus"` would simply widen `S` to `"idle" | "busy" | "bogus"` and compile.
+
 <Mermaid title="Each utility maps to one primitive you already know" code={utilDiagram} />
 
 export const utilDiagram = `flowchart TB

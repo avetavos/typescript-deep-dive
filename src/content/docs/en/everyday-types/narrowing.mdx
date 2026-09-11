@@ -1,6 +1,6 @@
 ---
 title: 'Narrowing'
-description: 'How control flow turns a wide union into a specific type — typeof, in, discriminated unions, exhaustiveness with never, type guards, and assertion functions.'
+description: 'How control flow turns a wide union into a specific type — typeof, in, discriminated unions, exhaustiveness with never, type guards, assertion functions — and the 5.5+ refinements: inferred type predicates, switch (true), and the checks the compiler now rejects.'
 sidebar:
   order: 6
 ---
@@ -127,6 +127,66 @@ function use(v: string | null) {
 
 After the call, the compiler knows the asserted condition held (or execution would have thrown), so it narrows accordingly. This is how `assert`-style helpers and Node's `assert` give you type narrowing for free.
 
+## Inferred type predicates (TypeScript 5.5)
+
+You no longer have to write `x is T` for the simplest guards. When a function returns a boolean that is *about* its parameter, TypeScript infers the predicate for you:
+
+```ts
+function isBirdReal(bird: Bird | undefined) {
+  return bird !== undefined;
+}
+// inferred: (bird: Bird | undefined) => bird is Bird
+
+const birds = countries
+  .map((c) => nationalBirds.get(c))
+  .filter((b) => b !== undefined);
+//    ^? Bird[]   — was (Bird | undefined)[] before 5.5
+```
+
+The compiler infers a predicate only when all four hold: the function has no explicit return-type annotation, it has a single `return` (and no implicit `undefined` return), the returned boolean is tied to a narrowing check on the parameter, and the parameter is never reassigned. Anything fancier — multiple returns, checks on a property of a mutable variable — still needs the explicit `x is T`.
+
+## Narrowing that got smarter
+
+Three newer refinements remove common "why won't it narrow?" moments:
+
+- **`switch (true)` (5.3).** Each `case` expression narrows as if it were an `if`:
+
+  ```ts
+  switch (true) {
+    case typeof x === "string": x.toUpperCase(); break;
+    case x instanceof Date:     x.getTime();     break;
+  }
+  ```
+
+- **Closures after the last assignment (5.4).** A `const`, or a `let`/parameter that is never reassigned afterwards, keeps its narrowed type inside callbacks created after the check:
+
+  ```ts
+  function getUrls(url: string | URL, names: string[]) {
+    if (typeof url === "string") url = new URL(url);
+    return names.map((n) => new URL(n, url)); // url: URL — no cast needed
+  }
+  ```
+
+- **Constant indexed access (5.5).** `obj[key]` narrows when both `obj` and `key` are effectively `const`:
+
+  ```ts
+  function f(obj: Record<string, unknown>, key: string) {
+    if (typeof obj[key] === "string") obj[key].toUpperCase(); // ✅
+  }
+  ```
+
+## Checks the compiler now refuses (TypeScript 5.6)
+
+The flip side of narrowing: a condition that can *never* narrow is almost always a bug, and 5.6 makes several of them errors. A bare regex or arrow function in an `if` is always truthy; a `??` whose left side can never be nullish is unreachable:
+
+```ts
+if (/0x[0-9a-f]/) { }        // ❌ This kind of expression is always truthy
+if (x => 0) { }              // ❌ (you meant x >= 0)
+return value < max ?? 100;   // ❌ Right operand of ?? is unreachable
+```
+
+Literal `true`, `false`, `0` and `1` stay allowed (`while (true)` is idiomatic). Regex *literals* are also syntax-checked since 5.5, so an unbalanced group or a backreference to a missing capture is a compile error, not a runtime surprise.
+
 <Callout title="The one-line takeaway">
 Narrowing is how a wide union becomes a usable specific type: the compiler reads control flow (`typeof`, `instanceof`, `in`, truthiness, equality) and shrinks the type per branch. Model variants as **discriminated unions** with a shared literal tag, `switch` on it, and add a `never` default for **compile-time exhaustiveness**. For custom logic, write type guards (`x is T`) or assertion functions (`asserts x is T`) that the compiler trusts.
 </Callout>
@@ -179,6 +239,16 @@ export const quizNarrow = [
       'Narrows the type for the rest of the scope, since execution would have thrown otherwise',
       'Nothing at compile time',
       'Runs only in tests',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'When does TypeScript 5.5+ infer a type predicate for a function that has no explicit `x is T`?',
+    options: [
+      'Whenever the function returns a boolean',
+      'When it has no return annotation, a single return, the boolean is tied to a check on the parameter, and the parameter is never reassigned',
+      'Only for arrow functions passed to filter',
+      'Never — predicates must always be written out',
     ],
     answer: 1,
   },

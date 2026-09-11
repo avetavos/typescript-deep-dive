@@ -1,6 +1,6 @@
 ---
 title: 'tsconfig, Deep'
-description: 'The compiler options that actually change your safety and output — strict and its family, target, module, and the strict-adjacent flags worth turning on.'
+description: 'The compiler options that actually change your safety and output — the TypeScript 6/7 defaults, what tsc --init generates now, strict and its family, target, module, the strict-adjacent flags, and the options that were removed.'
 sidebar:
   order: 2
 ---
@@ -9,31 +9,55 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
-## Start from strict
+## The defaults changed in TypeScript 6
 
-`tsconfig.json` has dozens of options, but a handful decide whether TypeScript is actually protecting you. The single most important one is `strict`. It is not one check — it is a bundle that turns on a family of flags at once, and every one of them catches real bugs.
+For a decade, an empty `tsconfig.json` meant a *lax* compiler: no `strict`, CommonJS output, an old ES target, and every `@types/*` package in `node_modules` silently loaded. TypeScript 6.0 (March 2026) flipped the defaults to what almost every project was already writing by hand, and TypeScript 7.0 (July 2026, the native compiler) made them permanent:
+
+| Option | Before 6.0 | 6.0 / 7.0 default |
+|--------|------------|-------------------|
+| `strict` | `false` | `true` |
+| `module` | `commonjs` | `esnext` |
+| `target` | `es2020`-ish | `es2025` — floats to the current year's ECMAScript |
+| `types` | every `@types/*` in `node_modules` | `[]` — nothing unless you list it |
+| `rootDir` | inferred from your sources | `.` — the directory of `tsconfig.json` |
+| `noUncheckedSideEffectImports` | `false` | `true` |
+| `libReplacement` | `true` | `false` |
+
+Two of these bite real projects on upgrade. `types: []` means `@types/node` is no longer picked up just because it is installed — write `"types": ["node"]` (or `["*"]` to restore the old behavior). `rootDir: "."` means a `src/` layout emits into `dist/src/` unless you set `"rootDir": "./src"` explicitly.
+
+## What `tsc --init` writes today
+
+Since 5.9, `tsc --init` generates a short, opinionated file instead of a wall of commented-out options. It is a good starting point for a Node or library project:
 
 ```json
 {
   "compilerOptions": {
-    "strict": true,
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "module": "nodenext",
+    "target": "esnext",
+    "types": [],
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "noImplicitOverride": true,
-    "verbatimModuleSyntax": true
+    "strict": true,
+    "jsx": "react-jsx",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
   }
 }
 ```
 
-Turn `strict` on from day one. Adopting it later, on a large codebase, means fixing hundreds of errors at once — far harder than never letting them accumulate.
+Several lines here are now redundant with the defaults (`strict`, `noUncheckedSideEffectImports`) — the generator keeps them explicit so the file documents itself. Everything else in this lesson explains why these particular lines are the ones worth writing.
 
 ## What `strict` actually turns on
 
-`strict: true` is shorthand for this whole family:
+`strict` is the default now, but it is still worth knowing what it bundles, because you will meet codebases that turned parts of it off:
 
 | Flag (inside `strict`) | What it catches |
 |------------------------|-----------------|
@@ -43,17 +67,20 @@ Turn `strict` on from day one. Adopting it later, on a large codebase, means fix
 | `strictBindCallApply` | `bind`, `call`, and `apply` are type-checked against the function signature |
 | `strictPropertyInitialization` | Class fields must be assigned in the constructor (or marked optional) |
 | `useUnknownInCatchVariables` | `catch (e)` gives you `unknown`, not `any`, forcing you to narrow |
-| `alwaysStrict` | Emits `"use strict"` and parses in strict mode |
+| `strictBuiltinIteratorReturn` | Built-in iterators return `undefined` when done, not `any` (5.6) |
+| `alwaysStrict` | Parses in strict mode and emits `"use strict"` — can no longer be turned off |
 
 The headline is `strictNullChecks`. Without it, `string` secretly includes `null` and `undefined`, and the compiler cannot warn you about the single most common runtime crash in JavaScript. With it, `null` and `undefined` are their own types that you must handle deliberately.
+
+If you inherit a project with `"strict": false`, treat it as a migration task (see [Migration Strategy](/typescript/en/practical-mastery/migration-strategy/)) — flip the flags on one at a time rather than deleting the line and drowning in errors.
 
 ## `target`, `module`, and `lib`
 
 Three options describe the world your code runs in:
 
-- **`target`** — which JavaScript version `tsc` emits. `ES2022` is a safe modern default; a lower target down-levels newer syntax into older equivalents.
-- **`module`** — the module format of the output (`NodeNext`, `ESNext`, `CommonJS`, ...). This should match how your code is actually loaded.
-- **`lib`** — which built-in type declarations are available (for example, `DOM` for browser globals, `ES2022` for newer runtime methods). If you use `structuredClone` or `Array.prototype.at`, your `lib` must include a version that declares them.
+- **`target`** — which JavaScript version `tsc` emits. The default `es2025` (and `esnext`) means *no down-leveling*: modern syntax is passed through, which is what every current runtime wants. Lower targets still down-level newer syntax — but `es5` is gone (a hard error in 7.0; ES2015 is the floor), and with it `downlevelIteration`.
+- **`module`** — the module format of the output. `nodenext` when Node runs the output directly, `esnext` or `preserve` when a bundler does, and the stable `node18` / `node20` when you want behavior pinned to a specific Node line. The next lesson covers these in depth.
+- **`lib`** — which built-in type declarations are available. `lib.dom` now includes what used to live in `dom.iterable` and `dom.asynciterable`; `es2025` adds `RegExp.escape`, the `Iterator` helper methods, the `Set` algebra methods and the `Map` upsert methods (`getOrInsert`, `getOrInsertComputed`), and the `Temporal` types ship with 6.0. If you use an API and get "does not exist", your `lib` is too old.
 
 ## Strict-adjacent flags worth adding
 
@@ -68,19 +95,48 @@ x.toFixed(); // ❌ Object is possibly 'undefined' — exactly the bug you want 
 
 - **`noUncheckedIndexedAccess`** — indexing an array or record can return `undefined` (index 10 of a 3-element array does), so the type reflects that. Enormously effective against out-of-bounds bugs.
 - **`exactOptionalPropertyTypes`** — distinguishes a property set to `undefined` from a property that is absent, so an optional `name?: string` no longer silently accepts `name: undefined`.
+- **`noUncheckedSideEffectImports`** (default since 6.0) — `import "./styles.css"` used to resolve to nothing silently if the path was wrong; now a typo is an error. Declare `declare module "*.css" {}` once for asset imports your bundler handles.
+- **`erasableSyntaxOnly`** (5.8) — forbids the TypeScript syntax that needs a *transform* rather than a *delete*: `enum`, `namespace` with runtime code, class parameter properties, `import x = require()`. Turn it on if you run `.ts` files directly in Node (type stripping), Deno, or Bun, where the runtime only strips types.
+
+## Options that were removed, and what replaces them
+
+TypeScript 6.0 deprecated a set of options; 7.0 removed them. In 6.x you can buy time with `"ignoreDeprecations": "6.0"`, but each has a direct replacement:
+
+| Removed | Replace with |
+|---------|--------------|
+| `baseUrl` | fold the prefix into `paths`: `"@app/*": ["./src/app/*"]` |
+| `moduleResolution: node` / `node10` / `classic` | `nodenext` (Node runs it) or `bundler` (a bundler does) |
+| `module: amd` / `umd` / `system` / `none` | `esnext` or `preserve`, and let a bundler produce other formats |
+| `outFile` | a bundler |
+| `target: es5`, `downlevelIteration` | `es2015` or newer |
+| `esModuleInterop: false`, `allowSyntheticDefaultImports: false`, `alwaysStrict: false` | nothing — these are always on |
+| `import x from "./data.json" asserts { type: "json" }` | `with { type: "json" }` |
+| `module Foo {}` (legacy namespace keyword) | `namespace Foo {}` |
+| `/// <reference no-default-lib="true" />` | `noLib` or `libReplacement` |
+
+One CLI change belongs here too: running `tsc file.ts` in a directory that has a `tsconfig.json` is now an error (TS5112), because it silently ignored the config for years. Pass `--ignoreConfig` if you really mean it.
+
+## Smaller options you will actually use
+
+- **`${configDir}`** (5.5) — a template variable for paths in a shared base config, so `"outDir": "${configDir}/dist"` resolves relative to the *extending* project, not the base file.
+- **`noCheck`** (5.6) — emit without type-checking, the mirror image of `noEmit`. Useful when a separate step does the checking.
+- **`isolatedDeclarations`** (5.5) — require explicit types on exports so `.d.ts` files can be produced per file, in parallel, without the checker.
+- **`rewriteRelativeImportExtensions`** (5.7) — let you write `import "./util.ts"` and have `tsc` emit `./util.js`.
+- **`libReplacement`** (5.8) — opt in to swapping `lib.dom` for an npm package such as `@typescript/lib-dom`; off by default since 6.0.
+- **`skipLibCheck`** — skip checking `.d.ts` files in `node_modules`. Still the single cheapest speed-up, even on the native compiler.
 
 <Callout title="The one-line takeaway">
-Turn on `strict: true` from day one — it bundles a family of checks, and `strictNullChecks` alone eliminates the most common class of JavaScript crashes. Set `target`, `module`, and `lib` to match your runtime, then add `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` to catch the bugs strict does not.
+TypeScript 6/7 defaults to `strict`, `module: esnext`, a current-year `target`, `types: []` and `rootDir: "."` — so set `types` and `rootDir` explicitly, and let `tsc --init`'s short config be your template. `strictNullChecks` is still the check that matters most; add `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` on top, and replace the removed options (`baseUrl`, `moduleResolution: node`, `outFile`, `es5`) with `paths`, `nodenext`/`bundler`, a bundler, and a modern target.
 </Callout>
 
 export const quizTsconfig = [
   {
-    q: 'What is `strict: true`?',
+    q: 'Since TypeScript 6.0, what is the default value of `strict`?',
     options: [
-      'A single check for null values',
-      'A shorthand that enables a whole family of strict checks at once',
-      'A flag that disables type-checking',
-      'A performance optimization',
+      '`false`, as it always was',
+      '`true` — the whole strict family is on unless you turn it off',
+      'It depends on the `target`',
+      'There is no default; it must be set',
     ],
     answer: 1,
   },
@@ -105,12 +161,22 @@ export const quizTsconfig = [
     answer: 1,
   },
   {
-    q: 'Why should you enable `strict` at the start of a project rather than later?',
+    q: 'After upgrading to TypeScript 6/7, `@types/node` is installed but Node globals are not found. Why?',
     options: [
-      'It cannot be enabled later at all',
-      'Adopting it later on a large codebase means fixing hundreds of accumulated errors at once',
-      'It changes the runtime behavior',
-      'It is only free on new projects',
+      '`@types/node` no longer works with TypeScript 7',
+      'The default `types` is now `[]`, so you must list `"types": ["node"]` (or `["*"]`) explicitly',
+      '`lib` must include `node`',
+      '`strict` hides global types',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'Your tsconfig has `"baseUrl": "./src"`. What is the TypeScript 7 replacement?',
+    options: [
+      '`"rootDir": "./src"`',
+      'Fold the prefix into each `paths` entry, e.g. `"@app/*": ["./src/app/*"]`',
+      '`"moduleResolution": "node"`',
+      'Nothing — `baseUrl` still works',
     ],
     answer: 1,
   },

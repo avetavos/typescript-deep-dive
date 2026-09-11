@@ -66,6 +66,29 @@ class User {
 
 อันนี้เท่ากับการ declare `id` และ `name` เป็น field แล้ว assign ใน body เป็นแค่ความสะดวก แต่เป็นความสะดวกที่ใช้กันกว้างขวาง
 
+### parameter property กับ erasable syntax
+
+parameter property เป็นหนึ่งในไม่กี่ feature ของ TypeScript ที่ *generate code*: compiler ต้อง emit บรรทัด `this.id = id` ให้ ซึ่งตอนนี้สำคัญกว่าแต่ก่อน เพราะ Node รันไฟล์ `.ts` ตรง ๆ ด้วยการ **strip** type ทิ้ง (Node 22.6+ หลัง flag และเปิดเป็นค่าเริ่มต้นตั้งแต่ Node 23.6 / 24) และ TypeScript 5.8 เพิ่ม `--erasableSyntaxOnly` เพื่อบังคับว่า code ของคุณใช้แต่ syntax ที่ลบทิ้งได้ — ทั้งสองกรณี parameter property จึงเป็น error เช่นเดียวกับ `enum`, `namespace` ที่มี runtime code และ `import =`
+
+```ts
+// ❌ ภายใต้ --erasableSyntaxOnly / node file.ts
+class User {
+  constructor(public readonly id: string) {}
+  //          ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  // This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+}
+
+// ✅ รูปแบบเขียนเต็ม — runtime shape เดิม แต่เป็น erasable syntax ล้วน
+class User {
+  readonly id: string;
+  constructor(id: string) {
+    this.id = id;
+  }
+}
+```
+
+มีอีกสองเรื่องที่เกี่ยวกัน ตั้งแต่ TypeScript 6.0 `strict` เปิดเป็นค่าเริ่มต้น `strictPropertyInitialization` จึงเปิดด้วย: field ที่ประกาศโดยไม่มี initializer ต้องถูก assign แน่นอนใน constructor (หรือใส่ `id!: string` ถ้าคุณ assign ที่อื่น) และ keyword `accessor` (5.0) ประกาศ *auto-accessor* — คู่ getter/setter ที่มี private slot รองรับ — ซึ่งเหมือน stage-3 decorator คือเป็น syntax ECMAScript มาตรฐาน จึงปลอดภัยกับการ strip type ตั้งแต่ 5.6 การเช็ค `override` ครอบคลุม member ที่ชื่อเป็น computed name อย่าง `[sym]() {}` ด้วย
+
 ## `static` member
 
 `static` member เป็นของ **ตัว class เอง** ไม่ใช่ของ instance มีอยู่จริงตอน runtime เป็น property บน constructor function
@@ -131,6 +154,16 @@ export const quizDeep = [
       'declare field แล้ว assign จาก parameter อัตโนมัติ',
       'ทำให้ parameter เป็น global',
       'mark class ให้ abstract',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ภายใต้ `--erasableSyntaxOnly` (หรือ Node strip type) `constructor(public id: string)` จะเป็นอย่างไร?',
+    options: [
+      'ใช้ได้ — modifier ถูกลบทิ้ง',
+      'เป็น error เพราะ parameter property ต้องให้ compiler emit code ให้ ต้องประกาศ field แล้ว assign เองแทน',
+      'กลายเป็น static member',
+      'ถูกละเลยเงียบ ๆ',
     ],
     answer: 1,
   },

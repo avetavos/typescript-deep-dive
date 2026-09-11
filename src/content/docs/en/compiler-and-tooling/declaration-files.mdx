@@ -53,7 +53,21 @@ Most of the time, someone has already written those declarations for you. **Defi
 npm install --save-dev @types/lodash
 ```
 
-`tsc` automatically picks up `@types/*` packages from `node_modules`, so installing `@types/lodash` instantly types `import _ from "lodash"`. Many modern libraries ship their own types in the package (declared via the `"types"` field in their `package.json`), in which case you need no `@types` package at all.
+When you *import* a package, `tsc` finds its `@types/*` companion in `node_modules` automatically, so installing `@types/lodash` instantly types `import _ from "lodash"`. Many modern libraries ship their own types in the package (declared via the `"types"` field in their `package.json`), in which case you need no `@types` package at all.
+
+Packages that contribute **globals** rather than modules — `@types/node` for `process` and `Buffer`, `@types/jest` for `describe` and `expect` — are a different story since TypeScript 6.0. The default `types` is now `[]`, so they are no longer loaded just because they are installed. List them:
+
+```json
+{ "compilerOptions": { "types": ["node", "jest"] } }
+```
+
+(`"types": ["*"]` restores the old load-everything behaviour.) The change stops a project from silently pulling in hundreds of unrelated `@types/*` packages from transitive dependencies, which was both slow and a source of "duplicate global" errors.
+
+## lib files, and replacing them
+
+The built-in `.d.ts` files for the platform — `lib.es2025.d.ts`, `lib.dom.d.ts` — are selected by `target` and `lib`. Two recent changes: `lib.dom.d.ts` now contains everything that used to be split into `dom.iterable` and `dom.asynciterable` (those entries are empty stubs kept for old configs), and the DOM declarations carry MDN summaries so hover shows a one-line description of each API.
+
+If the bundled `lib.dom` is wrong for you — too old, or you want the `@types/web` types — `libReplacement: true` (5.8) makes `tsc` look for an `@typescript/lib-dom` package in `node_modules` and use it instead. It is off by default since 6.0 because most projects never need it and the lookup costs time.
 
 ## Emitting your own declarations
 
@@ -65,8 +79,13 @@ If you publish a library written in TypeScript, you want to ship `.d.ts` files s
 
 Now `tsc` produces a `.d.ts` next to each emitted `.js`, and you point `package.json`'s `"types"` field at the entry declaration. Your users import your library and get full type information — the same mechanism the whole ecosystem runs on.
 
+Two options improve what gets emitted:
+
+- **`isolatedDeclarations`** (5.5) requires an explicit type on every export. In return, `.d.ts` files can be generated one file at a time without running the checker — in parallel, or by a bundler plugin — which is what large monorepos and tools like `esbuild` need to emit declarations fast.
+- Since 5.8 computed property names that are plain identifiers or dotted names are **preserved** in declarations (`[propName]: number`) instead of being widened to an index signature (`[x: string]: number`), so consumers see the real shape.
+
 <Callout title="The one-line takeaway">
-A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package). Most libraries are covered either by types shipped in the package or by community `@types/*` packages from DefinitelyTyped, which `tsc` picks up automatically. When you publish a library, set `declaration: true` so your consumers get types too.
+A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package). Most libraries are covered either by types shipped in the package or by community `@types/*` packages from DefinitelyTyped — found automatically for imports, but since TypeScript 6.0 global packages like `@types/node` must be listed in `types`. When you publish a library, set `declaration: true` (and consider `isolatedDeclarations`) so your consumers get types too.
 </Callout>
 
 export const quizDecl = [
@@ -97,6 +116,16 @@ export const quizDecl = [
       'DefinitelyTyped, a community repository of declaration files published under `@types/*`',
       'The npm registry generates them automatically',
       'They ship inside the TypeScript compiler',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'You installed `@types/node`, but `process` is still "not defined" in TypeScript 7. What is missing?',
+    options: [
+      '`lib` must include `dom`',
+      '`"types": ["node"]` — global `@types` packages are no longer auto-loaded since the default became `[]`',
+      'The package must be imported in every file',
+      '`declaration: true`',
     ],
     answer: 1,
   },

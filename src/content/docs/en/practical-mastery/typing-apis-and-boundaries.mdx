@@ -30,6 +30,8 @@ u.user.name; // ❌ Error: 'u' is of type 'unknown'.
 
 Note that `JSON.parse` is typed to return `any` — so its result silently poisons everything downstream unless you immediately assign it to `unknown` and validate.
 
+`catch` clauses are the same boundary in disguise. With `useUnknownInCatchVariables` — part of `strict`, and therefore on by default since TypeScript 6.0 — the caught value is `unknown`, not `any`, so `err.message` must be earned with `err instanceof Error` first.
+
 ## Turning `unknown` into a trusted type
 
 Narrowing `unknown` requires runtime checks the compiler understands. For simple shapes, a hand-written **type guard**:
@@ -70,6 +72,24 @@ One source of truth, checked at runtime, inferred at compile time. This is the b
 export const validateDiagram = `flowchart LR
   raw["unknown\n(JSON, network, storage)"] -->|schema.parse / type guard| typed["trusted type\n(User)"]
   typed --> use["use freely\nno more checks needed"]`;
+
+## Two more edges: JSON files and dates
+
+**JSON imports.** Importing a `.json` file gives you a type derived from its contents — no schema needed, because the compiler can read the file. Under `--module nodenext` (TypeScript 5.7+) the import must carry the `type: "json"` attribute, and only the default import is allowed, exactly as Node requires:
+
+```ts
+import config from "./config.json" with { type: "json" };
+config.default.port; // typed from the file; named imports are an error
+```
+
+For hand-written config objects, `satisfies` keeps the literal types while checking the shape:
+
+```ts
+const routes = { home: "/", user: "/users/:id" } satisfies Record<string, `/${string}`>;
+routes.home; // still the literal "/" — not widened to string
+```
+
+**Dates.** TypeScript 6.0's `es2025` library ships types for the **Temporal** API. When a boundary hands you an ISO timestamp, `Temporal.Instant.from(iso)` gives you an immutable, timezone-explicit value — a far better inner type than a mutable `Date`, and Node 26 enables Temporal by default.
 
 ## Branded types for nominal IDs
 

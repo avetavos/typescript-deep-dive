@@ -70,6 +70,21 @@ type M = Method<"GET /users">; // "GET"
 
 `infer E` บอกว่า "match อะไรก็ได้ตรงนี้แล้วเรียกว่า `E`" นี่คือการ parse จริง ๆ ที่ระดับ type — เป็นเทคนิคเบื้องหลัง typed router ที่ดึง `:id` param จาก path string และ library ที่ validate format string
 
+## TypeScript 7 กับ Unicode
+
+จนถึง TypeScript 6 `infer` ใน template literal จะแบ่ง string ตาม **UTF-16 code unit** — หน่วยเดียวกับที่ `.length` ของ JavaScript นับ ซึ่งพังเงียบ ๆ กับ emoji และตัวอักษรนอก BMP TypeScript 7 เปลี่ยนมาแบ่งตาม **Unicode code point**:
+
+```ts
+type HeadTail<S extends string> =
+  S extends `${infer Head}${infer Tail}` ? [Head, Tail] : never;
+
+type R = HeadTail<"😀abc">;
+//   ^? TypeScript 7:  ["😀", "abc"]
+//      TypeScript 6:  ["\ud83d", "\ude00abc"]  — surrogate pair ถูกตัดครึ่ง
+```
+
+recursive string type ทุกตัวที่ลอกทีละตัวอักษร — `Split`, `Reverse`, ตัวนับจำนวนอักษร — ตอนนี้เห็นตัวอักษรเต็มตัว ซึ่งเกือบทุกกรณีคือสิ่งที่คุณต้องการอยู่แล้ว แต่มันเป็น **breaking change** ถ้า type ของคุณพึ่งพาการนับแบบเดิม: type "length" ระดับ type ที่เอาไปเทียบกับ `.length` ตอน runtime (ซึ่งยังนับ code unit) จะให้ค่าไม่ตรงกันกับ `"😀"` ถ้าคุณดูแล type แบบนี้อยู่ ทดสอบด้วย input นอก BMP ตอน upgrade
+
 ## เจอที่ไหนบ้าง
 
 - **typed key**: `` `${Theme}-${Shade}` `` สำหรับ type ของ design-token
@@ -111,6 +126,16 @@ export const quizTemplate = [
       'capture ส่วนของ string หลัง "on" เข้าไปใน type variable E ใหม่',
       'เช็คความยาว string',
       'แปลง string เป็น number',
+    ],
+    answer: 1,
+  },
+  {
+    q: 'ใน TypeScript 7 `HeadTail<"😀abc">` ให้อะไร เมื่อ `HeadTail` ลอกตัวอักษรแรกด้วย `${infer Head}${infer Tail}`?',
+    options: [
+      '["\\ud83d", "\\ude00abc"] — แบ่งตาม UTF-16 code unit',
+      '["😀", "abc"] — TypeScript 7 แบ่งตาม Unicode code point',
+      'never',
+      'string',
     ],
     answer: 1,
   },
