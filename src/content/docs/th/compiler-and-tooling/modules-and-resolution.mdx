@@ -96,7 +96,7 @@ CJS กับ ESM มีความเห็นไม่ตรงกันเ�
 
 คุณจะยังเห็นบรรทัดนั้นใน config เก่า แต่มันไม่ทำอะไรแล้ว: **`esModuleInterop` และ `allowSyntheticDefaultImports` เปิดตลอดเวลาใน TypeScript 6/7 และปิดไม่ได้** `import express from "express"` ใช้ได้เลย step migration เดียวที่เหลือคือทางกลับ — ถ้า codebase มี `import * as express from "express"` จากยุคก่อน interop ให้เปลี่ยนเป็น default import
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 ตั้ง `module`/`moduleResolution` ให้ตรงกับวิธีที่ code ถูกโหลดจริง — `nodenext` (หรือ `node18`/`node20` แบบ stable) เมื่อ Node เป็นคนรัน เคารพ `type` และ `exports` ใน `package.json` และต้องมี extension `.js` (หรือใช้ `rewriteRelativeImportExtensions`) และ `bundler` เมื่อ bundler resolve ให้ โหมด `node`/`classic` แบบเก่าหายไปแล้ว การ import JSON ต้องมี `with { type: "json" }`, `import defer` evaluate module แบบ lazy และ `esModuleInterop` ก็แค่เปิดตลอดเวลา
 </Callout>
 

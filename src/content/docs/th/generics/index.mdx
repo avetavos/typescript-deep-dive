@@ -57,7 +57,7 @@ export const genDiagram = `flowchart LR
 | Conditional types | `T extends U ? X : Y` และการ distribute ผ่าน union |
 | Inference & `infer` | type argument ถูก infer อย่างไร และการดึง type ออกด้วย `infer` |
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 Generics ทำให้ implementation เดียวทำงานได้กับหลาย type **โดยไม่เสียข้อมูล type** — นั่นคือสิ่งที่ `any` ทิ้งไป type parameter อย่าง `T` คือตัวยึดที่ผู้เรียกหรือ inference เติมค่าให้ ดังนั้น `identity<T>` จึงคืน type เดียวกับที่รับเข้ามาเป๊ะ มอง generic เป็น function ที่รันในระดับ type
 </Callout>
 

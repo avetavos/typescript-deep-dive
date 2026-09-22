@@ -87,7 +87,7 @@ recursive type คือเครื่องมือที่คมที่�
 
 engineer ระดับ type-level ที่เก่งที่สุดเขียน recursion *น้อยกว่า* ที่ทำได้ เก็บ recursion ไว้ใช้กับไม่กี่กรณี — deep key path, builder API ที่แม่นยำ — ที่คุ้มค่าจริง
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`) และ recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element compiler จำกัดความลึกของ recursion (ราว 50 แบบตรง ๆ, ลึกกว่ามากสำหรับ **tail-recursive** conditional ที่สะสมเข้า parameter) recursion ทรงพลังและอ่านยาก — หยิบมาใช้เฉพาะเมื่อ type ที่ง่ายกว่าหรือ runtime check ใช้แทนไม่ได้จริง ๆ
 </Callout>
 

@@ -63,7 +63,7 @@ assign *object ตัวเดียวกัน* ผ่านตัวแปร
 
 structural typing คือเหตุผลที่ TypeScript ทำงานกับ object ธรรมดาได้ลื่น และเป็นเหตุผลที่คุณแทบไม่ต้องประกาศว่า type หนึ่ง "implements" อีก type และเป็นเหตุผลที่ library สองตัวที่มี `Point` type ของตัวเองใช้ด้วยกันได้เลย ต้นทุนคือ type ที่ไม่เกี่ยวกันแต่ shape เหมือนกันจะใช้แทนกันได้ — บางครั้งคุณ *อยาก* ให้ type ต่างกันแบบ nominal (`UserId` ที่ไม่ใช่แค่ `string` ตัวไหนก็ได้) ซึ่งคุณปลอมได้ด้วย **branded type** (เจาะลึกทีหลังในโมดูล Practical Mastery)
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 TypeScript เป็นแบบ **structural**: compatibility ขึ้นกับ shape ไม่ใช่ชื่อที่ประกาศ และ value ที่มี property เกินก็ยังเข้าได้กับ type ที่ขอน้อยกว่า (เป็น subset) ข้อยกเว้นเดียวคือ **excess property check** — object literal สด ๆ ที่ assign ตรง ๆ จะถูก flag ถ้ามี key ที่ไม่รู้จัก เป็นการป้องกัน typo แบบเจาะจง ถ้า assign ผ่านตัวแปร กฎ structural ปกติก็ใช้แทน
 </Callout>
 

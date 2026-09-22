@@ -95,7 +95,7 @@ export const utilDiagram = `flowchart TB
   cond["Distributive conditionals"] --> f2["Exclude, Extract, NonNullable, Omit"]
   infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract`, `NonNullable` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับทั้ง 5 เทคนิค
 </Callout>
 

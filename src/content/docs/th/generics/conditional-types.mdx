@@ -95,7 +95,7 @@ type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string
 
 ทริก `[T] extends [U]` เป็น idiom มาตรฐาน — หยิบมาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่า distribute แล้ว union `true | false` เข้าด้วยกัน)
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type ใช้การทดสอบ subset แบบเดียวกับ `extends` ที่อื่น พฤติกรรมเด่นของตัวเองคือ **distribution**: naked type parameter ที่ตรวจกับ union จะรันทีละ member แล้ว union ผลลัพธ์ (นั่นคือวิธีที่ `Exclude` และ `Extract` ทำงาน) ห่อทั้งสองฝั่งเป็น `[T] extends [U]` เพื่อตรวจ union ทั้งก้อนและปิด distribution
 </Callout>
 

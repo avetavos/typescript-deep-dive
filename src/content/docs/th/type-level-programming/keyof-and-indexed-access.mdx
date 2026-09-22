@@ -102,7 +102,7 @@ type NameOnly = MyPick<User, "name">;
 
 `K extends keyof T` จำกัด key ให้เป็น key จริงของ `T`; `[P in K]` วนซ้ำ key เหล่านั้น (mapped type, บทเรียนถัดไปถ้าคุณข้ามมา); `T[P]` lookup value type แต่ละตัว สาม primitive ได้เครื่องมือที่มีประโยชน์หนึ่งตัว
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 `keyof T` สร้าง **union ของ key ของ `T`** เป็น type; **indexed access** `T[K]` lookup **value type** ที่ key เหล่านั้น และ `T[keyof T]` ให้ union ของ value type ทั้งหมด `Arr[number]` เปลี่ยน array หรือ tuple type เป็น union ของ element สอง lookup นี้รวมกันคือฐานของ mapped type และแทบทุก utility type
 </Callout>
 

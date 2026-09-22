@@ -71,7 +71,7 @@ let x: unknown = 42; // ✅ everything fits into unknown
 
 `any` ทำลาย model นี้โดยตั้งใจ: เป็นการขอ *ออก* จากการเช็คเซตทั้งหมด นั่นคือเหตุผลที่อันตราย ส่วน `unknown` รักษา model ไว้และบังคับให้คุณ narrow
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 มองทุก type เป็น **เซตของ value ที่อนุญาต** แล้ว: assignability คือความสัมพันธ์แบบ subset, `|` คือ set union (กว้างกว่า), `&` คือ set intersection (แคบกว่า), `never` คือเซตว่าง (bottom) และ `unknown` คือเซตของ value ทั้งหมด (top) model เดียวนี้ทำให้ส่วนที่เหลือของ TypeScript รู้สึกเหมือนอนุมานได้เอง แทนที่จะต้องท่องจำ
 </Callout>
 

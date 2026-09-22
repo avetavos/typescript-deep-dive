@@ -97,7 +97,7 @@ type StringProps<T> = {
 
 การ remap key เป็น `never` จะ **ลบ** key นั้นออกจากผลลัพธ์ — เป็นทริกมาตรฐานสำหรับ filter property ตาม value type
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 mapped type `{ [K in keyof T]: ... }` คือ loop ระดับ type บน key ของ `T`; ภายในนั้น `T[K]` ให้ value type เดิมมา transform คุณเพิ่ม modifier ด้วยการเขียน `readonly`/`?` และลบด้วย `-readonly`/`-?` clause `as` remap key — rename key (ด้วย template literal) หรือ filter ออกด้วยการ remap เป็น `never` construct เดียวนี้คือวิธีที่ `Partial`, `Readonly`, `Required` และ utility type ส่วนใหญ่ถูกสร้าง
 </Callout>
 

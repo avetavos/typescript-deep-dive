@@ -94,7 +94,7 @@ recursive string type ทุกตัวที่ลอกทีละตัว�
 
 ใช้เทคนิคนี้ตรงที่ string encode structure จริง ๆ ถ้าใช้กระตือรือร้นเกินไปคุณจะได้ type ที่เพื่อนร่วมทีมอ่านไม่ออก — เป็น trade-off ที่กลับมาเสมอของ type-level programming
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 template literal type สร้าง string type ด้วยการ interpolate และ **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform string type เหล่านั้น และการรวม template กับ conditional type บวก `infer` ให้คุณ **pattern-match และ parse** string type ได้ (capture ชิ้นส่วนเข้า type variable ใหม่) นี่คือการ parse string จริง ๆ ที่ compiler ประเมินให้
 </Callout>
 

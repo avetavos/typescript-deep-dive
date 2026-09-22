@@ -88,7 +88,7 @@ type M = Merge<{ a: string; b: number }>; // string | number (union)
 - **inference เข้มขึ้นใน 5.9** การแก้ bug ที่ type variable "รั่ว" ออกจาก inference ทำให้บาง call ที่เคยยอมรับ `T` ผิด ๆ กลายเป็น error ถ้า call ไหน compile ไม่ผ่านหลังอัปเกรด วิธีแก้ที่ตั้งใจไว้คือระบุ type argument ให้ชัด: `f<Expected>(...)`
 - **instantiation เร็วขึ้น (5.9)** instantiation ระหว่างทางถูก cache เป็นเหตุผลที่ generic library หนัก ๆ (Zod, tRPC) เจอ error "excessively deep" น้อยลงมาก
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 generic inference อ่าน **ตำแหน่งของ argument** (inference site) แล้วประนีประนอมเป็น type เดียว — จึงเป็นเหตุผลว่าทำไม argument (ไม่ใช่ return annotation) เป็นตัวตัดสินว่า `T` กลายเป็นอะไร keyword `infer` ที่ใช้ภายใน conditional type แนะนำ variable ที่ TypeScript แก้ให้ด้วยการ pattern-match structure: วาง `infer X` ตรงที่ส่วนที่คุณต้องการอยู่ (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) แล้ว TypeScript ยื่นชิ้นนั้นให้ นี่คือวิธีสร้าง `ReturnType` และเพื่อน ๆ
 </Callout>
 

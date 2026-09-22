@@ -131,7 +131,7 @@ createStreetLight(["red", "yellow", "green"], "blue");
 
 `NoInfer` erase กลายเป็น `T` — มันเปลี่ยนแค่ *ตำแหน่งที่ compiler มอง* ไม่ได้เปลี่ยน type ผลลัพธ์ หยิบมาใช้เมื่อ parameter แบบ "default" หรือ "fallback" ต้องถูกเช็คกับ type ที่ infer มาจากที่อื่น
 
-<Callout title="สรุปบรรทัดเดียว">
+<Callout title="สรุปหนึ่งบรรทัด">
 compiler infer type ส่วนใหญ่ให้ ดังนั้นเขียน annotation ให้น้อยลง กฎสำคัญ: **`const` เก็บ literal type ส่วน `let` widen** ไปเป็น type ทั่วไป inference ยังไหลจากบนลงล่างด้วย (contextual typing) นั่นคือเหตุผลที่ parameter ของ callback แทบไม่ต้อง annotate และสร้าง **best common type** (เป็น union) ให้ value ที่ปนกัน annotate parameter กับ return type ของ public API แล้วปล่อยที่เหลือให้ inference จัดการ
 </Callout>
 

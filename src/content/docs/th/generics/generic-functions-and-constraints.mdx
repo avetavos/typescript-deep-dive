@@ -110,7 +110,7 @@ const t = tuple("a", 1, true);
 
 constraint มักต้องมี `readonly` (literal ที่ infer ได้เป็น readonly tuple หรือ object) ใช้กับ API ที่อิง literal value — route table, config แบบ enum, builder — ส่วน generic ทั่วไปปล่อยไว้ตามเดิม
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 type parameter ส่วนใหญ่ถูก **infer** จาก argument ไม่ใช่เขียนเอง constrain ด้วย `extends` เมื่อต้องการให้ `T` มี shape บางอย่าง (`T extends { length: number }`) หรือเป็น key ของ type อื่น (`K extends keyof T` คืน `T[K]`) ใส่ default ตรงที่มี fallback สมเหตุสมผล และตัด type parameter ที่ปรากฏแค่ครั้งเดียวทิ้ง — generic ควรเชื่อมตำแหน่ง ไม่ใช่ตกแต่งตำแหน่งเดียว
 </Callout>
 

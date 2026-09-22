@@ -107,7 +107,7 @@ class UserRepository implements Repository<User> {
 }
 ```
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 interface, type alias และ class รับ type parameter ได้หมด บน **class** parameter (`Stack<T>`) ถูก fix ตอน construct instance และทุก method ใช้ร่วมกัน parameter ที่ประกาศบน **method** (`map<U>`) ถูกเลือกใหม่ทุกครั้งที่เรียก การอ่าน generic class คือการถามแต่ละ parameter ว่า: fix ต่อ instance หรือต่อ call?
 </Callout>
 

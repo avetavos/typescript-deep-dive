@@ -125,7 +125,7 @@ TypeScript 6.0 deprecate option ชุดหนึ่ง และ 7.0 ถอด
 - **`libReplacement`** (5.8) — opt in ให้แทน `lib.dom` ด้วย npm package เช่น `@typescript/lib-dom`; ปิดเป็น default ตั้งแต่ 6.0
 - **`skipLibCheck`** — ข้ามการ check ไฟล์ `.d.ts` ใน `node_modules` ยังเป็นการเร่งความเร็วที่ถูกที่สุดตัวเดียว แม้บน native compiler
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 TypeScript 6/7 default เป็น `strict`, `module: esnext`, `target` ของปีปัจจุบัน, `types: []` และ `rootDir: "."` — ดังนั้นตั้ง `types` กับ `rootDir` ให้ชัด และใช้ config สั้น ๆ จาก `tsc --init` เป็น template `strictNullChecks` ยังเป็น check ที่สำคัญที่สุด เพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` ทับลงไป และแทน option ที่ถูกถอด (`baseUrl`, `moduleResolution: node`, `outFile`, `es5`) ด้วย `paths`, `nodenext`/`bundler`, bundler และ target สมัยใหม่
 </Callout>
 

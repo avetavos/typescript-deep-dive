@@ -123,7 +123,7 @@ export function parse(input: string): unknown { return JSON.parse(input); } // �
 
 เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ใน `.tsbuildinfo` (เขียนเสมอตั้งแต่ 5.6) และ recheck เฉพาะสิ่งที่เปลี่ยน ตั้งแต่ 5.6 การ build **เดินต่อแม้เจอ error** ในโปรเจกต์ upstream เพื่อให้คุณเห็นทุก failure ในการรันเดียว — ใส่ `--stopOnBuildErrors` ถ้าอยากได้พฤติกรรม fail-fast แบบเดิม — และ TypeScript 7 check โปรเจกต์ที่เป็นอิสระต่อกันพร้อมกันด้วย `--builders` วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental และขนาน
 
-<Callout title="The one-line takeaway">
+<Callout title="สรุปหนึ่งบรรทัด">
 ให้ bundler emit และให้ `tsc` check — และด้วย native compiler แบบขนานของ TypeScript 7 (`--checkers`, `--builders`, native watcher) การ check เร็วกว่าปีที่แล้ว 8–12 เท่า รัน `.ts` ตรง ๆ ใน Node ได้โดยยึด syntax ที่ erase ได้ (`erasableSyntaxOnly`), รักษาความปลอดภัยแบบ single-file ด้วย `isolatedModules` และ `verbatimModuleSyntax`, ใช้ `noCheck` + `isolatedDeclarations` เมื่ออยากได้ declaration โดยไม่ผ่าน checker และใช้ project references ให้ `tsc --build` เป็น incremental ใน monorepo 7.0 ไม่มี programmatic API — เครื่องมือที่ต้องใช้ให้ใช้ `@typescript/typescript6` จนกว่า 7.1 จะมา
 </Callout>
 
