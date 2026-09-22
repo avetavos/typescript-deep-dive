@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The idea in one sentence
 
@@ -45,6 +47,140 @@ When an assignment is allowed, it's because one type's set of values fits inside
 Coming from other languages, you might think of a type as a **label** attached to a variable. In TypeScript it's more useful to think of a type as a **set** — the collection of all values that are legal for that slot. `boolean` is the set `{true, false}`. `string` is the set of all strings. This one reframe makes unions, narrowing, and `never` obvious instead of mysterious.
 </Callout>
 
+## `interface` vs `type`: the first construct choice
+
+You will name your first object shape within minutes of writing TypeScript, and the language gives you two ways to do it: `interface` and `type`. For a plain object shape they behave almost identically — but "almost" hides two real differences worth knowing from day one.
+
+**Declaration merging.** An `interface` can be declared more than once in the same scope; the declarations merge into one interface with every member from every declaration. A `type` alias cannot — redeclaring one is a hard error.
+
+```ts
+interface Config {
+  name: string;
+}
+interface Config {
+  version: number;
+}
+
+const c: Config = { name: "app", version: 1 }; // ✅ merged: both members required
+```
+
+```ts
+// @expect-error TS2300
+type Config = {
+  name: string;
+};
+type Config = {
+  version: number;
+};
+```
+
+Merging isn't a curiosity — it's how `.d.ts` files extend things you don't own. Adding a method to every array, globally, looks exactly like the merge above:
+
+```ts
+interface Array<T> {
+  last(): T | undefined;
+}
+
+const nums: number[] = [1, 2, 3];
+console.log(nums.last()); // ✅ Array<T> merged with lib.es5.d.ts's own Array<T>
+```
+
+This only works because `Array` is declared with `interface` in TypeScript's own lib files. A library that wanted the same trick with `type` simply couldn't — this is the concrete reason libraries publish public object contracts as `interface`.
+
+**Error messages read differently once the shape gets composed.** For a single flat shape, `interface` and `type` produce identical-looking errors. The difference shows up once you *compose* one from another — `extends` for an interface, `&` for a type alias:
+
+<TSPlayground code={interfaceVsTypeCode} id="foundations-index-interface-vs-type" title="Composing a shape changes what the error names" />
+
+export const interfaceVsTypeCode = `// @expect-error TS2345 TS2741
+interface Base { id: string }
+interface IUser extends Base { name: string }
+
+type TBase = { id: string };
+type TUser = TBase & { name: string };
+
+function greetI(u: IUser) {}
+function greetT(u: TUser) {}
+
+greetI({ id: "1" }); // TS2741: missing 'name' in type 'IUser' — named by the interface
+greetT({ id: "1" }); // TS2345, with a nested line naming '{ name: string }' — the anonymous intersection member, not 'TBase'`;
+
+`interface extends` keeps naming the interface (`IUser`) no matter how many levels it's built from. `type` intersection reports assignability against the alias name at the top, but the moment it has to explain *which piece* failed, it expands to the anonymous object type of the failing intersection member instead of naming `TBase`. Neither is "wrong" — but a codebase with deeply intersected type aliases reads noisier errors than the equivalent `interface extends` chain.
+
+**When the course recommends each.** Reach for `interface` for object shapes you expect to be extended, implemented by a class, or augmented by someone else's code (the merging behavior is a feature there). Reach for `type` for anything an `interface` cannot express at all — unions, tuples, mapped types, conditional types — and for one-off shapes where merging would only be a footgun. Both are erased at compile time either way; this is a readability and API-design choice, not a performance one.
+
+## Reading an "is not assignable" error chain
+
+Beginners often read a multi-line TypeScript error top to bottom and try to fix the first line. That's backwards — the first line is the *conclusion*, and the real problem is at the bottom.
+
+```ts
+// @expect-error TS2322
+interface Address { city: string; zip: number }
+interface Person { name: string; address: Address }
+
+const raw = { name: "Ada", address: { city: "NYC", zip: "10001" } };
+const p: Person = raw;
+```
+
+```text
+error TS2322: Type '{ name: string; address: { city: string; zip: string; }; }' is not assignable to type 'Person'.
+  The types of 'address.zip' are incompatible between these types.
+    Type 'string' is not assignable to type 'number'.
+```
+
+Read it **bottom-up**:
+
+1. **Bottom line — the actual mismatch.** `Type 'string' is not assignable to type 'number'.` This is the one real fact: somewhere, a `string` met a `number` and didn't fit.
+2. **Middle line — the exact location.** `The types of 'address.zip' are incompatible...` names the property path. You now know *where*: `raw.address.zip`, not `raw` itself.
+3. **Top line — the summary a human asked for.** `Type '{...}' is not assignable to type 'Person'.` This is what triggered the check in the first place; it restates the whole object because that's what you tried to assign, but it names nothing you can act on directly.
+
+The fix is always at the bottom: `zip` needs to be a `number` (parse it, or fix wherever `"10001"` was produced as a string). Chasing the top line instead — casting `raw` to `Person`, or loosening `Person.address` to `any` — silences the message without touching the actual bug.
+
+## Mental Model
+
+A type error is not a wall of text to skim; it's a description of the smallest place two shapes disagree. The compiler always tells you, somewhere in the message, exactly which property and which two types failed to line up — everything above that line is just how the mismatch was reached, not what's wrong.
+
+<Mermaid title="A nested error chain: read from the bottom" code={chainDiagram} />
+
+export const chainDiagram = `flowchart BT
+  bottom["Type string is not\nassignable to type number\n(the real mismatch)"] --> middle["at address.zip\n(the exact location)"]
+  middle --> top["object not assignable to Person\n(the summary — not actionable on its own)"]`;
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `interface` for a public shape | Can be extended, implemented by a class, and merged/augmented by other files or `.d.ts` declarations | Cannot express unions, tuples, or other non-object shapes |
+| `type` for a public shape | Expresses anything — unions, tuples, mapped/conditional types — and cannot be silently re-opened elsewhere | No merging: two declarations with the same name is a hard error, not a feature |
+| Fixing the top line of an error (cast, `any`) | Makes the red squiggle disappear immediately | Doesn't touch the actual mismatch — it usually resurfaces later as a runtime bug instead of a compile error |
+| Fixing the bottom line of an error | Fixes the real problem at its source | Requires reading past the summary line, which is slower the first few times |
+
+## Common Misconceptions
+
+- **`interface` and `type` are basically interchangeable, so it doesn't matter which you pick.** True for one flat, never-reopened shape. False the moment merging, `extends`/`&` composition, or a non-object shape enters the picture — and error-message shape already differs by then too.
+- **A long, multi-line error means a complicated bug.** Usually it means a *deeply nested* but perfectly simple bug: one leaf property has the wrong type, and the compiler is showing you the path to it, not the difficulty of the fix.
+- **The top line of an error is the thing to fix.** The top line is almost always the least specific part of the message — a summary of what you attempted, not a diagnosis. The specific claim is at the bottom.
+
+## Reading AI-generated code
+
+Generated code that hits a type error has a predictable failure mode: it "fixes" the outer line instead of the inner one. When reviewing a diff that resolves a type error, check:
+
+- Did the fix change the **type of the leaf value** (the actual `string` that should have been a `number`), or did it just **cast away the outer variable** (`as Person`, `as unknown as Person`) so the checker stops complaining?
+- If the fix is a cast, would the *original*, more specific error still be true about the data at runtime? A cast doesn't change what the value actually is.
+- Does the "fixed" code still crash if you mentally run it against the real (uncast) shape?
+
+<SpotTheBug code={`interface Address { city: string; zip: number }
+interface Person { name: string; address: Address }
+
+const raw = { name: "Ada", address: { city: "NYC", zip: "10001" } };
+const p: Person = raw as unknown as Person; // "fixed" the red squiggle
+console.log(p.address.zip.toFixed(0));`}>
+This compiles with zero errors and crashes at runtime. The original, un-cast assignment (`const p: Person = raw;`) correctly reported that `address.zip` is a `string`, not a `number` — that was real, useful information about the data. `raw as unknown as Person` doesn't change what `raw.address.zip` actually is (still the string `"10001"`); it only tells the compiler to stop checking. `p.address.zip.toFixed(0)` then calls a `number` method on a string and throws `TypeError: p.address.zip.toFixed is not a function`. The correct fix was at the bottom of the original error, not at the top: convert the raw zip code to a real `number` before it reaches `raw`, or accept `zip: string` in `Address` if a string is what the data actually is.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Read a multi-line TypeScript error **bottom-up**: the last line is the one real mismatch, the middle names exactly where it is, and the top is just a summary of what you tried to do. `interface` and `type` both name a set of values and both erase at compile time, but `interface` can merge (the mechanism behind extending someone else's `.d.ts`) and keeps naming itself through `extends`, while `type` composed with `&` can expand into an anonymous shape in its own error messages.
+</Callout>
+
 export const quizIndex = [
   {
     q: 'When does TypeScript\'s type system do its work?',
@@ -55,6 +191,7 @@ export const quizIndex = [
       'Inside the JavaScript engine',
     ],
     answer: 1,
+    explain: 'Type checking happens entirely at compile time; by the time the JavaScript runs, every type annotation has been erased and cannot be inspected.',
   },
   {
     q: 'What is the most useful mental model for a TypeScript type?',
@@ -65,6 +202,7 @@ export const quizIndex = [
       'A memory layout',
     ],
     answer: 1,
+    explain: 'Thinking of a type as the set of values it allows makes assignability, unions, intersections, and never fall out as consequences instead of rules to memorize.',
   },
   {
     q: 'Which two ideas explain most TypeScript behavior?',
@@ -75,6 +213,51 @@ export const quizIndex = [
       'Async and promises',
     ],
     answer: 1,
+    explain: 'Assignability (a subset relation) and structural compatibility (does the shape fit) together explain almost every compile error and every allowed assignment in the language.',
+  },
+  {
+    q: 'Can `interface Config { name: string }` be declared again elsewhere with `interface Config { version: number }`?',
+    options: [
+      'No — it is a duplicate identifier error, same as `type`',
+      'Yes — the two declarations merge into one interface requiring both `name` and `version`',
+      'Yes, but the second declaration silently replaces the first',
+      'Only inside a class',
+    ],
+    answer: 1,
+    explain: 'Declaration merging is unique to `interface`: multiple declarations with the same name in the same scope combine into a single interface with every member. `type` aliases cannot be redeclared at all — it is a hard `TS2300` error.',
+  },
+  {
+    q: '```ts\ninterface Base { id: string }\ninterface IUser extends Base { name: string }\n\ntype TBase = { id: string };\ntype TUser = TBase & { name: string };\n\nfunction greetT(u: TUser) {}\ngreetT({ id: "1" });\n```\nWhat does the resulting error name for the missing property, and why?',
+    options: [
+      'It names `TUser`, because type aliases always print by name',
+      'It names the anonymous `{ name: string }` intersection member, not `TBase` — composing with `&` can expand into an anonymous shape once the checker explains which piece failed',
+      'It refuses to compile the intersection at all',
+      'It names `IUser`, because both examples produce identical errors',
+    ],
+    answer: 1,
+    explain: '`interface extends` keeps naming the interface no matter how deep the chain; a `type` alias built with `&` reports the top-level alias name but expands to the anonymous shape of the specific member that failed, which reads noisier the more intersections are involved.',
+  },
+  {
+    q: '```text\nerror TS2322: Type \'{ name: string; address: { city: string; zip: string; }; }\' is not assignable to type \'Person\'.\n  The types of \'address.zip\' are incompatible between these types.\n    Type \'string\' is not assignable to type \'number\'.\n```\nWhich line contains the actionable fact, and in which direction should you read?',
+    options: [
+      'Top-down — the first line names the real problem',
+      'Bottom-up — the last line is the one real mismatch, the middle names its exact location, and the top is only a summary',
+      'It does not matter, all three lines are equally specific',
+      'Middle-out — always start from the second line',
+    ],
+    answer: 1,
+    explain: 'The top line restates what you attempted (assigning some object to `Person`) and is the least specific part of the message. The bottom line — `string` is not assignable to `number` — is the one concrete fact, and the middle line tells you exactly where: `address.zip`.',
+  },
+  {
+    q: 'A diff "fixes" a type error by changing `const p: Person = raw;` to `const p: Person = raw as unknown as Person;`. Does this fix the underlying problem the original error was reporting?',
+    options: [
+      'Yes — the code now compiles with zero errors, so the bug is gone',
+      'No — the cast only silences the checker; `raw.address.zip` is still the wrong runtime type and can still crash',
+      'Yes, because `as unknown as` performs a real runtime conversion',
+      'No, because the cast itself is a compile error',
+    ],
+    answer: 1,
+    explain: 'A cast changes what the compiler believes, not what the value actually is at runtime. If the original error correctly reported that `zip` is a `string`, casting away the error leaves that string in place — code that calls a `number`-only method on it still throws.',
   },
 ];
 

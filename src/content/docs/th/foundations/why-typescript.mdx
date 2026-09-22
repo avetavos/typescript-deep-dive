@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## bug ที่ TypeScript ถูกออกแบบมาเพื่อจับ
 
@@ -101,8 +103,123 @@ TypeScript ไม่ได้ฟรี และการแกล้งทำ�
 
 ถ้าคุณเรียน TypeScript มาจากยุค 4.x หรือ 5.x type system ที่รู้จักยังเหมือนเดิม สิ่งที่เปลี่ยนคือความเร็วและค่าเริ่มต้น บทเรียนจะแปะเวอร์ชันที่ feature ใหม่ ๆ เข้ามา (เช่น "5.5") ให้รู้ว่าอะไรเพิ่งมา
 
+## `as` กับ `!` เป็น assertion ไม่ใช่การแปลง
+
+ทุก value ในบทนี้ที่ผ่านมาถูกเช็คแบบ *ซื่อสัตย์* — compiler ได้ type มาจากหลักฐานจริง (literal, return type, parameter ที่ประกาศไว้) `as` กับ `!` ต่างออกไป: มันคือคุณ **บอก compiler เรื่องบางอย่างที่มันไม่ได้ derive เอง** โดยไม่มีการเช็คตอน runtime รองรับคำกล่าวอ้างนั้นเลย compiler เชื่อคุณเต็มที่ และ "เชื่อ" ตรงนี้แปลว่า "เลิกเช็ค" ไม่ใช่ "ตรวจสอบแล้วยืนยัน"
+
+```ts
+const raw: string = "42";
+const n = raw as unknown as number; // "trust me, this is a number"
+console.log(n.toFixed(2));
+```
+
+โค้ดนี้ compile ผ่านโดย **ไม่มี error เลย** `raw` ตอน runtime ยังเป็น string `"42"` เหมือนเดิม — `as` ไม่ได้รัน code ใด ๆ มันแค่เปลี่ยนสิ่งที่ compiler เชื่อเกี่ยวกับ expression นั้นนับจากจุดนั้นไป กด Run:
+
+<TSPlayground code={nonNullCrashCode} id="foundations-why-typescript-assertions" title="A non-null assertion on a value that actually is null" />
+
+export const nonNullCrashCode = `// @run
+function find(id: string): { id: string; name: string } | undefined {
+  return undefined; // pretend this looked it up and found nothing
+}
+
+const user = find("1")!; // "trust me, this exists" — !, not a check
+console.log(user.name.toUpperCase());`;
+
+`find("1")` คืน `undefined` จริง ๆ ตรงนี้ — `!` ไม่ได้เปลี่ยนความจริงข้อนั้น มันแค่บอก compiler ให้เลิกกังวลเรื่องนี้ โปรแกรม compile ผ่านสะอาดแล้ว throw `TypeError: Cannot read properties of undefined (reading 'name')` ทันทีที่รัน ตรงกับ crash ที่ `strictNullChecks` มีไว้ป้องกันพอดี เหมือน `as`: assertion คือคำกล่าวอ้างเกี่ยวกับ value ไม่ใช่การแปลง value นั้น
+
+## `@ts-ignore` กับ `@ts-expect-error`
+
+ทั้งสอง comment ระงับ error บรรทัดถัดไปเหมือนกัน — แต่พังคนละทิศทางเมื่อ code รอบ ๆ เปลี่ยนไปทีหลัง ซึ่งเป็นคุณสมบัติเดียวที่สำคัญใน codebase จริง
+
+```ts
+// @ts-ignore
+const total: number = "not a number"; // a real, live TS2322 — now silenced forever
+console.log(total.toFixed(2));
+```
+
+โค้ดนี้ compile ผ่านโดย **ไม่มี error รายงานเลย** — `@ts-ignore` กลืน error ทุกอย่างในบรรทัดถัดไปแบบไม่มีเงื่อนไข ดังนั้น bug จริง (`total` เป็น string) หายไปจาก output ของ compiler แล้วไปพังตอน runtime แทน: `TypeError: total.toFixed is not a function`
+
+```ts
+// @expect-error TS2578
+// @ts-expect-error
+const total: number = 1 + 1; // no error here — the suppression is now stale
+```
+
+`@ts-expect-error` ให้คำสัญญา *ตรงข้าม*: "บรรทัดถัดไปมี error และถ้ามันเลิกมี error เมื่อไร ให้ build fail" ตรงนี้บรรทัดที่มันคุ้มครองไม่มีปัญหาอะไร (`1 + 1` เป็น `number` จริง ๆ) ดังนั้นตัว directive เองกลายเป็น error: `TS2578: Unused '@ts-expect-error' directive` นั่นคือประเด็นทั้งหมด — ถ้า bug ที่ comment นี้เคยซ่อนไว้ถูกแก้ที่อื่น (value เลิกผิด) `@ts-expect-error` จะบอกคุณดัง ๆ แทนที่จะเงียบตลอดไปแบบ `@ts-ignore`
+
+## `declare`: type ที่ไม่มี implementation และไม่ emit อะไรเลย
+
+บางครั้ง value หนึ่งมีอยู่จริงตอน runtime ผ่านทางที่ compiler มองไม่เห็น — script tag ที่โหลดก่อน bundle ของคุณ, global ที่ test runner ฉีดเข้ามา, module ที่เขียนเป็น JavaScript ธรรมดาไม่มี type `declare` อธิบาย type ของ value นั้นโดยไม่ให้ (หรือเช็ค) implementation:
+
+```ts
+declare const BUILD_VERSION: string;
+declare function legacyAlert(msg: string): void;
+declare module "my-untyped-lib" {
+  export function doThing(): void;
+}
+
+console.log(BUILD_VERSION);
+legacyAlert("hi");
+```
+
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย และ — เพราะ `declare` แค่อธิบาย มันไม่เคยนิยาม — มัน emit **ไม่มีอะไรเลย** การ compile ตัวอย่างข้างบนด้วย `tsc --outDir` ได้ผลลัพธ์เป๊ะ ๆ นี้:
+
+```js
+"use strict";
+console.log(BUILD_VERSION);
+legacyAlert("hi");
+```
+
+statement `declare` ทุกตัวหายไปหมด เหลือแต่ code ที่ *ใช้* ชื่อเหล่านั้น นี่คือ erasure แบบเดียวกับที่บทนี้เปิดเรื่องไว้ แค่ในระดับทั้ง declaration แทนที่จะเป็นแค่ annotation — และนี่คือเหตุผลที่ `.d.ts` มีอยู่: ไฟล์ทั้งไฟล์ที่มีแต่ statement รูปแบบ `declare` compile ออกมาเป็นความว่างเปล่า จึงส่งไปพร้อมกับ JavaScript จริงของ library เพื่ออธิบาย shape ของมันเท่านั้น
+
+## Mental Model
+
+ทุกอย่างในบทนี้คือไอเดียเดียวที่ถูกใช้สองครั้ง: **compiler รู้แค่สิ่งที่มัน derive ได้ และลบทุกอย่างที่มันรู้ทิ้งก่อนโปรแกรมจะรัน** `as`/`!` คือคุณฉีดข้อเท็จจริงที่มันไม่ได้ derive เอง (และตรวจสอบไม่ได้); `declare` คือคุณฉีด declaration ทั้งอันที่มันไม่ได้ derive เอง (และเช็ค implementation กับมันไม่ได้) ทั้งคู่ compile ออกมาเป็นความว่างเปล่าและทั้งคู่เชื่อคุณเต็มที่ — นี่คือเหตุผลที่ทั้งสองคือจุดแรกที่ควรดูเมื่อ code ที่ generate มาหรือไม่คุ้นเคย compile ผ่านแต่ยังพังอยู่
+
+<Mermaid title="สองวิธีส่งข้อเท็จจริงที่ไม่ผ่านการตรวจให้ compiler" code={assertDiagram} />
+
+export const assertDiagram = `flowchart LR
+  a["as / !\n(a claim about ONE value)"] --> trust["Compiler trusts it,\nchecks nothing further"]
+  d["declare\n(a claim about a whole binding)"] --> trust
+  trust --> risk["Wrong claim survives\nto runtime unchanged"]`;
+
+## ข้อแลกเปลี่ยน
+
+| เครื่องมือ | ข้อดี | ต้นทุน |
+|---|---|---|
+| `as` / `as unknown as` | หนี type error ได้ทันที ไม่มี runtime cost | ไม่มีการตรวจสอบเลย — คำกล่าวอ้างที่ผิด compile ผ่านสะอาดแล้วพังทีหลัง มักไกลจากจุด cast |
+| `!` (non-null assertion) | สั้นกว่า null check จริงเมื่อคุณมั่นใจ | ความเสี่ยงเหมือน `as` เป๊ะ เฉพาะเจาะจงกับ `null`/`undefined` — และ API response แทบไม่เคยแน่นอนอย่างที่ดูเลย |
+| `@ts-ignore` | ระงับ error บรรทัดถัดไปได้ทุกอย่าง ตลอดไป | ระงับ error *อื่น* ที่เพิ่งเกิดใหม่บนบรรทัดเดียวกันด้วย — คุณจะไม่มีทางรู้เลย |
+| `@ts-expect-error` | build fail ทันทีที่ error ที่ระงับไว้เลิกเป็นจริง | มีพิธีกรรมเยอะกว่านิดหน่อย ต้องรู้เจตนาที่แน่ชัด (คาดว่ามี error ตรงนี้) |
+| `declare` | ให้ใช้ value ที่ TypeScript มองไม่เห็น definition ได้ | ไม่มีการตรวจสอบเลยว่า value จริงตอน runtime ตรงกับที่ declare ไว้ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`as` แปลง value เป็น target type เหมือน cast ในภาษาอื่น** ไม่จริง มันไม่รัน code ใด ๆ — `raw as unknown as number` ปล่อย `raw` ไว้เหมือนเดิมทุกประการ มันแค่เปลี่ยนสิ่งที่ compiler เชื่อเกี่ยวกับ expression นับจากจุดนั้น
+- **`!` เป็นทางลัดที่ปลอดภัยเมื่อคุณ "ค่อนข้างมั่นใจ" ว่า value ไม่ null** มันมีพฤติกรรมไม่เช็ค runtime เหมือน `as` เป๊ะ — "ค่อนข้างมั่นใจ" ที่กลายเป็นผิดพังเหมือนการเข้าถึง `null` แบบไม่เช็คทุกประการ ต่างกันแค่ warning ของ compiler หายไปแล้ว
+- **`@ts-ignore` กับ `@ts-expect-error` ใช้แทนกันได้เพื่อระงับ error** มันพังคนละทิศทางเมื่อ code เปลี่ยน: `@ts-expect-error` ต้องการให้ error ยังอยู่จริงและจะพังดัง ๆ ทันทีที่มันไม่อยู่แล้ว; `@ts-ignore` ไม่บอกอะไรเลยทั้งสองทาง ตลอดไป
+- **`declare` สร้าง value ที่มันอธิบาย** ตรงข้ามเลย — มันยืนยัน type ให้ value ที่ต้องมีอยู่แล้วผ่านทางอื่น code ที่มีแต่ `declare` emit ไม่ได้อะไรเลยและไม่สร้างอะไรเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+Code ที่ generate มามักหยิบ `as`, `!`, `@ts-ignore` และบางทีก็ `declare` ที่แต่งขึ้นมา ทันทีที่ type error สร้างความรำคาญ เพราะทั้งสี่อย่างทำให้เส้นแดงหายไปทันที ตอนเห็นอันไหนอันหนึ่งให้เช็ค:
+
+- มี runtime check จริงที่ assertion นี้ใช้แทนไหม — null check, การ validate shape — ที่ code ที่ generate มาข้ามไปแทนที่จะเขียน?
+- `@ts-ignore` อยู่บนบรรทัดที่ error message *จริง* (เห็นได้ถ้าลบ comment ออกชั่วคราว) อธิบาย bug จริงหรือเปล่า ไม่ใช่ false positive?
+- `declare` อ้างถึง global หรือ module ที่มีอยู่จริงตอน runtime ใน project นี้ หรือถูกแต่งขึ้นมาเพื่อทำให้ import error หายไป?
+
+<SpotTheBug code={`function getConfigValue(key: string): string {
+  const config: Record<string, string | undefined> = { host: "localhost" };
+  return config[key]!;
+}
+
+const port = getConfigValue("port");
+console.log(port.toUpperCase());`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลยแล้วพังตอน runtime `config[key]` เป็น `string | undefined` จริง ๆ — compiler เตือนถูกต้องแล้วว่าการ lookup อาจพลาดได้ `!` ไม่ได้เช็คอะไรเลย มันแค่ assert ว่า "key นี้มีอยู่แน่นอน" ซึ่งไม่จริงสำหรับ `"port"` ใน config object นี้ `getConfigValue("port")` คืน `undefined` จริง ๆ ตอน runtime ทั้งที่มี return annotation เป็น `: string` (annotation ไม่เคยถูกตรวจสอบกับความจริงเลย — ดูบท Type Inference เรื่องทำไมการ annotate public return type ถึงสำคัญ) และ `port.toUpperCase()` throw `TypeError: Cannot read properties of undefined (reading 'toUpperCase')` การแก้คือ check จริง — `if (config[key] === undefined) throw new Error(...)` หรือทำให้ return type ซื่อสัตย์เป็น `string | undefined` แล้วจัดการที่จุดเรียก — ไม่ใช่ `!` ที่ assert check ทิ้งไป
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-TypeScript เช็ค type ตอน **compile time** แล้ว **ลบ** type ทิ้ง — JavaScript ที่ emit ออกมาไม่มี type และไม่มี runtime cost ที่เกี่ยวกับ type เลย หน้าที่ของ type system คือย้าย bug จาก "เจอทีหลังบน production" ไปเป็น "เจอตอนนี้ใน editor" ราคาที่จ่ายคือ build step และ learning curve ที่มีจริง ส่วนผลตอบแทนคือการ refactor ที่ปลอดภัยและ bug ทั้งกลุ่มที่ compile ไม่ผ่านตั้งแต่แรก
+TypeScript เช็ค type ตอน **compile time** แล้ว **ลบ** type ทิ้ง — JavaScript ที่ emit ออกมาไม่มี type และไม่มี runtime cost ที่เกี่ยวกับ type เลย `as` กับ `!` คือคุณ override การเช็คนั้นด้วยคำกล่าวอ้างที่ compiler ตรวจสอบไม่ได้ ไม่ใช่การแปลงจริง จึงพังตรงจุดที่ type error ที่ซื่อสัตย์เคยเตือนไว้พอดี `@ts-expect-error` พังดัง ๆ เมื่อการระงับของมันล้าสมัย; `@ts-ignore` เงียบตลอดไป `declare` อธิบาย type ของ value โดยไม่มี implementation และ — เหมือน construct ที่เป็น type-only อื่น ๆ — ไม่ emit อะไรเลย
 </Callout>
 
 export const quizWhy = [
@@ -115,6 +232,7 @@ export const quizWhy = [
       'ถูกแปลงเป็น runtime assertion',
     ],
     answer: 1,
+    explain: 'Annotation ถูกเช็คตอน compile time แล้วถูกลบทิ้งทั้งหมด — JavaScript ที่ emit ออกมาแยกไม่ออกจาก JavaScript ที่ไม่เคยมี type เลย',
   },
   {
     q: 'คุณค่าหลักของ TypeScript คืออะไร?',
@@ -125,6 +243,7 @@ export const quizWhy = [
       'ลดขนาด bundle',
     ],
     answer: 1,
+    explain: 'TypeScript ไม่เพิ่ม runtime performance เลย คุณค่าทั้งหมดคือจับ bug บางกลุ่มได้ก่อนโปรแกรมจะรัน แทนที่จะเจอบน production',
   },
   {
     q: 'ทำไมคุณถึงเช็ค type ของ TypeScript ตรง ๆ ตอน runtime ไม่ได้?',
@@ -135,16 +254,51 @@ export const quizWhy = [
       'จริง ๆ คุณทำได้ ด้วย operator `is`',
     ],
     answer: 1,
+    explain: 'พอ code รันจริง type ทุกตัวถูกถอดออกหมดแล้ว `x is string` (type predicate) เป็น syntax ระดับ compile-time เท่านั้น ไม่ใช่ runtime check เอง — runtime check จริง ๆ คือ expression ของ JavaScript ที่ body ของมันใช้',
   },
   {
-    q: 'ข้อใดเป็นต้นทุนจริงของการใช้ TypeScript?',
+    q: '```ts\nconst raw: string = "42";\nconst n = raw as unknown as number;\nconsole.log(n.toFixed(2));\n```\nเกิดอะไรขึ้นตอนรัน?',
     options: [
-      'เพิ่ม runtime overhead ให้ทุก function',
-      'ต้องมี build/compile step และมี learning curve ที่มีจริง',
-      'ห้ามใช้ JavaScript library ใด ๆ',
-      'ทำให้ code ใหญ่ขึ้นตอน runtime',
+      'compile ผ่านแล้วพิมพ์ `42.00` เพราะ `as` แปลง string เป็น number จริง',
+      'compile ผ่านโดยไม่มี error เลย แต่พังตอน runtime ด้วย `TypeError: n.toFixed is not a function` — `raw` ยังเป็น string `"42"` เหมือนเดิม',
+      'compile ไม่ผ่าน — cast `string` เป็น `number` ไม่ได้',
+      'compile ผ่านแล้วพิมพ์ `undefined`',
     ],
     answer: 1,
+    explain: '`as` ไม่เคยรัน code ใด ๆ — มันแค่เปลี่ยนสิ่งที่ compiler เชื่อเกี่ยวกับ expression นั้น `raw` ยังเป็น string `"42"` ตอน runtime จึงเรียก method ของ `number` บนมันแล้ว throw',
+  },
+  {
+    q: 'ความต่างสำคัญระหว่าง `@ts-ignore` กับ `@ts-expect-error` คืออะไร?',
+    options: [
+      'เหมือนกันทุกอย่าง',
+      '`@ts-expect-error` ทำให้ build fail ถ้าบรรทัดที่ระงับไว้เลิกมี error; `@ts-ignore` ระงับบรรทัดถัดไปแบบไม่มีเงื่อนไข ตลอดไป โดยไม่มีการเช็คแบบนั้นเลย',
+      '`@ts-ignore` ทำงานเฉพาะบรรทัดเดียวกัน `@ts-expect-error` ทำงานเฉพาะบรรทัดถัดไป',
+      '`@ts-expect-error` type-check เร็วกว่า',
+    ],
+    answer: 1,
+    explain: '`@ts-expect-error` บนบรรทัดที่ไม่มี error จริงจะกลายเป็น error ของตัวเอง (`TS2578: Unused directive`) ซึ่งเป็นเหตุผลที่มันจับการแก้ที่อื่นที่เอา bug เดิมออกไปได้ `@ts-ignore` ไม่บอกอะไรเลยทั้งสองทาง',
+  },
+  {
+    q: '```ts\nfunction getConfigValue(key: string): string {\n  const config: Record<string, string | undefined> = { host: "localhost" };\n  return config[key]!;\n}\nconst port = getConfigValue("port");\nconsole.log(port.toUpperCase());\n```\nโค้ดนี้ compile ผ่านไหม และเกิดอะไรขึ้นตอนรัน?',
+    options: [
+      'compile error — ใช้ `!` กับ index access ไม่ได้',
+      'compile ผ่านโดยไม่มี error เลย — `!` assert ว่า lookup ไม่มีทาง `undefined` — แล้วพังตอน runtime เพราะ `config["port"]` เป็น `undefined` จริง ๆ',
+      'compile ผ่านแล้วพิมพ์ string ว่างเปล่า',
+      'compile error — return type ไม่ตรงกัน',
+    ],
+    answer: 1,
+    explain: '`!` ระงับ warning ที่ถูกต้องของ compiler ว่า index lookup อาจพลาดได้ แต่มันไม่เช็คอะไรเลย `config["port"]` เป็น `undefined` จริง ๆ ตรงนี้ ดังนั้น `.toUpperCase()` บนมันจึง throw ตอน runtime ทั้งที่ function มี return annotation เป็น `: string`',
+  },
+  {
+    q: '`declare const BUILD_VERSION: string;` compile ออกมาเป็นอะไรใน JavaScript ที่ emit?',
+    options: [
+      'การ initialize จริง `const BUILD_VERSION = "";`',
+      'ไม่มีอะไรเลย — `declare` แค่อธิบาย type ให้ compiler และไม่ emit code ใด ๆ',
+      'runtime check ที่ throw ถ้า `BUILD_VERSION` หายไป',
+      'function `getBuildVersion()` ที่ export ออกมา',
+    ],
+    answer: 1,
+    explain: '`declare` ไม่ให้ implementation และไม่สร้าง JavaScript ใด ๆ — มันมีไว้เพื่อให้ compiler รู้ type ของชื่อหนึ่งเท่านั้น นี่คือเหตุผลที่ไฟล์ `.d.ts` (มีแต่ statement รูปแบบ `declare`) compile ออกมาเป็นความว่างเปล่า',
   },
 ];
 

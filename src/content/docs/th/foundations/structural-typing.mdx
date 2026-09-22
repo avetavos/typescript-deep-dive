@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## shape ไม่ใช่ชื่อ
 
@@ -62,10 +64,117 @@ assign *object ตัวเดียวกัน* ผ่านตัวแปร
 
 ## ทำไมเรื่องนี้ถึงสำคัญ
 
-structural typing คือเหตุผลที่ TypeScript ทำงานกับ object ธรรมดาได้ลื่น และเป็นเหตุผลที่คุณแทบไม่ต้องประกาศว่า type หนึ่ง "implements" อีก type และเป็นเหตุผลที่ library สองตัวที่มี `Point` type ของตัวเองใช้ด้วยกันได้เลย ต้นทุนคือ type ที่ไม่เกี่ยวกันแต่ shape เหมือนกันจะใช้แทนกันได้ — บางครั้งคุณ *อยาก* ให้ type ต่างกันแบบ nominal (`UserId` ที่ไม่ใช่แค่ `string` ตัวไหนก็ได้) ซึ่งคุณปลอมได้ด้วย **branded type** (เจาะลึกทีหลังในโมดูล Practical Mastery)
+structural typing คือเหตุผลที่ TypeScript ทำงานกับ object ธรรมดาได้ลื่น และเป็นเหตุผลที่คุณแทบไม่ต้องประกาศว่า type หนึ่ง "implements" อีก type และเป็นเหตุผลที่ library สองตัวที่มี `Point` type ของตัวเองใช้ด้วยกันได้เลย ต้นทุนคือ type ที่ไม่เกี่ยวกันแต่ shape เหมือนกันจะใช้แทนกันได้ — บางครั้งคุณ *อยาก* ให้ type ต่างกันแบบ nominal (`UserId` ที่ไม่ใช่แค่ `string` ตัวไหนก็ได้) ซึ่งคุณปลอมได้ด้วย **branded type** ที่จะดูตัวอย่างจริงข้างล่างนี้
+
+## Class ก็เป็น structural เหมือนกัน — จนกว่า `private` จะเข้ามา
+
+structural compatibility ไม่ได้จำกัดแค่ `interface`/`type` — ใช้กับ class ด้วยเช่นกัน class สองตัวที่ไม่เคยถูกประกาศว่าเกี่ยวข้องกันยังใช้แทนกันได้ถ้า shape ตรงกัน:
+
+```ts
+class Point2D {
+  constructor(public x: number, public y: number) {}
+}
+class Coordinate {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point2D(1, 2);
+const c: Coordinate = p; // ✅ unrelated classes, identical public shape — compatible
+console.log(c.x, c.y);
+```
+
+`Point2D` กับ `Coordinate` ไม่มี inheritance ร่วมกัน ไม่มี interface ร่วมกัน มีแค่ field สาธารณะที่บังเอิญเหมือนกันเป๊ะ — และ TypeScript ยอมรับตัวหนึ่งแทนอีกตัวได้ทุกที่ที่ต้องการ เหมือน interface `Point`/`Coord` ก่อนหน้านี้เป๊ะ เรื่องนี้ทำให้คนที่มาจากภาษาที่เป็น nominal ประหลาดใจ เพราะที่นั่น class สองตัวที่ไม่เกี่ยวกันไม่มีทางใช้แทนกันได้ไม่ว่าจะมี field อะไรก็ตาม
+
+มีอยู่อย่างเดียวที่ทำลายสิ่งนี้: member ที่เป็น `private` เพิ่มเข้าไปแม้จะชื่อและ type เหมือนกันทั้งสอง class ก็ทำให้ class เลิกเข้ากันได้ทันที:
+
+<TSPlayground code={privateBreaksStructuralCode} id="foundations-structural-private" title="private makes an otherwise-identical class incompatible" />
+
+export const privateBreaksStructuralCode = `// @expect-error TS2322
+class Point2D {
+  private secret = 1;
+  constructor(public x: number, public y: number) {}
+}
+class Coordinate {
+  private secret = 1;
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point2D(1, 2);
+const c: Coordinate = p; // ❌ TS2322 — each class's private member is its own, even with the same name`;
+
+`Types have separate declarations of a private property 'secret'` คือ message จริง TypeScript มีข้อยกเว้นแบบ nominal อยู่หนึ่งจุดใน structural check ของมัน: member ที่เป็น `private` (หรือ `protected`) จะถือว่าเหมือนกับ member ของอีก class ก็ต่อเมื่อมาจาก declaration เดียวกันเป๊ะ (ผ่าน inheritance) — ไม่ใช่แค่ชื่อกับ type ตรงกัน นี่คือจุดเดียวที่ model แบบเทียบ shape ในบทนี้เลิกใช้ และจะพูดถึงแบบเต็ม ๆ ตอนแนะนำ class
+
+## Branded type แบบเป็นรูปธรรม
+
+ปัญหา "บางครั้งคุณอยากให้ต่างแบบ nominal" ข้างบนมีทางแก้มาตรฐานใน structural system และควรเห็นสักครั้งตรงนี้ แม้จะพูดแบบเต็ม ๆ ทีหลัง: intersect primitive กับ marker property ที่ไม่มีอยู่จริงตอน runtime
+
+```ts
+// @expect-error TS2345
+type UserId = string & { readonly __brand: "UserId" };
+type OrderId = string & { readonly __brand: "OrderId" };
+
+function getUser(id: UserId) {}
+
+declare const orderId: OrderId;
+getUser(orderId);
+```
+
+```text
+error TS2345: Argument of type 'OrderId' is not assignable to parameter of type 'UserId'.
+  Type 'OrderId' is not assignable to type '{ readonly __brand: "UserId"; }'.
+    Types of property '__brand' are incompatible.
+      Type '"OrderId"' is not assignable to type '"UserId"'.
+```
+
+ทั้ง `UserId` และ `OrderId` ข้างใต้คือ string ธรรมดา — ตอน runtime `__brand` ไม่มีอยู่จริงบนทั้งสอง value เลย มันเป็นแค่ marker ตอน compile-time เท่านั้น แต่เพราะ literal value ของ marker ต่างกัน (`"UserId"` กับ `"OrderId"`) intersection ทั้งสองจึงไม่เหมือนกันแบบ structural อีกต่อไป compiler จึงถือว่าต่างกัน — ทั้งที่ `string` ธรรมดาจะไม่เข้ากับตัวไหนเลยถ้าไม่มีการ assert ตรง ๆ นี่คือทางหนีสำหรับช่องว่างที่ structural typing เปิดไว้พอดี: ใช้มันเมื่อ value สองตัวบังเอิญมี shape แบบ primitive เดียวกันแต่ต้องไม่ถูกแทนกันเด็ดขาด บท Typing APIs & Boundaries (Practical Mastery) พูดเรื่องการสร้างและ validate branded value อย่างถูกต้อง
+
+## Mental Model
+
+Structural typing ถามคำถามเดียวเสมอ: "value นี้มีทุกอย่างที่ target shape ต้องการไหม" interface, type alias และ class ถูกตัดสินด้วยคำถามเดียวกันหมด — property เกินไม่เคยทำร้าย และ declaration ที่ไม่เกี่ยวกันแต่มี shape ที่ต้องการเหมือนกันก็เป็น type เดียวกันในสายตาของ assignability `private` คือข้อยกเว้นเดียวที่ตั้งใจ — มันทำให้ membership ขึ้นกับ *ว่า property ถูกประกาศที่ไหน* ไม่ใช่แค่หน้าตาเป็นยังไง นี่คือเหตุผลที่มันเป็นเครื่องมือเดียวที่เอาความต่างแบบ nominal กลับมาให้ class ได้ Branded type คือกลเม็ดเดียวกันแต่ไม่ต้องมี class เลย — property marker ที่มีหน้าที่เดียวคือทำให้ shape ที่เหมือนกันทุกอย่างพังการเช็ค "มีทุกอย่างที่ต้องการ" เมื่อเจอ value ที่ shape เดียวกันแต่ความหมายต่างกัน
+
+<Mermaid title="Structural typing ถามคำถามเดียว มีสองเครื่องมือที่ขอออก" code={structuralMentalDiagram} />
+
+export const structuralMentalDiagram = `flowchart TB
+  q["Does the value have\nevery required property?"] -->|yes| ok["Assignable — regardless of\ndeclared name or relationship"]
+  q -->|"private member present"| nominal1["Membership now depends on\nWHERE it was declared"]
+  q -->|"branded marker property"| nominal2["Shapes differ by a\ncompile-time-only marker"]`;
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ข้อดี | ต้นทุน |
+|---|---|---|
+| Shape แบบ structural ธรรมดา (ไม่มี brand, ไม่มี `private`) | ยืดหยุ่นสูงสุด — shape ที่ตรงกันใช้ได้จากแหล่งไหนก็ได้ | value สองตัวที่ความหมายต่างกันแต่ shape แบบ primitive เดียวกัน (`UserId` กับ `OrderId` ทั้งคู่เป็น `string`) ใช้แทนกันได้อย่างอิสระ |
+| Member `private` บน class | เอาความต่างแบบ nominal กลับมาให้ class โดยไม่ต้องมี type เพิ่ม | ใช้ได้เฉพาะ class; shape แบบ `interface`/`type` ที่เปิดอยู่ไม่ได้รับการป้องกันแบบนี้ |
+| Branded type (`string & { __brand: ... }`) | ใช้ได้กับ primitive ไหนก็ได้ ไม่ใช่แค่ class; ไม่มี runtime cost | มี boilerplate ต่อ branded type หนึ่งตัว และต้องมีอะไรสักอย่างสร้าง branded value อย่างปลอดภัยจริง ๆ (พูดในบท Typing APIs & Boundaries) |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **Class ใน TypeScript เป็น nominal typing เหมือน Java หรือ C#** ไม่จริง มันเป็น structural โดยค่าเริ่มต้น เหมือน interface เป๊ะ — class สองตัวที่ไม่เกี่ยวกันแต่ public shape เหมือนกันใช้แทนกันได้ มีแค่ member `private`/`protected` เท่านั้นที่เปลี่ยนสิ่งนี้
+- **Branded type คือ runtime wrapper จริง เหมือน value object class** ไม่จริง มันเป็นแค่นิยายระดับ compile-time เท่านั้น — `__brand` ไม่เคยมีอยู่จริงบน value จริง ความปลอดภัยอยู่ที่ระดับ type-checker 100% ไม่มีอะไรหยุด raw string ถูก force-cast เป็น branded type ผ่าน `as` ได้เลย
+- **Excess property check แปลว่า TypeScript แอบเป็น nominal จริง ๆ** มันเป็นแค่ typo-catcher แคบ ๆ ที่ตั้งใจไว้เฉพาะ object literal สด ๆ เท่านั้น — model เบื้องหลังยังเป็น "shape เข้าไหม" เหมือนเดิม นั่นคือเหตุผลที่ object เดียวกันเป๊ะที่ assign ผ่านตัวแปรถูกยอมรับโดยไม่บ่นอะไรเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+Code ที่ generate มาซึ่งส่ง value ที่เป็น `string`/`number` ธรรมดาผ่านหลาย function คือจุดที่ความยืดหยุ่นของ structural typing กลายเป็นภาระบ่อยที่สุด เพราะไม่มีอะไรหยุด value ที่ผิดแต่ shape เหมือนกันไม่ให้ผ่านไปได้ ให้เช็ค:
+
+- identifier หลายตัวที่เป็น primitive type เดียวกันไหลผ่าน parameter ที่อยู่ใกล้กัน — `userId: string`, `orderId: string`, `sessionToken: string` — โดยไม่มี branding argument ที่พิมพ์ผิดลำดับ compile ผ่านสะอาดทุกครั้ง
+- การ lookup ที่ key ด้วย ID ชนิดหนึ่งแต่ได้รับตัวแปรที่ *ชื่อ* บ่งบอกว่าเป็น ID อีกชนิดหนึ่ง โดยมีแค่ชื่อตัวแปรเท่านั้นที่บอกความต่าง
+- class หรือ object shape สองอันที่ถูกใช้แทนกัน "เพราะ field ตรงกัน" ในบริบทที่สองสิ่งนั้นมีความหมายต่างกันจริง ๆ (`Cart` กับ `Wishlist` ที่บังเอิญมี `items: Item[]` เหมือนกัน)
+
+<SpotTheBug code={`interface User { id: string; name: string }
+const users: Record<string, User> = { u1: { id: "u1", name: "Ada" } };
+
+function getUserName(userId: string): string {
+  return users[userId].name;
+}
+
+const orderId = "o1"; // actually an order id, not a user id — both are just \`string\`
+console.log(getUserName(orderId).toUpperCase());`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลยแล้วพังตอน runtime `getUserName` รับ `userId: string` ธรรมดา และ `orderId` ก็เป็น `string` ธรรมดาเช่นกัน — เหมือนกันทั้งแบบ structural (จริง ๆ คือแบบ primitive เลยด้วยซ้ำ) compiler จึงไม่มีเหตุผลจะค้าน ทั้งที่ทั้งสองแทนความหมายที่ต่างกันโดยสิ้นเชิงใน domain `users["o1"]` เป็น `undefined` (ไม่มี user id นี้) ดังนั้น `.name` จึง throw `TypeError: Cannot read properties of undefined (reading 'name')` การ brand `UserId` กับ `OrderId` ให้เป็นคนละ type (stub ของบทนี้) จะทำให้เรื่องนี้กลายเป็น `TS2345` ตอน compile time ที่จุดเรียก — ตรงกับ bug กลุ่มที่ความยืดหยุ่นของ structural typing จับเองไม่ได้พอดี
+</SpotTheBug>
 
 <Callout title="สรุปหนึ่งบรรทัด">
-TypeScript เป็นแบบ **structural**: compatibility ขึ้นกับ shape ไม่ใช่ชื่อที่ประกาศ และ value ที่มี property เกินก็ยังเข้าได้กับ type ที่ขอน้อยกว่า (เป็น subset) ข้อยกเว้นเดียวคือ **excess property check** — object literal สด ๆ ที่ assign ตรง ๆ จะถูก flag ถ้ามี key ที่ไม่รู้จัก เป็นการป้องกัน typo แบบเจาะจง ถ้า assign ผ่านตัวแปร กฎ structural ปกติก็ใช้แทน
+TypeScript เป็นแบบ **structural**: compatibility ขึ้นกับ shape ไม่ใช่ชื่อที่ประกาศ และ value ที่มี property เกินก็ยังเข้าได้กับ type ที่ขอน้อยกว่า (เป็น subset) — รวม class ด้วย เพราะ class สองตัวที่ไม่เกี่ยวกันแต่ public shape เหมือนกันก็ใช้แทนกันได้เช่นกัน ข้อยกเว้นสองอย่างคือ **excess property check** (object literal สด ๆ ถูก flag ถ้ามี key ที่ไม่รู้จัก เป็นการป้องกัน typo) และ **member `private`/`protected`** (membership ขึ้นกับว่าประกาศที่ไหน ไม่ใช่แค่ชื่อกับ type) **Branded type** สร้างข้อยกเว้นที่สามขึ้นมาเองด้วย marker property ระดับ compile-time เท่านั้น สำหรับ value ที่ต้องไม่ถูกแทนกันเด็ดขาดแม้จะมี shape แบบ primitive เดียวกัน
 </Callout>
 
 export const quizStructural = [
@@ -78,6 +187,7 @@ export const quizStructural = [
       'type ถูกเช็คตอน runtime',
     ],
     answer: 1,
+    explain: 'TypeScript เทียบ shape ไม่ใช่ความสัมพันธ์ที่ประกาศไว้ — type สองตัวที่ไม่มีชื่อร่วมกันหรือ inheritance เชื่อมกันก็เข้ากันได้ถ้าตัวหนึ่งมีทุกอย่างที่อีกตัวต้องการ',
   },
   {
     q: 'value ที่มี property เกิน assign ให้ type ที่ต้องการน้อยกว่าได้ไหม?',
@@ -88,6 +198,7 @@ export const quizStructural = [
       'ได้เฉพาะกับ array',
     ],
     answer: 1,
+    explain: 'เซตของ "object ที่มี property มากกว่า" เป็น subset ของ "object ที่มี property จำเป็นน้อยกว่า" — property เกินมองไม่เห็นจาก code ที่ถือ type แคบกว่า',
   },
   {
     q: 'ทำไม assign `{ width: 10, height: 20 }` ตรง ๆ ให้ `Options { width: number }` ถึง error แต่ assign ผ่านตัวแปรกลับไม่ error?',
@@ -98,6 +209,7 @@ export const quizStructural = [
       'เป็น bug ของ compiler',
     ],
     answer: 1,
+    explain: 'Excess property check เป็นข้อยกเว้นแคบ ๆ ที่ตั้งใจไว้ ทำงานเฉพาะตอน assign object literal สด ๆ ตรงจุดนั้นเท่านั้น — object เดียวกันผ่านตัวแปรได้รับการปฏิบัติแบบ "shape เข้าไหม" ตามปกติ',
   },
   {
     q: 'เทคนิคใดให้ความต่างแบบ nominal ใน system ที่เป็น structural?',
@@ -108,6 +220,40 @@ export const quizStructural = [
       'ทำไม่ได้ใน TypeScript',
     ],
     answer: 1,
+    explain: 'Branded type intersect primitive กับ marker property ที่ไม่มีอยู่จริงตอน runtime เพื่อทำให้ shape ที่เหมือนกันทุกอย่างพังการเช็ค structural เมื่อเจอ value ที่ shape เดียวกันแต่ความหมายต่างกัน',
+  },
+  {
+    q: '```ts\nclass Point2D {\n  constructor(public x: number, public y: number) {}\n}\nclass Coordinate {\n  constructor(public x: number, public y: number) {}\n}\n\nconst p = new Point2D(1, 2);\nconst c: Coordinate = p;\n```\nโค้ดนี้ compile ผ่านไหม?',
+    options: [
+      'ไม่ผ่าน — `Point2D` กับ `Coordinate` ไม่เกี่ยวกัน',
+      'ผ่าน — class ก็เป็น structural เหมือนกัน และ class ที่ไม่เกี่ยวกันแต่ public shape เหมือนกันใช้แทนกันได้',
+      'ไม่ผ่าน — ต้องใช้ interface ถึงจะยอมแบบนี้',
+      'ผ่านเฉพาะถ้าตัวหนึ่ง `extends` อีกตัว',
+    ],
+    answer: 1,
+    explain: 'TypeScript ไม่ให้การปฏิบัติแบบ nominal พิเศษกับ class โดยค่าเริ่มต้น — มันถูกตัดสินด้วยกฎ "shape เข้าไหม" เดียวกับ interface ดังนั้น class สองตัวที่ member สาธารณะตรงกันจึงใช้แทนกันได้อย่างอิสระ',
+  },
+  {
+    q: 'การเพิ่ม `private secret = 1;` เหมือนกันทุกประการให้ทั้ง `Point2D` และ `Coordinate` ข้างบนเปลี่ยนผลลัพธ์ ทำไม?',
+    options: [
+      'ไม่เปลี่ยนอะไรเลย — `private` ถูกลบทิ้งและ checker เมิน',
+      'member ที่เป็น `private` ถือว่าเหมือนกันก็ต่อเมื่อมาจาก declaration เดียวกัน (ผ่าน inheritance) — แค่ชื่อกับ type ตรงกันไม่พอแล้ว class จึงเลิก assign ให้กันได้',
+      'มันทำให้ทั้งสอง class กลายเป็น `abstract`',
+      'field ที่เป็น `private` เป็น `never` เสมอ',
+    ],
+    answer: 1,
+    explain: 'นี่คือข้อยกเว้นเดียวที่ตั้งใจต่อการเทียบ shape ธรรมดา: member `private`/`protected` ผูก compatibility กับ *ว่าประกาศที่ไหน* ไม่ใช่แค่ชื่อกับ type ซึ่งเป็นเหตุผลที่ error บอกเจาะจงว่า "separate declarations of a private property"',
+  },
+  {
+    q: '```ts\ntype UserId = string & { readonly __brand: "UserId" };\ntype OrderId = string & { readonly __brand: "OrderId" };\n\nfunction getUser(id: UserId) {}\ndeclare const orderId: OrderId;\ngetUser(orderId);\n```\nทำไม compile ไม่ผ่าน ทั้งที่ทั้งคู่สุดท้ายก็เป็น string?',
+    options: [
+      'ไม่ได้ไม่ผ่าน — ทั้งคู่เป็น string จึง compile ผ่าน',
+      'marker `__brand` มี literal value ต่างกันในแต่ละ type ("UserId" กับ "OrderId") intersection ทั้งสองจึงไม่เหมือนกันแบบ structural อีกต่อไป',
+      'intersect `string` กับ object type ไม่ได้',
+      'value จาก `declare const` ส่งเป็น argument ไม่ได้เลย',
+    ],
+    answer: 1,
+    explain: 'marker property ไม่มีอยู่จริงตอน runtime เลย — มันมีไว้เพื่อทำให้ shape แบบ primitive ที่เหมือนกันทุกอย่างสองอันไม่ลงรอยกันตรง literal type ของ property เดียว ซึ่งพอจะทำให้การเช็ค structural พังตรงจุดที่คุณต้องการพอดี',
   },
 ];
 

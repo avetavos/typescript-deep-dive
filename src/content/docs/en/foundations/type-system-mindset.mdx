@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## A type is a set of values
 
@@ -73,6 +75,136 @@ let x: unknown = 42; // ✅ everything fits into unknown
 
 `any` breaks this model on purpose: it opts *out* of set-checking entirely, which is why it's dangerous. `unknown` keeps the model and forces you to narrow.
 
+## Proof: `any`, `unknown`, and `never` on the exact same mistake
+
+Talk is cheap — put all three in front of the same bug and watch the model predict exactly what happens to each one.
+
+```ts
+// @run
+const withAny: any = "42";
+withAny.toFixed(2); // compiles — any opts out of checking, crashes at runtime
+```
+
+```text
+TypeError: withAny.toFixed is not a function
+```
+
+`any` isn't a member of the sets model at all — it's a hole punched through it. The compiler lets `.toFixed` through with zero checking, and the mistake (a string has no `toFixed`) survives all the way to a runtime crash.
+
+<TSPlayground code={anyUnknownNeverCode} id="foundations-mindset-any-unknown-never" title="Same mistake, three types: any crashes, unknown and never don't compile" />
+
+export const anyUnknownNeverCode = `// @expect-error TS18046 TS2339
+const withAny: any = "42";
+withAny.toFixed(2); // compiles — any opts out of checking, crashes at runtime
+
+const withUnknown: unknown = "42";
+withUnknown.toFixed(2); // TS18046 — unknown forces you to narrow first
+
+declare const withNever: never;
+withNever.toFixed(2); // TS2339 — never has no members at all`;
+
+Click **Check types**: `any`'s line produces nothing, because `any` is assignable to and from everything, no questions asked. `unknown`'s line fails with `TS18046` — `unknown` is the set of *all* values, and `.toFixed` isn't a property every value has, so the compiler refuses until you narrow. `never`'s line fails with `TS2339` for a different reason: `never` is the *empty* set, so it has no properties at all — there's nothing to call `.toFixed` on, ever. Same shape of mistake, three completely different outcomes, and the sets model predicts every one of them: `any` isn't a set (it's an escape hatch), `unknown` is the biggest set (nothing narrowed yet), `never` is the smallest set (nothing there to use).
+
+## `never` in practice: unreachable code and impossible cases
+
+`never` isn't just the empty set in the abstract — it's the real inferred type of a function that can't return normally:
+
+```ts
+function fail(msg: string): never {
+  throw new Error(msg);
+}
+
+const result: never = fail("boom"); // ✅ — fail never returns, so this line never runs
+```
+
+This compiles because `fail` genuinely never produces a value — every path throws. The compiler trusts a `never`-returning function completely: any code after a call to one is understood to be unreachable.
+
+The same idea shows up as a safety net in a `switch`. When every case of a union has been handled, whatever's left over has been narrowed to `never` — assignable to `never` because there's genuinely nothing left it could be:
+
+```ts
+type Shape = { kind: "circle"; radius: number } | { kind: "square"; side: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+    default:
+      const exhaustive: never = shape; // ✅ every case handled — nothing reaches here
+      throw new Error(`Unhandled shape: ${exhaustive}`);
+  }
+}
+```
+
+Add a third member to `Shape` later and forget to handle it, and this exact line stops compiling — `shape` in the `default` branch is no longer narrowed all the way to `never`, so assigning it to a `never`-typed variable fails:
+
+```ts
+// @expect-error TS2322
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+    default:
+      const exhaustive: never = shape; // ❌ 'triangle' case wasn't handled
+      throw new Error(`Unhandled shape: ${exhaustive}`);
+  }
+}
+```
+
+This is the `never`-as-empty-set idea doing real work: the moment `shape` could genuinely still be a `{ kind: "triangle"; ... }`, its set of possible values is no longer empty, so it no longer fits in `never`, and the compiler tells you a case is missing — at compile time, not by silently falling through. The narrowing lesson covers exhaustiveness checks in full.
+
+## Mental Model
+
+Every type in this lesson is a point on the same scale: `never` is the empty set at the bottom, `unknown` is the set of everything at the top, and every other type is somewhere in between, sized by how many values it allows. `any` is not on that scale at all — it is a deliberate hole in the model, which is exactly why the same `.toFixed` mistake behaves so differently depending on which of the three you used.
+
+<Mermaid title="never, unknown, and any relative to the sets model" code={scaleDiagram} />
+
+export const scaleDiagram = `flowchart LR
+  never["never\n(empty set — bottom)"] --> mid["string, number, User, ...\n(sized sets in between)"]
+  mid --> unknown["unknown\n(all values — top)"]
+  any["any\n(NOT a set — opts out entirely)"] -.->|breaks the model on purpose| mid`;
+
+## Trade-offs
+
+| Type | Benefit | Cost |
+|---|---|---|
+| `any` | No friction — every operation is allowed | Opts out of the sets model entirely; the exact mistake this lesson demonstrates compiles clean and only surfaces at runtime |
+| `unknown` | Accepts anything, like `any`, but keeps every check | Cannot be used for anything until narrowed — more upfront work at the boundary |
+| `never` | Makes "this branch is impossible" a compile-time fact, not a comment | Only useful once every other case has genuinely been handled; adding a case later without updating the `default` produces a real (correct) compile error |
+| Exhaustive `switch` with a `never` check | Catches an unhandled union member the moment it's added | Requires the `default: const x: never = value` boilerplate at every switch that needs the guarantee |
+
+## Common Misconceptions
+
+- **`any` and `unknown` are basically the same "give up" type.** They are opposites in practice: `unknown` keeps the sets model intact and blocks every operation until you narrow; `any` disables the model, which is why identical code (`x.toFixed(2)`) compiles under `any` and fails under `unknown`.
+- **`never` means "an error occurred."** `never` means "the empty set" — no value can ever have this type. A function typed to return `never` isn't broken; it's a function that provably never returns at all (it always throws or loops).
+- **An exhaustive `switch` needs a comment saying "this shouldn't happen."** It needs a `never`-typed variable in the `default` branch instead — a comment can't stop compiling when a new union member is added and left unhandled, but an assignment to `never` genuinely can.
+
+## Reading AI-generated code
+
+Generated code reaches for `any` far more often than `unknown`, because `any` requires no follow-up narrowing — which is precisely why it hides the class of bug this lesson opened with. When reviewing a type annotation on untrusted or external data, check:
+
+- Is it `any` where it should be `unknown`? If nothing downstream narrows the value before using it, `any` will let a real mistake compile clean, exactly like `withAny.toFixed(2)` above.
+- Does an exhaustiveness `switch` actually have a `never`-typed `default`, or does it just have a comment claiming every case is covered?
+- If a function is annotated `: never`, does it genuinely never return (throw/loop in every path), or was `never` used as a stand-in for "I don't know this type yet"?
+
+<SpotTheBug code={`function getSetting(key: string): any {
+  const settings: Record<string, string> = { theme: "dark" };
+  return settings[key];
+}
+
+const timeout = getSetting("timeout");
+console.log(timeout.toFixed(0));`}>
+This compiles with zero errors and crashes at runtime. `getSetting` is annotated to return `any`, so every use of its result — including `.toFixed(0)`, a `number`-only method — is completely unchecked. `settings["timeout"]` is actually `undefined` (the key doesn't exist in `settings`), so `timeout.toFixed(0)` throws `TypeError: Cannot read properties of undefined (reading 'toFixed')`. Had `getSetting` returned `unknown` instead, this exact call site would fail to compile with `TS18046` — forcing a narrowing check before the crash could ever reach runtime. `any` on a function whose real behavior is "look this up and maybe not find it" is a strictly worse choice than `unknown` plus a real check.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
 Think of every type as the **set of values it allows**. Then: assignability is the subset relation, `|` is set union (wider), `&` is set intersection (narrower), `never` is the empty set (bottom), and `unknown` is the set of all values (top). This one model makes the rest of TypeScript feel derived rather than memorized.
 </Callout>
@@ -87,6 +219,7 @@ export const quizMindset = [
       'When A is a class and B is an interface',
     ],
     answer: 1,
+    explain: 'Assignability is purely a subset check on the sets of values each type describes — names and declaration order never matter.',
   },
   {
     q: 'What is the type of `string & number`, and why?',
@@ -97,6 +230,7 @@ export const quizMindset = [
       '`any`, because it can\'t decide',
     ],
     answer: 1,
+    explain: 'No value is simultaneously a string and a number, so the intersection of the two sets is empty — which is exactly what `never` represents.',
   },
   {
     q: 'What set does `never` represent?',
@@ -107,6 +241,7 @@ export const quizMindset = [
       'The set of primitive values',
     ],
     answer: 1,
+    explain: '`never` is the bottom type: the empty set. Nothing is assignable to it (you cannot produce a member of an empty set), but it is assignable to everything (the empty set is a subset of every set).',
   },
   {
     q: 'How does `unknown` differ from `any`?',
@@ -117,6 +252,40 @@ export const quizMindset = [
       '`any` is the empty set',
     ],
     answer: 1,
+    explain: '`unknown` stays inside the sets model as the top type — everything fits in, but you must narrow before doing anything with it. `any` disables the model rather than sitting at either end of it.',
+  },
+  {
+    q: '```ts\nconst withAny: any = "42";\nwithAny.toFixed(2);\n\nconst withUnknown: unknown = "42";\nwithUnknown.toFixed(2);\n```\nWhat does `tsc` report for these two lines?',
+    options: [
+      'Both compile with zero errors',
+      'The `any` line compiles with zero errors; the `unknown` line fails with `TS18046` because `unknown` must be narrowed before any property access',
+      'Both fail to compile',
+      'The `any` line fails; the `unknown` line compiles',
+    ],
+    answer: 1,
+    explain: '`any` is assignable to and from anything with no checking at all, so `.toFixed` on it is allowed even though it will crash at runtime. `unknown` is the set of all values but keeps the model intact, so the compiler refuses `.toFixed` until the value is narrowed.',
+  },
+  {
+    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case "circle": return Math.PI * shape.radius ** 2;\n    case "square": return shape.side ** 2;\n    default:\n      const exhaustive: never = shape;\n      throw new Error(`Unhandled: ${exhaustive}`);\n  }\n}\n```\nDoes this compile, and why?',
+    options: [
+      'Yes — `never` accepts any leftover value',
+      'No — in the `default` branch, `shape` could still be the `triangle` case, so its set of possible values is not empty and it no longer fits in `never`',
+      'Yes, because `switch` statements never check exhaustiveness',
+      'No — `never` cannot be used as a variable type',
+    ],
+    answer: 1,
+    explain: 'Only `circle` and `square` are handled, so in the `default` branch `shape` is still narrowed to `{ kind: "triangle"; ... }`, not to nothing. Assigning a non-empty set of possible values to `never` (the empty set) fails — which is exactly how this pattern catches an unhandled union member at compile time.',
+  },
+  {
+    q: 'A function is declared `function fail(msg: string): never { throw new Error(msg); }`. Why does this compile?',
+    options: [
+      'Because `never` is just an alias for `void`',
+      'Because `fail` genuinely never returns a value on any path — every path throws, so its return type honestly has no members',
+      'Because the compiler ignores `never` return types',
+      'It does not compile',
+    ],
+    answer: 1,
+    explain: 'A `never`-returning function is a real, checkable claim: the function must never complete normally. `fail` always throws, so there is no path that would need to produce a value — the empty-set return type is literally accurate.',
   },
 ];
 

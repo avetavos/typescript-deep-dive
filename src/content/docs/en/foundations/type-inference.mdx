@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## You write fewer types than you think
 
@@ -100,10 +102,151 @@ Let inference do the work, and annotate deliberately in three places:
 
 Everywhere else, prefer inference. Redundant annotations are noise that can *drift* from reality during refactors.
 
+## `let` vs `const` widening, completely
+
+The rule "`const` keeps the literal, `let` widens" is true, but it only applies to the **binding itself** — not to everything reachable through it. This table covers every shape that actually comes up:
+
+| Declaration | Value | Inferred type | Why |
+|---|---|---|---|
+| `const a = "hi"` | string literal | `"hi"` | `a` itself can never be reassigned |
+| `let b = "hi"` | string literal | `string` | `b` might be reassigned to any string later |
+| `const obj = { x: "hi" }` | object literal | `{ x: string }` — **not** `{ x: "hi" }` | `const` only protects the binding `obj`; `obj.x` is a mutable property and still widens |
+| `const arr = [1, 2, 3]` | array literal | `number[]` | same reason — array elements are mutable even though `arr` can't be reassigned |
+| `const lit = "hi" as const` | const assertion | `"hi"` | `as const` opts the *value* (not just the binding) out of widening, recursively |
+
+The middle two rows are the one genuinely surprising part: `const` is a property of the *variable*, not a deep-freeze of the *value*. `obj.x = "bye"` is legal (nothing stops it), so the compiler is right to infer the wider `string` for `obj.x` even though `obj` was declared with `const`.
+
+<TSPlayground code={widenTableCode} id="foundations-inference-widen-table" title="const protects the binding, not nested properties" />
+
+export const widenTableCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+const obj = { x: "hi" };
+type ObjX = typeof obj.x;
+const check1: Equal<ObjX, string> = true;  // ✅ widened to string, not "hi"
+const check2: Equal<ObjX, "hi"> = false;   // ✅ confirms it's NOT the literal
+
+const arr = [1, 2, 3];
+type ArrElem = typeof arr[number];
+const check3: Equal<ArrElem, number> = true; // ✅ widened to number, not 1 | 2 | 3`;
+
+Click **Check types** — zero errors confirms all three `Equal` checks pass: `obj.x` really is `string`, not `"hi"`, despite `obj` being declared `const`.
+
+## Return-type inference vs. annotation: a refactor that changes behavior silently
+
+Inference on a *public* return type has a real, provable failure mode: a small internal change can widen what a function returns without producing any error **at the function itself** — the break shows up somewhere else entirely.
+
+```ts
+function parseAmount(input: string) {
+  return Number(input);
+}
+
+const total = parseAmount("42").toFixed(2); // ✅ inferred return type: number
+```
+
+This compiles clean — `parseAmount` is inferred to return `number`, and `.toFixed` is a valid `number` method. Now a teammate adds a guard for invalid input, a perfectly reasonable change:
+
+```ts
+// @expect-error TS2532
+function parseAmount(input: string) {
+  const n = Number(input);
+  if (Number.isNaN(n)) return;
+  return n;
+}
+
+const total = parseAmount("42").toFixed(2);
+```
+
+```text
+error TS2532: Object is possibly 'undefined'.
+```
+
+`parseAmount` itself still compiles with zero complaints — TypeScript infers its new, honest return type, `number | undefined`, and moves on. The error shows up **at the call site**, possibly in a different file, possibly written by someone who has never looked at `parseAmount`'s body. Annotate the return type instead, and the exact same edit is caught immediately, at the actual mistake:
+
+```ts
+// @expect-error TS2322
+function parseAmount(input: string): number {
+  const n = Number(input);
+  if (Number.isNaN(n)) return;
+  return n;
+}
+```
+
+`Type 'undefined' is not assignable to type 'number'` fires on the `return;` line itself — the moment the change was made, in the function that changed, instead of downstream in code that had every reason to assume nothing changed. This is the concrete version of "annotate public return types": the annotation doesn't make the function more correct, it moves *where* an incorrect change gets reported — from an arbitrary caller, potentially much later, back to the line that actually broke the contract.
+
+## Module vs. script scope, in full
+
+The `label`/`name` collision from the top of this lesson is a symptom of a real, general rule worth stating precisely: a file with no top-level `import` or `export` is a **script**, and a script shares its scope with the DOM lib's ambient globals. `name`, `top`, `length`, `event`, and `close` are all real `Window` properties — declaring any of them at script scope collides:
+
+```ts
+// @expect-error TS2339 TS2451
+const name = "Ada";
+console.log(name.toUpperCase());
+```
+
+`Cannot redeclare block-scoped variable 'name'` is the first error; because the redeclaration fails, `name` resolves to the ambient `Window.name` binding instead (typed as effectively unusable here), which is why a second, seemingly unrelated error (`TS2339`, no `toUpperCase` on the resulting type) follows right behind it. The fix is the one every real-world `.ts` file already has, usually without anyone thinking about it:
+
+```ts
+export {};
+
+const name = "Ada";
+console.log(name.toUpperCase()); // ✅ this file is now a module — its own scope, no collision
+```
+
+A bare `export {}` exports nothing, but it's enough to make the file a **module** rather than a script — modules get their own scope and never see the ambient globals unless they explicitly reference `window.name`. Every file with a real `import` or `export` already gets this for free; `export {}` is the one-line fix for a file that otherwise has neither.
+
 ## Two inference topics that need generics
 
 Callback inference in object literals (TypeScript 6.0) and blocking an inference site with `NoInfer<T>` (5.4) are inference topics, but both need generics (`<T>`) to make sense. They live at the end of [`generics/inference-and-infer`](/typescript/en/generics/inference-and-infer/) — come back to them after the Generics module.
 
+## Mental Model
+
+Inference is doing exactly one job everywhere in this lesson: computing the *widest type consistent with everything the compiler has actually seen*. `let` sees "might be reassigned" and widens; a property on a `const` object sees "might be mutated" and widens for the same reason, regardless of the binding's own `const`-ness; a function with no return annotation sees "every value this could return, today" and infers the union — which grows the moment a new code path is added, with nothing to flag that growth except wherever the wider result gets used. An annotation is you overriding that computation with a promise the compiler will now check *against*, rather than *derive*.
+
+<Mermaid title="Inference computes the widest type consistent with what it has seen" code={inferenceMentalDiagram} />
+
+export const inferenceMentalDiagram = `flowchart TB
+  seen["What the compiler has\nactually seen so far"] --> widest["Widest type\nconsistent with that"]
+  widest -->|"no annotation"| silent["Grows silently when\nthe code changes"]
+  widest -->|"explicit annotation"| checked["Compiler checks NEW code\nagainst the OLD promise"]`;
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Inferred return type (no annotation) | Less to write; return type updates automatically as the function evolves | A widening change (a new `return;` with no value) reports its error at every call site instead of at the function |
+| Annotated return type | A behavior-changing edit is caught at the function itself, immediately | You must update the annotation yourself on an intentional change — one extra line to maintain |
+| `const obj = {...}` relying on inferred property types | Less ceremony for everyday objects | Properties still widen — if you need a literal property type, `const` alone does not give it to you |
+| `as const` | Locks the literal recursively through the whole value, not just the top-level binding | Makes the value (and everything in it) `readonly`, which is not always what you want |
+| Script-scope file (no `import`/`export`) | None, really, for application code | Shares global scope with DOM lib ambients (`name`, `top`, `length`, ...) — a silent collision trap |
+
+## Common Misconceptions
+
+- **`const` means the whole value is frozen.** It only means the *binding* can't be reassigned. `const obj = { x: 1 }; obj.x = 2;` is completely legal, and the compiler's inferred type for `obj.x` reflects that by widening, not narrowing to a literal.
+- **An inferred return type is just as safe as an annotated one.** They behave identically until the function's body changes. The moment it does, an inferred return type silently changes what callers are promised, while an annotated one turns the same change into an error at the function itself.
+- **Every `.ts` file risks the `name`/`top`/`length` collision.** Only files with no `import`/`export` at all (true scripts) do. The instant a file has a real `import` or `export` statement, it's a module with its own scope — `export {}` is the same fix, spelled out for a file that has neither yet.
+
+## Reading AI-generated code
+
+Generated code frequently omits return-type annotations on exported functions, which hides exactly the failure mode this lesson just proved. When reviewing a diff that adds a new early return, a new thrown error path, or an `?? undefined` fallback inside an existing function, check:
+
+- Does the function have an explicit return type? If not, did the diff's author (or reviewer) actually re-derive what the function returns now, or just trust that "it still compiles" means "nothing changed"?
+- Search for every call site of a changed function. Do any of them call a method on the result with no null/undefined check — exactly the shape that breaks when a return type silently grows a `| undefined`?
+- Is a `const`-declared object's property being treated as a literal type somewhere downstream, when nothing actually locked it with `as const`?
+
+<SpotTheBug code={`function getDiscount(code: string) {
+  const discounts: Record<string, number> = { SAVE10: 0.1 };
+  if (!(code in discounts)) return;
+  return discounts[code];
+}
+
+function applyDiscount(price: number, code: string): number {
+  const discount = getDiscount(code)!;
+  return price * (1 - discount);
+}
+
+console.log(applyDiscount(100, "INVALID"));`}>
+This compiles with zero errors and produces `NaN` instead of a thrown error or a sensible fallback. `getDiscount` has no return-type annotation, so its inferred type silently became `number | undefined` the moment the `if (!(code in discounts)) return;` guard was added. The compiler *did* correctly flag the resulting arithmetic on a possibly-`undefined` value inside `applyDiscount` — but the `!` right after `getDiscount(code)` silences exactly that warning (this is the assertions lesson from Why TypeScript, showing up again here), so nothing is left to catch it. `discount` really is `undefined` for `"INVALID"`, `1 - undefined` is `NaN`, and `price * NaN` is `NaN`, with no exception anywhere. Annotating `getDiscount(code: string): number` would have surfaced this as a compile error on `getDiscount`'s own `return;` line the moment the guard was added — the same mechanism as the `parseAmount` example earlier in this lesson — instead of relying on nobody reaching for `!` to make the (correct) downstream warning go away.
+</SpotTheBug>
 
 <Callout title="The one-line takeaway">
 The compiler infers most types, so write fewer of them. The key rule: **`const` keeps the literal type, `let` widens** to the general one. Inference also flows top-down (contextual typing), which is why callback parameters rarely need annotations, and it forms a **best common type** (a union) for mixed values. Annotate parameters and public return types; let inference handle the rest.
@@ -119,6 +262,7 @@ export const quizInference = [
       'String',
     ],
     answer: 1,
+    explain: '`const` means the binding cannot be reassigned, so the compiler keeps the narrowest type it can — the literal itself.',
   },
   {
     q: 'Why does `let y = "GET"` infer `string` while `const x = "GET"` infers `"GET"`?',
@@ -129,6 +273,7 @@ export const quizInference = [
       'let variables are always any',
     ],
     answer: 1,
+    explain: 'Widening is about what the binding might become in the future. `let` might be reassigned to any string later, so the compiler generalizes; `const` cannot be reassigned, so the literal is safe to keep.',
   },
   {
     q: 'Why does a callback parameter often not need a type annotation?',
@@ -139,6 +284,7 @@ export const quizInference = [
       'You must always annotate them',
     ],
     answer: 1,
+    explain: 'The function receiving the callback (like `Array.forEach` or `addEventListener`) already declares the callback\'s parameter types, and that information flows into your callback without you writing it.',
   },
   {
     q: 'What does TypeScript infer for `[1, "two", 3]`?',
@@ -149,6 +295,40 @@ export const quizInference = [
       '[number, string, number]',
     ],
     answer: 1,
+    explain: 'The compiler forms a union that covers every element rather than picking one and erroring on the rest — this is the "best common type."',
+  },
+  {
+    q: '```ts\nconst obj = { x: "hi" };\ntype ObjX = typeof obj.x;\n```\nWhat is `ObjX`, and why?',
+    options: [
+      '`"hi"` — const always preserves literals all the way through',
+      '`string` — const only protects the binding `obj` from reassignment; the property `obj.x` is still mutable, so it widens like any other property',
+      '`any` — object literal properties are never typed',
+      '`never` — this is a type error',
+    ],
+    answer: 1,
+    explain: '`const` is a property of the variable, not a deep freeze of the value. `obj.x = "bye"` is legal, so the compiler correctly widens the inferred type of `obj.x` to `string` even though `obj` itself was declared `const`.',
+  },
+  {
+    q: '```ts\nfunction parseAmount(input: string) {\n  const n = Number(input);\n  if (Number.isNaN(n)) return;\n  return n;\n}\nconst total = parseAmount("42").toFixed(2);\n```\nWhere does the resulting compile error appear, and why is that significant?',
+    options: [
+      'Inside `parseAmount`, on the `return;` line, because there is no return-type annotation',
+      'At the call site — `parseAmount("42").toFixed(2)` — because `parseAmount`\'s inferred return type silently widened to `number | undefined` and nothing at the function itself flags that change',
+      'There is no error; this compiles and runs fine',
+      'On the `Number(input)` line',
+    ],
+    answer: 1,
+    explain: 'Without an annotation, `parseAmount` happily accepts its new, wider inferred return type — the function itself reports nothing. The break surfaces wherever the result is used unsafely, potentially in a completely different file. An explicit `: number` annotation would have caught this on `parseAmount`\'s own `return;` line instead.',
+  },
+  {
+    q: 'Why does `const name = "Ada";` at the top level of a script-scope `.ts` file (no `import`/`export`) fail to compile?',
+    options: [
+      'string literals cannot be named `name`',
+      'A script shares scope with the DOM lib\'s ambient globals, and `name` collides with `Window.name` — `export {}` (making the file a module) fixes it',
+      '`const` cannot be used for strings',
+      'It only fails in strict mode',
+    ],
+    answer: 1,
+    explain: '`name`, `top`, `length`, and similar identifiers are real `Window` properties visible at script scope. A module (any file with a real `import`/`export`, or a bare `export {}`) gets its own scope and never sees them.',
   },
 ];
 

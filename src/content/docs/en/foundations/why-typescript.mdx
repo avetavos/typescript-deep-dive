@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The bug TypeScript is designed to catch
 
@@ -101,8 +103,123 @@ This course is written against **TypeScript 7** (July 2026). The compiler was po
 
 If you learned TypeScript on 4.x or 5.x, the type system you know is unchanged; what changed is speed and defaults. Lessons tag newer features with the version that introduced them (for example "5.5") so you can tell what is recent.
 
+## `as` and `!` are assertions, not conversions
+
+Every value in this course so far has been checked *honestly* — the compiler derived a type from real evidence (a literal, a return type, a declared parameter). `as` and `!` are different: they are you **telling the compiler something it did not derive**, with no runtime check behind the claim. The compiler trusts you completely, and "trust" here means "stops checking," not "verifies and confirms."
+
+```ts
+const raw: string = "42";
+const n = raw as unknown as number; // "trust me, this is a number"
+console.log(n.toFixed(2));
+```
+
+This compiles with **zero errors**. `raw` is still, at runtime, the string `"42"` — `as` doesn't run any code, it only changes what the compiler believes about the expression from that point on. Click Run:
+
+<TSPlayground code={nonNullCrashCode} id="foundations-why-typescript-assertions" title="A non-null assertion on a value that actually is null" />
+
+export const nonNullCrashCode = `// @run
+function find(id: string): { id: string; name: string } | undefined {
+  return undefined; // pretend this looked it up and found nothing
+}
+
+const user = find("1")!; // "trust me, this exists" — !, not a check
+console.log(user.name.toUpperCase());`;
+
+`find("1")` really does return `undefined` here — the `!` doesn't change that, it just tells the compiler to stop worrying about it. The program compiles clean and then throws `TypeError: Cannot read properties of undefined (reading 'name')` the instant it runs, exactly the crash `strictNullChecks` exists to prevent. Same story as `as`: an assertion is a claim about the value, never a conversion of it.
+
+## `@ts-ignore` vs `@ts-expect-error`
+
+Both comments suppress the error on the next line — but they fail in opposite directions when the code around them changes later, which is the only property that matters in a real codebase.
+
+```ts
+// @ts-ignore
+const total: number = "not a number"; // a real, live TS2322 — now silenced forever
+console.log(total.toFixed(2));
+```
+
+This compiles with **zero errors reported** — `@ts-ignore` swallows whatever is on the next line unconditionally, so the genuine bug (`total` is a string) disappears from the compiler's output and crashes at runtime instead: `TypeError: total.toFixed is not a function`.
+
+```ts
+// @expect-error TS2578
+// @ts-expect-error
+const total: number = 1 + 1; // no error here — the suppression is now stale
+```
+
+`@ts-expect-error` makes the *opposite* promise: "the next line has an error, and if it ever stops having one, fail the build." Here the line it guards is fine (`1 + 1` really is a `number`), so the directive itself becomes an error: `TS2578: Unused '@ts-expect-error' directive`. That is the entire point — if a bug this comment was hiding gets fixed elsewhere (the value stops being wrong), `@ts-expect-error` tells you loudly instead of staying silent forever the way `@ts-ignore` would.
+
+## `declare`: types with no implementation, and zero emitted code
+
+Sometimes a value genuinely exists at runtime through some path the compiler can't see — a script tag loaded before your bundle, a global injected by a test runner, a module written in plain JavaScript with no types. `declare` describes that value's type without providing (or checking) an implementation:
+
+```ts
+declare const BUILD_VERSION: string;
+declare function legacyAlert(msg: string): void;
+declare module "my-untyped-lib" {
+  export function doThing(): void;
+}
+
+console.log(BUILD_VERSION);
+legacyAlert("hi");
+```
+
+This compiles with zero errors, and — because `declare` only describes, it never defines — it emits **nothing**. Compiling the snippet above with `tsc --outDir` produces exactly:
+
+```js
+"use strict";
+console.log(BUILD_VERSION);
+legacyAlert("hi");
+```
+
+Every `declare` statement vanished; only the code that *uses* those names survived. This is the same erasure this lesson opened with, just at the level of an entire declaration instead of a type annotation — and it's why `.d.ts` files exist at all: a whole file of nothing but `declare`-shaped statements compiles to nothing, so it can ship next to a library's real JavaScript purely to describe its shape.
+
+## Mental Model
+
+Everything in this lesson is one idea applied twice: **the compiler only knows what it can derive, and erases everything it knows before the program runs.** `as`/`!` are you injecting a fact it didn't derive (and can't verify); `declare` is you injecting a whole declaration it didn't derive (and can't check an implementation against). Both compile to nothing extra and both trust you completely — which is exactly why both are the first place to look when generated or unfamiliar code type-checks but still crashes.
+
+<Mermaid title="Two ways to hand the compiler an unverified fact" code={assertDiagram} />
+
+export const assertDiagram = `flowchart LR
+  a["as / !\n(a claim about ONE value)"] --> trust["Compiler trusts it,\nchecks nothing further"]
+  d["declare\n(a claim about a whole binding)"] --> trust
+  trust --> risk["Wrong claim survives\nto runtime unchanged"]`;
+
+## Trade-offs
+
+| Tool | Benefit | Cost |
+|---|---|---|
+| `as` / `as unknown as` | Escapes a type error immediately, no runtime cost | No verification at all — a wrong claim compiles clean and crashes later, often far from the cast |
+| `!` (non-null assertion) | Shorter than a real null check when you're certain | Identical risk to `as`, specifically for `null`/`undefined` — and API responses are rarely as certain as they look |
+| `@ts-ignore` | Silences any error on the next line, forever | Also silences a *different*, real error introduced later on that same line — you'll never be told |
+| `@ts-expect-error` | Fails the build the moment the suppressed error stops being true | Slightly more ceremony; you must know the exact intent (an error is expected here) |
+| `declare` | Lets you use a value TypeScript can't see the definition of | Zero verification that the runtime value actually matches what you declared |
+
+## Common Misconceptions
+
+- **`as` converts a value to the target type, like a cast in other languages.** It does not run any code — `raw as unknown as number` leaves `raw` exactly as it was; it only changes what the compiler believes about the expression from that point forward.
+- **`!` is a safe shortcut once you're "pretty sure" a value isn't null.** It has the exact same zero-runtime-check behavior as `as` — "pretty sure" that turns out wrong crashes exactly like an unchecked `null` access would have, except the compiler's warning is gone.
+- **`@ts-ignore` and `@ts-expect-error` are interchangeable ways to silence an error.** They fail in opposite directions when the code changes: `@ts-expect-error` demands the error still exist and fails loudly the moment it doesn't; `@ts-ignore` says nothing either way, forever.
+- **`declare` creates the value it describes.** It does the opposite — it asserts a type for a value that must already exist some other way. `declare`-only code emits nothing and creates nothing.
+
+## Reading AI-generated code
+
+Generated code reaches for `as`, `!`, `@ts-ignore`, and sometimes a stray `declare` the moment a type error is inconvenient, because all four make the red squiggle disappear immediately. When you see one, check:
+
+- Is there a real runtime check the assertion is standing in for — a `null` check, a shape validation — that the generated code skipped instead of writing?
+- Is `@ts-ignore` sitting on a line where the *actual* error message (visible if you temporarily remove the comment) describes a real bug, not a false positive?
+- Does a `declare` reference a global or module that genuinely exists at runtime in this project, or was it invented to make an import error go away?
+
+<SpotTheBug code={`function getConfigValue(key: string): string {
+  const config: Record<string, string | undefined> = { host: "localhost" };
+  return config[key]!;
+}
+
+const port = getConfigValue("port");
+console.log(port.toUpperCase());`}>
+This compiles with zero errors and crashes at runtime. `config[key]` is genuinely `string | undefined` — the compiler is correctly warning that a lookup might miss. The `!` doesn't check anything; it just asserts "this key exists," which is false for `"port"` in this config object. `getConfigValue("port")` returns `undefined` at runtime despite its `: string` return annotation (the annotation is never verified against reality — see the Type Inference lesson on why annotating public return types matters), and `port.toUpperCase()` throws `TypeError: Cannot read properties of undefined (reading 'toUpperCase')`. The fix is a real check — `if (config[key] === undefined) throw new Error(...)`, or making the return type honestly `string | undefined` and handling it at the call site — not a `!` that asserts the check away.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-TypeScript checks types at **compile time** and then **erases** them — the emitted JavaScript has no types and zero type-related runtime cost. Its job is to move bugs from "discovered later in production" to "discovered now in your editor." The price is a build step and a real learning curve; the payoff is safe refactoring and whole categories of bugs that simply can't compile.
+TypeScript checks types at **compile time** and then **erases** them — the emitted JavaScript has no types and zero type-related runtime cost. `as` and `!` are you overriding that check with a claim the compiler cannot verify, not a real conversion, so they crash exactly where an honest type error would have warned you. `@ts-expect-error` fails loudly when its suppression goes stale; `@ts-ignore` stays silent forever. `declare` describes a value's type with no implementation and — like every other type-only construct — emits nothing at all.
 </Callout>
 
 export const quizWhy = [
@@ -115,6 +232,7 @@ export const quizWhy = [
       'They are converted to runtime assertions',
     ],
     answer: 1,
+    explain: 'Type annotations are checked at compile time and then deleted entirely — the emitted JavaScript is indistinguishable from JavaScript that never had types.',
   },
   {
     q: 'What is the core value proposition of TypeScript?',
@@ -125,6 +243,7 @@ export const quizWhy = [
       'It shrinks bundle size',
     ],
     answer: 1,
+    explain: 'TypeScript adds zero runtime performance; its entire value is catching a class of bugs before the program ever runs, instead of in production.',
   },
   {
     q: 'Why can\'t you check a TypeScript type directly at runtime?',
@@ -135,16 +254,51 @@ export const quizWhy = [
       'You actually can, with the `is` operator',
     ],
     answer: 1,
+    explain: 'By the time the code runs, every type has been stripped away; `x is string` (a type predicate) is compile-time-only syntax, not a runtime check itself — the runtime check is whatever real JavaScript expression its body uses.',
   },
   {
-    q: 'Which is a genuine cost of adopting TypeScript?',
+    q: '```ts\nconst raw: string = "42";\nconst n = raw as unknown as number;\nconsole.log(n.toFixed(2));\n```\nWhat happens when this runs?',
     options: [
-      'It adds runtime overhead to every function',
-      'It requires a build/compile step and has a real learning curve',
-      'It prevents using any JavaScript libraries',
-      'It makes the code larger at runtime',
+      'It compiles and prints `42.00`, because `as` converts the string to a real number',
+      'It compiles with zero errors, but crashes at runtime with `TypeError: n.toFixed is not a function` — `raw` is still the string `"42"`',
+      'It fails to compile — you cannot cast `string` to `number`',
+      'It compiles and prints `undefined`',
     ],
     answer: 1,
+    explain: '`as` never runs any code — it only changes what the compiler believes about the expression. `raw` remains the string `"42"` at runtime, so calling a `number`-only method on it throws.',
+  },
+  {
+    q: 'What is the key difference between `@ts-ignore` and `@ts-expect-error`?',
+    options: [
+      'They are identical in every way',
+      '`@ts-expect-error` fails the build if the suppressed line stops having an error; `@ts-ignore` silences the next line unconditionally, forever, with no such check',
+      '`@ts-ignore` only works on the same line, `@ts-expect-error` only works on the next line',
+      '`@ts-expect-error` is faster to type-check',
+    ],
+    answer: 1,
+    explain: '`@ts-expect-error` on a line with no actual error becomes its own error (`TS2578: Unused directive`), which is exactly why it catches a fix elsewhere that removed the original bug. `@ts-ignore` never tells you either way.',
+  },
+  {
+    q: '```ts\nfunction getConfigValue(key: string): string {\n  const config: Record<string, string | undefined> = { host: "localhost" };\n  return config[key]!;\n}\nconst port = getConfigValue("port");\nconsole.log(port.toUpperCase());\n```\nDoes this compile, and what happens when it runs?',
+    options: [
+      'Compile error — you cannot use `!` on an index access',
+      'Compiles with zero errors — `!` asserts the lookup is never `undefined` — then crashes at runtime because `config["port"]` really is `undefined`',
+      'Compiles and prints an empty string',
+      'Compile error — the return type does not match',
+    ],
+    answer: 1,
+    explain: 'The `!` silences the compiler\'s correct warning that an index lookup can miss, but it performs no check. `config["port"]` is genuinely `undefined` here, so `.toUpperCase()` on it throws at runtime despite the function\'s `: string` return annotation.',
+  },
+  {
+    q: 'What does `declare const BUILD_VERSION: string;` compile to in the emitted JavaScript?',
+    options: [
+      'A real `const BUILD_VERSION = "";` initialization',
+      'Nothing at all — `declare` only describes a type for the compiler and emits no code',
+      'A runtime check that throws if `BUILD_VERSION` is missing',
+      'An exported `getBuildVersion()` function',
+    ],
+    answer: 1,
+    explain: '`declare` provides no implementation and generates no JavaScript — it exists purely so the compiler knows a name\'s type. This is also why `.d.ts` files (nothing but `declare`-shaped statements) compile to nothing.',
   },
 ];
 

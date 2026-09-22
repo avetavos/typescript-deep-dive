@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type คือเซตของ value
 
@@ -73,6 +75,136 @@ let x: unknown = 42; // ✅ everything fits into unknown
 
 `any` ทำลาย model นี้โดยตั้งใจ: เป็นการขอ *ออก* จากการเช็คเซตทั้งหมด นั่นคือเหตุผลที่อันตราย ส่วน `unknown` รักษา model ไว้และบังคับให้คุณ narrow
 
+## พิสูจน์: `any`, `unknown`, `never` กับความผิดพลาดเดียวกันเป๊ะ
+
+การพูดลอย ๆ ไม่มีค่าอะไร — เอาทั้งสามมาเจอ bug เดียวกันแล้วดูว่า model ทำนายสิ่งที่เกิดกับแต่ละตัวได้แม่นแค่ไหน
+
+```ts
+// @run
+const withAny: any = "42";
+withAny.toFixed(2); // compiles — any opts out of checking, crashes at runtime
+```
+
+```text
+TypeError: withAny.toFixed is not a function
+```
+
+`any` ไม่ได้เป็นสมาชิกของ model เซตเลย — มันคือรูที่เจาะทะลุ model ไว้ compiler ปล่อยให้ `.toFixed` ผ่านไปโดยไม่เช็คอะไรเลย แล้วความผิดพลาด (string ไม่มี `toFixed`) ก็รอดไปจนถึง runtime crash
+
+<TSPlayground code={anyUnknownNeverCode} id="foundations-mindset-any-unknown-never" title="Same mistake, three types: any crashes, unknown and never don't compile" />
+
+export const anyUnknownNeverCode = `// @expect-error TS18046 TS2339
+const withAny: any = "42";
+withAny.toFixed(2); // compiles — any opts out of checking, crashes at runtime
+
+const withUnknown: unknown = "42";
+withUnknown.toFixed(2); // TS18046 — unknown forces you to narrow first
+
+declare const withNever: never;
+withNever.toFixed(2); // TS2339 — never has no members at all`;
+
+กด **Check types**: บรรทัดของ `any` ไม่มีอะไรเลย เพราะ `any` assign ให้และรับจากทุกอย่างได้โดยไม่ถามอะไร บรรทัดของ `unknown` พังด้วย `TS18046` — `unknown` คือเซตของ value *ทั้งหมด* และ `.toFixed` ไม่ใช่ property ที่ทุก value มี compiler จึงปฏิเสธจนกว่าคุณจะ narrow บรรทัดของ `never` พังด้วย `TS2339` ด้วยเหตุผลคนละแบบ: `never` คือเซต*ว่าง* จึงไม่มี property เลยสักตัว — ไม่มีอะไรให้เรียก `.toFixed` ได้เลย ความผิดพลาดรูปแบบเดียวกัน แต่ผลลัพธ์ต่างกันสามแบบสิ้นเชิง และ model เซตทำนายทุกอันได้ถูกต้อง: `any` ไม่ใช่เซต (มันคือทางหนี), `unknown` คือเซตใหญ่สุด (ยังไม่ narrow), `never` คือเซตเล็กสุด (ไม่มีอะไรให้ใช้เลย)
+
+## `never` ในทางปฏิบัติ: code ที่ไปไม่ถึงและ case ที่เป็นไปไม่ได้
+
+`never` ไม่ใช่แค่เซตว่างเชิงนามธรรม — มันคือ type จริงที่ infer ให้ function ที่ return แบบปกติไม่ได้:
+
+```ts
+function fail(msg: string): never {
+  throw new Error(msg);
+}
+
+const result: never = fail("boom"); // ✅ — fail never returns, so this line never runs
+```
+
+โค้ดนี้ compile ผ่านเพราะ `fail` ไม่ผลิต value เลยจริง ๆ — ทุกทางเดินจบด้วย throw compiler เชื่อ function ที่ return `never` เต็มที่: code ใด ๆ หลังเรียก function แบบนี้ถือว่าไปไม่ถึง
+
+ไอเดียเดียวกันปรากฏเป็นตาข่ายนิรภัยใน `switch` เมื่อทุก case ของ union ถูกจัดการหมดแล้ว สิ่งที่เหลืออยู่ถูก narrow เป็น `never` — assign ให้ `never` ได้เพราะไม่มีอะไรเหลืออยู่จริง ๆ ที่มันจะเป็นได้:
+
+```ts
+type Shape = { kind: "circle"; radius: number } | { kind: "square"; side: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+    default:
+      const exhaustive: never = shape; // ✅ every case handled — nothing reaches here
+      throw new Error(`Unhandled shape: ${exhaustive}`);
+  }
+}
+```
+
+เพิ่มสมาชิกตัวที่สามให้ `Shape` ทีหลังแล้วลืมจัดการ บรรทัดนี้เป๊ะ ๆ จะเลิก compile ผ่าน — `shape` ใน branch `default` ไม่ถูก narrow ไปจนถึง `never` แล้ว ดังนั้นการ assign มันให้ตัวแปรชนิด `never` จึงพัง:
+
+```ts
+// @expect-error TS2322
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    case "square":
+      return shape.side ** 2;
+    default:
+      const exhaustive: never = shape; // ❌ 'triangle' case wasn't handled
+      throw new Error(`Unhandled shape: ${exhaustive}`);
+  }
+}
+```
+
+นี่คือไอเดีย `never`-คือ-เซตว่าง ที่ทำงานจริง: ทันทีที่ `shape` ยังเป็น `{ kind: "triangle"; ... }` ได้จริง เซตของ value ที่เป็นไปได้ของมันก็ไม่ว่างอีกต่อไป มันจึงไม่พอดีกับ `never` แล้ว compiler จึงบอกคุณว่ามี case ขาดหายไป — ตอน compile time ไม่ใช่แบบตกหล่นเงียบ ๆ บท narrowing ครอบคลุมเรื่อง exhaustiveness check แบบเต็ม ๆ
+
+## Mental Model
+
+ทุก type ในบทนี้เป็นจุดบนสเกลเดียวกัน: `never` คือเซตว่างที่ล่างสุด `unknown` คือเซตของทุกอย่างที่บนสุด และ type อื่น ๆ ทุกตัวอยู่ตรงกลางที่ไหนสักแห่ง ขนาดขึ้นอยู่กับว่ามันอนุญาต value กี่ตัว `any` ไม่อยู่บนสเกลนั้นเลย — มันคือรูที่เจาะเข้า model โดยตั้งใจ นี่คือเหตุผลที่ความผิดพลาด `.toFixed` เดียวกันมีพฤติกรรมต่างกันมากขึ้นอยู่กับว่าคุณใช้ตัวไหนในสามตัว
+
+<Mermaid title="never, unknown และ any เทียบกับ model เซต" code={scaleDiagram} />
+
+export const scaleDiagram = `flowchart LR
+  never["never\n(empty set — bottom)"] --> mid["string, number, User, ...\n(sized sets in between)"]
+  mid --> unknown["unknown\n(all values — top)"]
+  any["any\n(NOT a set — opts out entirely)"] -.->|breaks the model on purpose| mid`;
+
+## ข้อแลกเปลี่ยน
+
+| Type | ข้อดี | ต้นทุน |
+|---|---|---|
+| `any` | ไม่มีแรงเสียดทาน — ทำ operation อะไรก็ได้ | ขอออกจาก model เซตทั้งหมด ความผิดพลาดที่บทนี้แสดงให้ดู compile ผ่านสะอาดแล้วโผล่มาแค่ตอน runtime |
+| `unknown` | รับได้ทุกอย่างเหมือน `any` แต่ยังคงการเช็คไว้ครบ | ใช้ทำอะไรไม่ได้เลยจนกว่าจะ narrow — งานล่วงหน้าที่ boundary เยอะกว่า |
+| `never` | ทำให้ "branch นี้เป็นไปไม่ได้" เป็นข้อเท็จจริงตอน compile time ไม่ใช่แค่ comment | มีประโยชน์ก็ต่อเมื่อ case อื่นทั้งหมดถูกจัดการจริง ๆ แล้ว เพิ่ม case ทีหลังโดยไม่อัปเดต `default` จะได้ compile error จริง (ที่ถูกต้อง) |
+| `switch` แบบ exhaustive พร้อมเช็ค `never` | จับ union member ที่ไม่ถูกจัดการได้ทันทีที่ถูกเพิ่มเข้ามา | ต้องมี boilerplate `default: const x: never = value` ในทุก switch ที่ต้องการการรับประกันนี้ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`any` กับ `unknown` เป็น type "ยอมแพ้" แบบเดียวกัน** ในทางปฏิบัติเป็นขั้วตรงข้ามกัน: `unknown` รักษา model เซตไว้ครบและบล็อกทุก operation จนกว่าจะ narrow; `any` ปิด model ทิ้ง นั่นคือเหตุผลที่ code เดียวกัน (`x.toFixed(2)`) compile ผ่านภายใต้ `any` แต่พังภายใต้ `unknown`
+- **`never` แปลว่า "เกิด error ขึ้น"** `never` แปลว่า "เซตว่าง" — ไม่มี value ไหนมี type นี้ได้เลย function ที่ return type เป็น `never` ไม่ได้พัง มันคือ function ที่พิสูจน์ได้ว่าไม่มีทาง return เลย (throw หรือ loop เสมอ)
+- **`switch` แบบ exhaustive ต้องมี comment บอกว่า "ไม่ควรเกิดขึ้น"** มันต้องมีตัวแปร type `never` ใน branch `default` แทน — comment หยุด compile ไม่ได้เมื่อมี union member ใหม่ถูกเพิ่มแล้วไม่ถูกจัดการ แต่การ assign ให้ `never` หยุดได้จริง
+
+## อ่านโค้ดที่ AI เขียน
+
+Code ที่ generate มาหยิบ `any` บ่อยกว่า `unknown` มาก เพราะ `any` ไม่ต้อง narrow ต่อ — นั่นคือเหตุผลที่มันซ่อน bug กลุ่มที่บทนี้เปิดเรื่องไว้พอดี ตอน review type annotation บน data ที่ไม่น่าเชื่อถือหรือมาจากภายนอกให้เช็ค:
+
+- เป็น `any` ตรงที่ควรเป็น `unknown` ไหม? ถ้าไม่มีอะไรข้างล่าง narrow value ก่อนใช้ `any` จะปล่อยให้ความผิดพลาดจริง compile ผ่านสะอาด เหมือน `withAny.toFixed(2)` ข้างบนเป๊ะ
+- `switch` แบบ exhaustive มี `default` type `never` จริงไหม หรือมีแค่ comment อ้างว่าครอบคลุมทุก case?
+- ถ้า function ถูก annotate `: never` มันไม่ return จริง ๆ ไหม (throw/loop ทุกทาง) หรือ `never` ถูกใช้แทน "ยังไม่รู้ type นี้"?
+
+<SpotTheBug code={`function getSetting(key: string): any {
+  const settings: Record<string, string> = { theme: "dark" };
+  return settings[key];
+}
+
+const timeout = getSetting("timeout");
+console.log(timeout.toFixed(0));`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลยแล้วพังตอน runtime `getSetting` ถูก annotate ให้ return `any` ดังนั้นทุกการใช้ผลลัพธ์ของมัน — รวมถึง `.toFixed(0)` ซึ่งเป็น method เฉพาะของ `number` — ไม่ถูกเช็คเลย `settings["timeout"]` จริง ๆ เป็น `undefined` (key นี้ไม่มีใน `settings`) ดังนั้น `timeout.toFixed(0)` จึง throw `TypeError: Cannot read properties of undefined (reading 'toFixed')` ถ้า `getSetting` return `unknown` แทน จุดเรียกนี้เป๊ะ ๆ จะ compile ไม่ผ่านด้วย `TS18046` — บังคับให้มี narrowing check ก่อนที่ crash จะไปถึง runtime ได้เลย `any` บน function ที่พฤติกรรมจริงคือ "ค้นหาแล้วอาจไม่เจอ" เป็นตัวเลือกที่แย่กว่า `unknown` บวก check จริงอย่างชัดเจน
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
 มองทุก type เป็น **เซตของ value ที่อนุญาต** แล้ว: assignability คือความสัมพันธ์แบบ subset, `|` คือ set union (กว้างกว่า), `&` คือ set intersection (แคบกว่า), `never` คือเซตว่าง (bottom) และ `unknown` คือเซตของ value ทั้งหมด (top) model เดียวนี้ทำให้ส่วนที่เหลือของ TypeScript รู้สึกเหมือนอนุมานได้เอง แทนที่จะต้องท่องจำ
 </Callout>
@@ -87,6 +219,7 @@ export const quizMindset = [
       'เมื่อ A เป็น class และ B เป็น interface',
     ],
     answer: 1,
+    explain: 'Assignability คือการเช็ค subset ล้วน ๆ บนเซตของ value ที่แต่ละ type อธิบาย ชื่อกับลำดับการประกาศไม่มีผลเลย',
   },
   {
     q: 'type ของ `string & number` คืออะไร และเพราะอะไร?',
@@ -97,6 +230,7 @@ export const quizMindset = [
       '`any` เพราะตัดสินใจไม่ได้',
     ],
     answer: 1,
+    explain: 'ไม่มี value ไหนเป็นทั้ง string และ number พร้อมกัน intersection ของสองเซตจึงว่าง — ซึ่งตรงกับสิ่งที่ `never` แทน',
   },
   {
     q: '`never` แทนเซตอะไร?',
@@ -107,6 +241,7 @@ export const quizMindset = [
       'เซตของ value ที่เป็น primitive',
     ],
     answer: 1,
+    explain: '`never` คือ bottom type: เซตว่าง ไม่มีอะไร assign ให้มันได้ (สร้างสมาชิกของเซตว่างไม่ได้) แต่มัน assign ให้ทุกอย่างได้ (เซตว่างเป็น subset ของทุกเซต)',
   },
   {
     q: '`unknown` ต่างจาก `any` อย่างไร?',
@@ -117,6 +252,40 @@ export const quizMindset = [
       '`any` คือเซตว่าง',
     ],
     answer: 1,
+    explain: '`unknown` ยังอยู่ใน model เซตในฐานะ top type — ทุกอย่างพอดีเข้าไปได้ แต่ต้อง narrow ก่อนทำอะไรกับมัน `any` ปิด model แทนที่จะอยู่ปลายด้านใดด้านหนึ่งของมัน',
+  },
+  {
+    q: '```ts\nconst withAny: any = "42";\nwithAny.toFixed(2);\n\nconst withUnknown: unknown = "42";\nwithUnknown.toFixed(2);\n```\n`tsc` รายงานอะไรสำหรับสองบรรทัดนี้?',
+    options: [
+      'ทั้งคู่ compile ผ่านไม่มี error',
+      'บรรทัด `any` compile ผ่านไม่มี error; บรรทัด `unknown` พังด้วย `TS18046` เพราะ `unknown` ต้องถูก narrow ก่อนเข้าถึง property ใด ๆ',
+      'ทั้งคู่ compile ไม่ผ่าน',
+      'บรรทัด `any` พัง; บรรทัด `unknown` compile ผ่าน',
+    ],
+    answer: 1,
+    explain: '`any` assign ให้และรับจากอะไรก็ได้โดยไม่เช็คเลย ดังนั้น `.toFixed` บนมันถูกยอมแม้จะพังตอน runtime `unknown` คือเซตของ value ทั้งหมดแต่รักษา model ไว้ compiler จึงปฏิเสธ `.toFixed` จนกว่า value จะถูก narrow',
+  },
+  {
+    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case "circle": return Math.PI * shape.radius ** 2;\n    case "square": return shape.side ** 2;\n    default:\n      const exhaustive: never = shape;\n      throw new Error(`Unhandled: ${exhaustive}`);\n  }\n}\n```\nโค้ดนี้ compile ผ่านไหม เพราะอะไร?',
+    options: [
+      'ผ่าน — `never` รับ value ที่เหลืออะไรก็ได้',
+      'ไม่ผ่าน — ใน branch `default` `shape` ยังอาจเป็น case `triangle` ได้ เซตของ value ที่เป็นไปได้ของมันจึงไม่ว่าง และไม่พอดีกับ `never` อีกต่อไป',
+      'ผ่าน เพราะ `switch` ไม่เช็ค exhaustiveness เลย',
+      'ไม่ผ่าน — `never` ใช้เป็น type ของตัวแปรไม่ได้',
+    ],
+    answer: 1,
+    explain: 'มีแค่ `circle` กับ `square` ที่ถูกจัดการ ดังนั้นใน branch `default` `shape` ยังถูก narrow เป็น `{ kind: "triangle"; ... }` ไม่ใช่ไม่มีอะไรเลย การ assign เซตของ value ที่ไม่ว่างให้ `never` (เซตว่าง) จึงพัง — นี่คือวิธีที่ pattern นี้จับ union member ที่ไม่ถูกจัดการได้ตอน compile time',
+  },
+  {
+    q: 'function ประกาศเป็น `function fail(msg: string): never { throw new Error(msg); }` ทำไมถึง compile ผ่าน?',
+    options: [
+      'เพราะ `never` เป็นแค่ alias ของ `void`',
+      'เพราะ `fail` ไม่ return value เลยจริง ๆ ในทุกทางเดิน — ทุกทางจบด้วย throw ดังนั้น return type ของมันจึงไม่มีสมาชิกจริง ๆ',
+      'เพราะ compiler เมิน return type `never`',
+      'มันไม่ compile ผ่าน',
+    ],
+    answer: 1,
+    explain: 'Function ที่ return `never` คือคำกล่าวอ้างจริงที่ตรวจสอบได้: function ต้องไม่จบแบบปกติเลย `fail` throw เสมอ จึงไม่มีทางเดินไหนที่ต้องผลิต value — return type แบบเซตว่างจึงถูกต้องตามตัวอักษรจริง ๆ',
   },
 ];
 

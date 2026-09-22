@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Shape, not name
 
@@ -62,10 +64,117 @@ Assign the *same object* through a variable and it's allowed, because now it's t
 
 ## Why this matters
 
-Structural typing is why TypeScript feels so fluid with plain objects and why you rarely need to declare that one type "implements" another. It's also why two libraries with their own `Point` types just work together. The cost is that unrelated types with the same shape are interchangeable — occasionally you *want* nominal distinctness (a `UserId` that isn't just any `string`), which you fake with **branded types** (covered later in Practical Mastery).
+Structural typing is why TypeScript feels so fluid with plain objects and why you rarely need to declare that one type "implements" another. It's also why two libraries with their own `Point` types just work together. The cost is that unrelated types with the same shape are interchangeable — occasionally you *want* nominal distinctness (a `UserId` that isn't just any `string`), which you fake with **branded types**, previewed below.
+
+## Classes are structural too — until `private` gets involved
+
+Structural compatibility isn't limited to `interface`/`type` — it applies to classes as well. Two classes that were never declared to be related are still interchangeable if their shape matches:
+
+```ts
+class Point2D {
+  constructor(public x: number, public y: number) {}
+}
+class Coordinate {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point2D(1, 2);
+const c: Coordinate = p; // ✅ unrelated classes, identical public shape — compatible
+console.log(c.x, c.y);
+```
+
+`Point2D` and `Coordinate` share no inheritance, no interface, nothing but coincidentally identical public fields — and TypeScript accepts one wherever the other is expected, exactly like the `Point`/`Coord` interfaces earlier. This surprises people coming from nominally-typed languages, where two unrelated classes are never interchangeable no matter what fields they have.
+
+There's exactly one thing that breaks this: a `private` member. Add one, even with the same name and type on both classes, and the classes stop being compatible:
+
+<TSPlayground code={privateBreaksStructuralCode} id="foundations-structural-private" title="private makes an otherwise-identical class incompatible" />
+
+export const privateBreaksStructuralCode = `// @expect-error TS2322
+class Point2D {
+  private secret = 1;
+  constructor(public x: number, public y: number) {}
+}
+class Coordinate {
+  private secret = 1;
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point2D(1, 2);
+const c: Coordinate = p; // ❌ TS2322 — each class's private member is its own, even with the same name`;
+
+`Types have separate declarations of a private property 'secret'` is the actual message. TypeScript's structural check has one nominal-flavored carve-out: a `private` (or `protected`) member is only considered the same as another class's member if it comes from the exact same declaration (through inheritance) — never merely by matching name and type. This is the one place the shape-matching model in this lesson stops applying, and it's covered in full once classes are introduced.
+
+## A branded type, concretely
+
+The "occasionally you want nominal distinctness" problem above has a standard structural-system fix, and it's worth seeing once here even though the full treatment is later: intersect a primitive with a marker property that doesn't actually exist at runtime.
+
+```ts
+// @expect-error TS2345
+type UserId = string & { readonly __brand: "UserId" };
+type OrderId = string & { readonly __brand: "OrderId" };
+
+function getUser(id: UserId) {}
+
+declare const orderId: OrderId;
+getUser(orderId);
+```
+
+```text
+error TS2345: Argument of type 'OrderId' is not assignable to parameter of type 'UserId'.
+  Type 'OrderId' is not assignable to type '{ readonly __brand: "UserId"; }'.
+    Types of property '__brand' are incompatible.
+      Type '"OrderId"' is not assignable to type '"UserId"'.
+```
+
+Both `UserId` and `OrderId` are, underneath, plain strings — at runtime `__brand` doesn't exist on either value, it's purely a compile-time marker. But because the marker's literal value differs (`"UserId"` vs `"OrderId"`), the two intersections are no longer structurally identical, so the compiler now treats them as distinct — even though a plain `string` would satisfy neither on its own without an explicit assertion. This is the escape hatch for the exact gap structural typing opens up: reach for it when two values happen to share a primitive's shape but must never be substituted for each other. Typing APIs & Boundaries (Practical Mastery) covers constructing and validating branded values properly.
+
+## Mental Model
+
+Structural typing asks one question, always: "does this value have everything the target shape requires?" Interfaces, type aliases, and classes are all judged by that same question — extra properties never hurt, and unrelated declarations with the same required shape are simply the same type as far as assignability cares. `private` is the single, deliberate exception: it makes membership depend on *where a property was declared*, not just what it looks like, which is why it's the one tool that recovers nominal-style distinctness on a class. A branded type is the same trick without a class at all — a marker property whose only job is to make an otherwise-identical shape fail the "everything required" check against a same-shaped-but-conceptually-different value.
+
+<Mermaid title="Structural typing asks one question; two tools opt out of it" code={structuralMentalDiagram} />
+
+export const structuralMentalDiagram = `flowchart TB
+  q["Does the value have\nevery required property?"] -->|yes| ok["Assignable — regardless of\ndeclared name or relationship"]
+  q -->|"private member present"| nominal1["Membership now depends on\nWHERE it was declared"]
+  q -->|"branded marker property"| nominal2["Shapes differ by a\ncompile-time-only marker"]`;
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Plain structural shape (no brand, no `private`) | Maximum flexibility — any matching shape works, from any source | Two conceptually different values with the same primitive shape (a `UserId` and an `OrderId`, both `string`) are freely interchangeable |
+| `private` member on a class | Recovers nominal-style distinctness for classes with zero extra types | Only works for classes; two structurally-open `interface`/`type` shapes get no such protection |
+| Branded type (`string & { __brand: ... }`) | Works for any primitive, not just classes; zero runtime cost | Boilerplate per branded type, and something has to actually construct a branded value safely (covered in Typing APIs & Boundaries) |
+
+## Common Misconceptions
+
+- **Classes in TypeScript are nominally typed, like Java or C#.** They're structural by default, exactly like interfaces — two unrelated classes with the same public shape are interchangeable. Only `private`/`protected` members change that.
+- **A branded type is a real runtime wrapper, like a value object class.** It's purely a compile-time fiction — `__brand` never exists on the actual value. The safety is 100% at the type-checker level; nothing stops a raw string from being force-cast to a branded type via `as`.
+- **Excess property checks mean TypeScript is secretly nominal after all.** They're a narrow, deliberate typo-catcher on fresh object literals only — the underlying model is still "does the shape fit," which is why the exact same object assigned via a variable is accepted with no complaint.
+
+## Reading AI-generated code
+
+Generated code that threads plain `string`/`number` values through many functions is the most common place structural typing's flexibility becomes a liability, because nothing stops the wrong-but-same-shaped value from being passed. Check for:
+
+- Multiple identifiers of the same primitive type flowing through nearby parameters — `userId: string`, `orderId: string`, `sessionToken: string` — with no branding. A typo'd argument order compiles clean every time.
+- A lookup keyed by one kind of ID that's fed a variable whose *name* suggests a different kind of ID, with nothing but a variable name to tell them apart.
+- Two classes or object shapes treated as interchangeable "because the fields matched," in a context where the two things they represent are conceptually different (a `Cart` and a `Wishlist` that happen to both have `items: Item[]`).
+
+<SpotTheBug code={`interface User { id: string; name: string }
+const users: Record<string, User> = { u1: { id: "u1", name: "Ada" } };
+
+function getUserName(userId: string): string {
+  return users[userId].name;
+}
+
+const orderId = "o1"; // actually an order id, not a user id — both are just \`string\`
+console.log(getUserName(orderId).toUpperCase());`}>
+This compiles with zero errors and crashes at runtime. `getUserName` takes a plain `userId: string`, and `orderId` is also a plain `string` — structurally (in fact, primitively) identical, so the compiler has no basis to object even though the two represent completely different kinds of ID in the domain. `users["o1"]` is `undefined` (no user has that id), so `.name` throws `TypeError: Cannot read properties of undefined (reading 'name')`. Branding `UserId` and `OrderId` as distinct types (this lesson's stub) would have turned this into a compile-time `TS2345` at the call site — the exact class of mistake structural typing's flexibility cannot catch on its own.
+</SpotTheBug>
 
 <Callout title="The one-line takeaway">
-TypeScript is **structural**: compatibility depends on shape, not declared names, and a value with extra properties still fits a type that asks for fewer (it's a subset). The one exception is **excess property checks** — a fresh object literal assigned directly is flagged for unknown keys, as a targeted defense against typos. Assign through a variable and the ordinary structural rule applies.
+TypeScript is **structural**: compatibility depends on shape, not declared names, and a value with extra properties still fits a type that asks for fewer (it's a subset) — classes included, since two unrelated classes with the same public shape are interchangeable too. The two exceptions are **excess property checks** (a fresh object literal is flagged for unknown keys, as a typo defense) and **`private`/`protected` members** (membership depends on where they were declared, not just their name and type). A **branded type** manufactures a third, deliberate exception with a compile-time-only marker property, for exactly the values that must never be substituted for each other despite sharing a primitive's shape.
 </Callout>
 
 export const quizStructural = [
@@ -78,6 +187,7 @@ export const quizStructural = [
       'Types are checked at runtime',
     ],
     answer: 1,
+    explain: 'TypeScript compares shapes, not declared relationships — two types with no shared name or inheritance link are compatible if one has everything the other requires.',
   },
   {
     q: 'Can a value with extra properties be assigned to a type that requires fewer?',
@@ -88,6 +198,7 @@ export const quizStructural = [
       'Only for arrays',
     ],
     answer: 1,
+    explain: 'The set of "objects with more properties" is a subset of "objects with fewer required properties" — extra properties are simply invisible to code holding the narrower type.',
   },
   {
     q: 'Why does assigning `{ width: 10, height: 20 }` directly to `Options { width: number }` error, but assigning it via a variable does not?',
@@ -98,6 +209,7 @@ export const quizStructural = [
       'It\'s a compiler bug',
     ],
     answer: 1,
+    explain: 'Excess property checks are a narrow, deliberate exception that only fires on a fresh object literal at the assignment site — the same object through a variable gets the ordinary "does the shape fit" treatment.',
   },
   {
     q: 'What technique gives you nominal-style distinctness in a structural system?',
@@ -108,6 +220,40 @@ export const quizStructural = [
       'It\'s impossible in TypeScript',
     ],
     answer: 1,
+    explain: 'A branded type intersects a primitive with a marker property that never exists at runtime, purely to make an otherwise-identical shape fail the structural check against a same-shaped-but-different value.',
+  },
+  {
+    q: '```ts\nclass Point2D {\n  constructor(public x: number, public y: number) {}\n}\nclass Coordinate {\n  constructor(public x: number, public y: number) {}\n}\n\nconst p = new Point2D(1, 2);\nconst c: Coordinate = p;\n```\nDoes this compile?',
+    options: [
+      'No — `Point2D` and `Coordinate` are unrelated classes',
+      'Yes — classes are structural too, and an unrelated class with an identical public shape is interchangeable',
+      'No — you must use an interface to allow this',
+      'Only if one `extends` the other',
+    ],
+    answer: 1,
+    explain: 'Classes get no special nominal treatment by default in TypeScript — they are judged by the same "does the shape fit" rule as interfaces, so two classes with matching public members are freely interchangeable.',
+  },
+  {
+    q: 'Adding an identical `private secret = 1;` field to both `Point2D` and `Coordinate` above changes the result. Why?',
+    options: [
+      'It does not change anything — `private` is erased and ignored by the checker',
+      '`private` members are only considered the same if they come from the same declaration (via inheritance) — matching name and type is no longer enough, so the classes stop being assignable',
+      'It makes both classes `abstract`',
+      '`private` fields are always `never`',
+    ],
+    answer: 1,
+    explain: 'This is the one deliberate exception to plain shape-matching: a `private`/`protected` member ties compatibility to *where* it was declared, not just its name and type, which is why the error is specifically "separate declarations of a private property."',
+  },
+  {
+    q: '```ts\ntype UserId = string & { readonly __brand: "UserId" };\ntype OrderId = string & { readonly __brand: "OrderId" };\n\nfunction getUser(id: UserId) {}\ndeclare const orderId: OrderId;\ngetUser(orderId);\n```\nWhy does this fail to compile, even though both are ultimately strings?',
+    options: [
+      'It does not fail — both are strings, so it compiles',
+      'The `__brand` marker property has a different literal value on each type ("UserId" vs "OrderId"), so the two intersections are no longer structurally identical',
+      'You cannot intersect `string` with an object type',
+      '`declare const` values can never be passed as arguments',
+    ],
+    answer: 1,
+    explain: 'The marker property never exists at runtime — it exists purely so the two otherwise-identical primitive shapes disagree on one property\'s literal type, which is enough to make the structural check fail exactly where you want it to.',
   },
 ];
 
