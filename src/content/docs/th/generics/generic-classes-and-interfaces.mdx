@@ -1,6 +1,6 @@
 ---
 title: 'Generic Classes & Interfaces'
-description: 'การ parameterize class, interface และ type alias และความต่างระหว่าง type parameter ที่ fix ตอน construct กับที่เลือกใหม่ต่อ method call'
+description: 'การ parameterize class, interface และ type alias ความต่างระหว่าง type parameter ที่ fix ตอน construct กับที่เลือกใหม่ต่อ method call กลิ่น AI ที่สลับสองแบบนี้ และ variance แบบเต็ม ๆ'
 sidebar:
   order: 3
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## generic interface และ type alias
 
@@ -65,7 +67,9 @@ const last = numbers.pop();
 
 พอเขียน `new Stack<number>()` `T` ก็เป็น `number` ตลอดอายุของ object นั้น หลายครั้งคุณไม่ต้องเขียนด้วยซ้ำ — `new Stack()` แล้ว `push(1)` ครั้งแรก infer ไม่ได้ แต่หลาย design ให้ inference เติม `T` จาก argument ของ constructor
 
-เมื่อไม่มีอะไรให้ infer ได้เลย `T` จะไม่กลายเป็น error — มันกลายเป็น `unknown` `new Stack()` เฉย ๆ ให้ `Stack<unknown>` และเพราะ `unknown` ในตำแหน่ง *parameter* ยอมรับทุกอย่าง push ทั้งสองด้านล่างจึง type-check ผ่าน:
+## `unknown` ไม่ใช่ `any` เมื่อไม่มีอะไรให้ infer
+
+เมื่อไม่มีอะไรให้ `T` infer ได้เลย `T` จะไม่กลายเป็น error และก็ไม่กลายเป็น `any` ด้วย — มันกลายเป็น **`unknown`** `new Stack()` เฉย ๆ ให้ `Stack<unknown>`:
 
 ```ts
 class Box<T> {
@@ -78,6 +82,25 @@ const b = new Box();
 b.push(1);
 b.push("two"); // ✅ also compiles — unknown accepts any value in parameter position
 ```
+
+push ทั้งสองด้านบน type-check ผ่าน และง่ายที่จะอ่านผิดว่า `T` เงียบ ๆ กลายเป็น `any` ไปแล้ว มันไม่ใช่ — ความต่างสำคัญมากในทุกที่อื่นที่ใช้ `b` `unknown` ใน **ตำแหน่ง parameter ยอมรับทุกอย่าง** ซึ่งเป็นเหตุผลที่ `push` ไม่บ่นเลยไม่ว่าคุณจะส่งอะไร แต่ `unknown` ในตำแหน่งที่คุณ *อ่านออกมา* ยังบังคับให้คุณ narrow ก่อนทำอะไรกับมัน เหมือน `unknown` ตัวอื่น ๆ `any` จะให้คุณทำได้ทั้งสองอย่าง — เขียนอะไรเข้าไปก็ได้ แล้วอ่านผลลัพธ์กลับมาเป็น type อะไรก็ได้โดยไม่ต้อง narrow `unknown` ให้แค่ครึ่งแรก:
+
+```ts
+// @expect-error TS18046
+class Box<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const b = new Box();
+b.push(1);
+const x = b.pop();
+//    ^? unknown | undefined
+x.toFixed(0); // ❌ 'x' is of type 'unknown' — you must narrow it first, unlike any
+```
+
+นั่นคือทางแก้จริงของตัวอย่างก่อนหน้า: อย่าปล่อยให้ `T` เป็นค่า default ของ compiler — เขียน `new Stack<number>()` ตรง ๆ หรือออกแบบ constructor ให้มี argument ที่ inference เติม `T` ได้ `unknown` คือ compiler ที่ซื่อสัตย์ว่า "ไม่รู้จริง ๆ" ไม่ใช่การลดระดับแบบเงียบ ๆ ไปเป็น "อะไรก็ได้"
 
 ## type parameter ต่อ method
 
@@ -129,8 +152,364 @@ class UserRepository implements Repository<User> {
 }
 ```
 
+## กลิ่น AI: type parameter fix ผิดระดับ
+
+ตอนนี้คุณรู้แล้วว่า parameter ของ class คือต่อ instance และของ method คือต่อ call มีความผิดพลาดเฉพาะแบบหนึ่งที่โค้ด generate เจอบ่อยเกินคาด: เอา type parameter ไปวางผิดที่ระหว่างสองแบบนี้
+
+**กลิ่น 1 — ควรเป็น method parameter แต่ดันประกาศบน class** คู่ `T`/`U` บน class บังคับให้ทุกการใช้ instance ต้องใช้ type เดียวกัน ทั้งที่แต่ละ call ตั้งใจให้เป็นอิสระจากกัน:
+
+```ts
+// @expect-error TS2322 TS2339
+class MapperWrong<T, U> {
+  transform(items: T[], fn: (item: T) => U): U[] {
+    return items.map(fn);
+  }
+}
+
+const m = new MapperWrong<number, string>();
+m.transform([1, 2, 3], (n) => n.toString());
+m.transform(["a", "b"], (s) => s.length); // ❌ T is locked to number for this instance
+```
+
+พอ `m` ถูก construct เป็น `MapperWrong<number, string>` แล้ว การเรียก `.transform` ครั้งต่อ ๆ ไปก็ติดกับ `T = number` ทั้งที่ "transform array นี้ด้วย function นี้" ไม่จำเป็นต้องจำ type ข้าม call เลย ทางแก้คือย้าย `T` กับ `U` ไปที่ method ที่มันควรอยู่:
+
+```ts
+class Mapper {
+  transform<T, U>(items: T[], fn: (item: T) => U): U[] {
+    return items.map(fn);
+  }
+}
+
+const m = new Mapper();
+m.transform([1, 2, 3], (n) => n.toString());   // T = number, U = string, this call only
+m.transform(["a", "b"], (s) => s.length);       // ✅ T = string, U = number, independent call
+```
+
+**กลิ่น 2 — ควรเป็น class parameter แต่ดันประกาศบน method** ทิศทางนี้แอบซ่อนกว่า เพราะมันมัก compile ผ่านและยัง "ดู" เป็น generic:
+
+```ts
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42); // compiles — push<U> is a fresh, disconnected U every call
+const claimed = sw.pop<string>(); // claims string — but the real top item is 42
+console.log(claimed!.toUpperCase()); // "trust me" — U isn't linked to what was actually pushed
+```
+
+```ts
+// @run
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42);
+const claimed = sw.pop<string>();
+console.log(claimed!.toUpperCase());
+```
+
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย แล้วรันจริงพัง:
+
+```text
+TypeError: claimed.toUpperCase is not a function
+```
+
+ตรงนี้ `items` ถูก type เป็น `any[]` ข้างใน ดังนั้นมันไม่เคยแชร์ type กับ `U` ต่อ call ของ `push` หรือ `pop` จริง ๆ — `U` แต่ละตัวแค่ตกแต่ง เหมือนกลิ่น "ใช้ครั้งเดียว ไม่เชื่อมอะไร" จากบทก่อนหน้าเป๊ะ แค่กระจายเป็นสอง method ที่ดูเชื่อมกันแบบผิวเผินเพราะใช้ตัวอักษรร่วมกัน `Stack<T>` ตัวจริงจากต้นบทนี้คือทางแก้ — `T` ระดับ class ตัวเดียว ที่ `push` กับ `pop` ใช้ร่วมกัน ผูกสิ่งที่ใส่เข้าไปกับสิ่งที่ออกมาได้จริง
+
+## Variance: `Stack<Dog>` เข้าแทน `Stack<Animal>` ได้ไหม?
+
+พอ type parameter ถูก fix ต่อ instance แล้ว คำถามใหม่ก็โผล่ขึ้นมาที่ไม่เคยมีกับ function ธรรมดา: ถ้า `Dog` เป็น subtype ของ `Animal` แล้ว `Stack<Dog>` เป็น subtype ของ `Stack<Animal>` ไหม? คำถามนี้ — **variance** — มีคำตอบต่างกันขึ้นกับ *วิธีใช้* type parameter ข้างในของ generic type และคำตอบของ TypeScript ในบาง case ก็ unsound โดยตั้งใจ
+
+### method shorthand: bivariant และ unsound
+
+assign `Stack<Dog>` ให้ตัวแปรที่ type เป็น `Stack<Animal>` โดยใช้ method shorthand `push(item: T): void` ธรรมดาจาก `Stack` ของบทนี้:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackMethod<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackMethod<Dog>();
+const animals: StackMethod<Animal> = dogs; // allowed — no error at all
+animals.push(new Cat()); // pushes a Cat into what is really the Dog stack
+```
+
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย `animals` type เป็น `StackMethod<Animal>` ดังนั้น push `Cat` (ซึ่งเป็น `Animal`) ดูโอเคสมบูรณ์ — แต่ `animals` กับ `dogs` คือ object *เดียวกัน* pop จาก stack `Dog` จริง แล้วได้ `Cat` กลับมา type เป็น `Dog`:
+
+```ts
+// @run
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackMethod<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackMethod<Dog>();
+const animals: StackMethod<Animal> = dogs;
+animals.push(new Cat());
+const back = dogs.pop();
+console.log(back!.bark());
+```
+
+```text
+TypeError: back.bark is not a function
+```
+
+นี่คือ unsoundness ที่รู้จักกันจริง ไม่ใช่ bug ที่คุณกดโดนบังเอิญ: method ที่เขียนด้วย **shorthand syntax** (`push(item: T): void`) ถูกตรวจแบบ **bivariant** — TypeScript ยอมให้ assign ได้ *ทั้งสองทิศทาง* `Stack<Dog>` ไป `Stack<Animal>` หรือกลับกัน เพราะการบังคับ contravariant แบบเข้มงวดตรงนี้ทำให้โค้ดจริงพังเยอะเกินไป (โดยเฉพาะ API ที่ใช้ callback เยอะ) ตอนที่เคยลองทำ `strictFunctionTypes` — flag ที่เข้มงวด check ตัวนี้ — ถูกตั้งใจให้ข้าม method shorthand ด้วยเหตุผลนี้
+
+### property function syntax: ถูกปฏิเสธถูกต้อง
+
+เขียน method เดียวกันแบบ **property ที่ type เป็น function** แทน shorthand แล้ว assign แบบเดียวกันจะถูกปฏิเสธ:
+
+```ts
+// @expect-error TS2322
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackProp<T> {
+  private items: T[] = [];
+  push: (item: T) => void = (item) => { this.items.push(item); };
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackProp<Dog>();
+const animals: StackProp<Animal> = dogs;
+animals.push(new Cat());
+```
+
+error ระบุความไม่ตรงที่ type system ที่ sound ควรจับได้เป๊ะ:
+
+```text
+error TS2322: Type 'StackProp<Dog>' is not assignable to type 'StackProp<Animal>'.
+  Types of property 'push' are incompatible.
+    Type '(item: Dog) => void' is not assignable to type '(item: Animal) => void'.
+      Types of parameters 'item' and 'item' are incompatible.
+        Property 'bark' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+class shape เดียวกัน ความตั้งใจเดียวกัน แต่ผลลัพธ์ต่างกัน — เพราะแค่ *วิธีสะกด method* เท่านั้น นี่คือหนึ่งในบทเรียน "อ่าน TypeScript" ที่คมที่สุดของภาษานี้: method ที่เขียนด้วย shorthand syntax บน class หรือ interface ถูกตรวจแบบผ่อนปรนกว่า signature เดียวกันเป๊ะที่เขียนเป็น property
+
+### `in` กับ `out`: TypeScript มี variance annotation จริง
+
+ต่างจาก type system บางแบบที่คิดเรื่อง variance แบบซ่อนเร้นอย่างเดียว TypeScript (4.7+) ให้คุณ *ประกาศ* มันได้ และตรวจสิ่งที่คุณประกาศเทียบกับวิธีใช้ type parameter จริง:
+
+```ts
+// @expect-error TS2636
+interface Consumer<out T> {
+  consume: (value: T) => void; // T is only ever consumed -- this is really contravariant
+}
+```
+
+```text
+error TS2636: Type 'Consumer<sub-T>' is not assignable to type 'Consumer<super-T>' as implied by variance annotation.
+  Types of property 'consume' are incompatible.
+    Type '(value: sub-T) => void' is not assignable to type '(value: super-T) => void'.
+      Types of parameters 'value' and 'value' are incompatible.
+        Type 'super-T' is not assignable to type 'sub-T'.
+```
+
+`out T` แปลว่า "`T` ปรากฏแค่ในตำแหน่ง output" (covariant — ทิศทางเดียวกับ type argument: `Dog` เข้า `Dog` ออก แปลว่า `Producer<Dog>` เข้าแทน `Producer<Animal>` ได้) `in T` แปลว่า "`T` ปรากฏแค่ในตำแหน่ง input" (contravariant — ทิศทางตรงข้าม) `in out T` แปลว่าทั้งคู่ คือ **invariant** — ไม่มีทิศไหน subtype ได้อย่างปลอดภัย คุณจะเจอศัพท์ชุดนี้เหมือนกันในระบบ variance ของภาษาอื่น: Kotlin กับ C# ใช้ keyword `in`/`out` เดียวกันเป๊ะ Java สะกดด้วย wildcard (`? extends T` สำหรับ covariant, `? super T` สำหรับ contravariant) Flow ใช้ prefix `+`/`-` เวอร์ชันของ TypeScript แปลกอยู่จุดหนึ่งที่ควรพูดตรง ๆ: **annotation เป็น optional และส่วนใหญ่เป็นตัวช่วยด้านเอกสารกับ performance สำหรับคนเขียน library** — TypeScript คำนวณ variance แบบ structural อยู่แล้วไม่ว่าคุณจะ annotate หรือไม่ และ annotation ถูกตรวจในฐานะ assertion (นั่นคือสิ่งที่ทำให้เกิด `TS2636` ข้างบน) ไม่ใช่คำขอที่เปลี่ยนสิ่งที่ checker บังคับใช้ที่อื่น
+
+ประเด็นสุดท้ายสำคัญ: การ annotate `Stack<out T>` ไม่ได้เปลี่ยนว่า `Stack<Dog>` เข้าแทน `Stack<Animal>` ได้ไหม — กฎ structural จาก section นี้ตัดสินไปแล้วก่อนที่คุณจะเขียน `in`/`out` สักตัว และเพราะ annotation ถูกตรวจด้วยการวัด variance *แบบเดียวกัน* กับ assignability ธรรมดา มันเลยสืบทอด blind spot ของ method shorthand มาด้วยเป๊ะ:
+
+```ts
+// declaring `out T` on a class whose push is method shorthand -- compiles clean,
+// even though push(item: T) is genuinely used contravariantly. The bivariance
+// that lets Stack<Dog> assign to Stack<Animal> also fools the annotation checker.
+class StackOut<out T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+```
+
+เปลี่ยน `push` เป็น property-function syntax บน declaration เดียวกัน แล้ว `TS2636` จะยิงทันที ด้วยเหตุผลเดียวกับที่การ assign เองถูกปฏิเสธใน section ก่อนหน้า `in`/`out` ใน TypeScript พูดอีกแบบคือ feature จริงที่คุณจะเจอใน error message และใน `.d.ts` ของ library — แต่มันแค่บันทึกและตรวจซ้ำ variance เดียวกับที่ compiler คำนวณอยู่แล้ว ไม่ได้เพิ่มกลไกบังคับใช้ใหม่ทับลงไป
+
+### Covariance: `readonly` array
+
+array ที่อ่านได้อย่างเดียวปลอดภัยที่จะปฏิบัติแบบ covariant และ TypeScript ก็ยอมแบบนั้นเป๊ะ:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare const dogs: readonly Dog[];
+const animals: readonly Animal[] = dogs; // ✅ covariant — readonly arrays allow this safely
+```
+
+ไม่มี `push` ให้แอบยัด `Cat` เข้ามา ดังนั้นตรงนี้ไม่มี unsoundness เลย — ทุก `Dog` เป็น `Animal` ที่อ่านได้จริง
+
+### แบบเดียวกัน แต่ mutable: unsoundness ที่รู้จักและตั้งใจ
+
+เอา `readonly` ออก แล้ว assign แบบเดียวกันก็ **ยังถูกยอมรับ** — array เป็น covariant ใน TypeScript แม้จะ mutable ก็ตาม ซึ่งเป็น unsoundness ที่รู้จักกันมานานเพื่อความเข้ากันได้กับโค้ด JavaScript:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+declare const dogs: Dog[];
+const animals: Animal[] = dogs; // compiles — mutable arrays are covariant too
+animals.push(new Cat()); // pushes a Cat into the array dogs also points at
+```
+
+```ts
+// @run
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+declare const dogsSrc: Dog[];
+const dogs: Dog[] = [new Dog()];
+const animals: Animal[] = dogs;
+animals.push(new Cat());
+console.log(dogs[dogs.length - 1].bark());
+```
+
+```text
+TypeError: dogs[dogs.length - 1].bark is not a function
+```
+
+### Contravariance: parameter ของ callback
+
+function type เดี่ยว ๆ (ไม่ใช่ method) ถูกตรวจแบบ **contravariant** ในตำแหน่ง parameter ภายใต้ `strictFunctionTypes` — ทิศทาง *ตรงข้าม* กับ type argument และทิศทางนี้ sound callback ที่รับ type ที่*กว้างกว่า*ที่ต้องการ ใช้แทนที่ที่ต้องการ type แคบกว่าได้อย่างปลอดภัย เพราะมันยังจัดการทุกค่าที่จะเข้ามาได้:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare function forEachDog(cb: (d: Dog) => void): void;
+const handleAnimal = (a: Animal) => console.log(a.name);
+forEachDog(handleAnimal); // ✅ a callback that handles ANY Animal can certainly handle a Dog
+```
+
+กลับทิศแล้ว fail ถูกต้อง — callback ที่รู้จักจัดการแค่ `Dog` ไว้ใจให้จัดการทุก `Animal` ไม่ได้:
+
+```ts
+// @expect-error TS2345
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare function forEachAnimal(cb: (a: Animal) => void): void;
+const handleDog = (d: Dog) => console.log(d.bark());
+forEachAnimal(handleDog); // ❌ handleDog can't handle every Animal (e.g. a Cat)
+```
+
+```text
+error TS2345: Argument of type '(d: Dog) => void' is not assignable to parameter of type '(a: Animal) => void'.
+  Types of parameters 'd' and 'a' are incompatible.
+    Property 'bark' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+### Invariance: mutable container ควรปฏิเสธทั้งสองทิศ — TypeScript ไม่บังคับ
+
+ใน type system ที่มี invariance จริง (`List<T>` ของ Java เป็นตัวอย่าง) type parameter ของ mutable container จะ vary ไปทิศไหนอย่างปลอดภัยไม่ได้เลย: การอ่านต้องการ covariance การเขียนต้องการ contravariance และ container ที่ทำทั้งสองอย่างต้องการทั้งคู่ ซึ่งมีแค่ invariance — ไม่มีทิศไหน substitute ได้อย่างปลอดภัย — เท่านั้นที่รับประกันได้จริง TypeScript ไม่มีการ*บังคับใช้*ความเป็น invariant สำหรับ mutable field ธรรมดา มันตรวจ property แบบ structural และ covariant ซึ่งเป็น unsoundness เดียวกับที่คุณเพิ่งเห็นใน mutable array และมัน corrupt state ผ่านฝั่งเขียนได้แบบเดียวกันเป๊ะ:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class Box<T> {
+  value: T;
+  constructor(value: T) { this.value = value; }
+}
+
+const dogBox = new Box<Dog>(new Dog());
+const animalBox: Box<Animal> = dogBox; // TS allows this — Box<T> is not enforced invariant
+animalBox.value = new Cat(); // writes THROUGH to the same object dogBox holds
+```
+
+<TSPlayground code={invarianceCode} id="variance-invariance" title="Invariance TypeScript doesn't enforce: a write-through corruption" />
+
+export const invarianceCode = `class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class Box<T> {
+  value: T;
+  constructor(value: T) { this.value = value; }
+}
+
+const dogBox = new Box<Dog>(new Dog());
+const animalBox: Box<Animal> = dogBox; // TS allows this -- Box<T> is not enforced invariant
+animalBox.value = new Cat(); // writes through the SAME object dogBox holds
+console.log(dogBox.value.bark()); // dogBox.value is now a Cat -- crash`;
+
+กด **Check types**: ไม่มี diagnostic เลย กด **Run**: มันพังด้วย `dogBox.value.bark is not a function` เพราะ `animalBox.value = new Cat()` เขียนทับ `Dog` ที่ `dogBox` ถืออยู่จริง ๆ — `dogBox` กับ `animalBox` คือ object เดียวกันใน memory และการ assign ผ่านเข้าไปได้ด้วย type ที่กว้างและผ่อนปรนกว่า ภาษาที่มี invariance จริงสำหรับ mutable generic (Java, `Array<T>` ของ Kotlin) จะปฏิเสธการ assign `dogBox` ไป `animalBox` ตั้งแต่บรรทัดแรกเลย การตรวจแบบ structural ทีละ property ของ TypeScript ไม่มีแนวคิด "field นี้ถูกเขียนถึง ดังนั้นให้ปฏิบัติแบบ invariant" — มันแค่เช็คว่า `Dog` assignable ให้ `Animal` สำหรับ property นั้นแล้วก็จบ
+
+<Callout title="A dedicated lesson follows">
+section นี้ครอบคลุมสิ่งที่คุณต้องรู้เพื่อ*อ่าน* variance ได้ถูกต้องวันนี้ บทเรียนเฉพาะทีหลังในคอร์สนี้จะลงลึกกว่านี้ — กฎ covariant/contravariant/invariant แบบเป็นทางการสำหรับทุกตำแหน่ง และวิธีคิดเรื่อง variance ใน generic type ของคุณเองอย่างเป็นระบบ
+</Callout>
+
+## Mental Model
+
+ถาม 3 คำถามนี้กับ generic type ที่คุณกำลังอ่าน ตามลำดับ: **(1)** type parameter ถูก fix ต่อ instance (ระดับ class) หรือใหม่ต่อ call (ระดับ method)? **(2)** สำหรับแต่ละตำแหน่งที่ `T` ปรากฏ มันเป็นสิ่งที่คุณอ่าน (covariant ปลอดภัยที่จะกว้างขึ้น) สิ่งที่คุณเขียน (contravariant สำหรับ parameter ของ function เดี่ยว ๆ แต่ bivariant และ unsound สำหรับ parameter ของ method shorthand) หรือทั้งคู่ (invariant — แต่ TypeScript แทบไม่บังคับใช้จริงสำหรับ mutable field ธรรมดา)? **(3)** ถ้าตัวแปรสอง type generic เดียวกันแต่ type argument ต่างกัน ดันไป alias object เดียวกัน — ผ่านการ assign ที่ unsound แบบที่บทนี้โชว์ — สิ่งที่แย่ที่สุดที่ตัวหนึ่งทำกับอีกตัวได้คืออะไร?
+
+## ข้อแลกเปลี่ยน
+
+| การออกแบบ | ข้อดี | ต้นทุน |
+|---|---|---|
+| type parameter ระดับ class | type เดียวใช้ร่วมกันถูกต้องในทุก method ของ instance | เลือกผิดถ้าแต่ละ call ต้องการ type อิสระจากกันจริง ๆ — ดูกลิ่น 1 |
+| type parameter ระดับ method | อิสระต่อ call ไม่มี coupling ข้าม call | เลือกผิดถ้า type ต้องคงอยู่ข้าม call บน instance เดียวกัน — ดูกลิ่น 2 (ตกแต่ง, unsound) |
+| method shorthand (`f(x: T): void`) | กระชับ และจำเป็นสำหรับการ override method แบบ OOP ปกติให้ทำงานได้เลย | bivariant — unsound สำหรับ mutable generic container แบบที่ `StackMethod` ในบทนี้โชว์ |
+| property function (`f: (x: T) => void`) | contravariant ถูกต้องภายใต้ `strictFunctionTypes` — จับ bug จริงได้ | verbose กว่า เสีย ergonomics บางอย่างของ OOP override |
+| `readonly T[]` / `in`/`out` annotation | บันทึกและบังคับใช้ทิศทางที่ปลอดภัยอย่างชัดเจน | แก้ design ที่ต้องทั้งอ่านและเขียนแบบ unsound ย้อนหลังไม่ได้ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`unknown` ใน generic ที่ infer ไม่ได้ แปลว่า class ไม่ปลอดภัยแล้ว เหมือน `any`** มันคือ `unknown` ไม่ใช่ `any` — เขียนเข้าไป (ตำแหน่ง parameter) ไม่มีข้อจำกัด แต่อ่านกลับออกมายังต้อง narrow ก่อนใช้ ต่างจาก `any`
+- **variance ของ generic class เป็น property เดียวคงที่ของ class** มันขึ้นกับ*วิธีที่แต่ละ member ใช้* type parameter ทีละตำแหน่ง และ — สำหรับ method — ขึ้นกับว่า member นั้นเขียนด้วย shorthand หรือ property-function syntax `Stack<T>` shape เดียวกันเป๊ะ sound หรือ unsound ในไฟล์เดียวกันได้ ขึ้นกับว่าคุณเลือก syntax ไหนให้ `push`
+- **annotation `in`/`out` ของ TypeScript ทำให้ generic type ปลอดภัย** มันแค่บันทึกและ *assert* variance ที่ checker คำนวณอยู่แล้ว และถูกตรวจกับ variance ที่*วัดได้จริง* — ซึ่งสืบทอด bivariance ของ method shorthand มาด้วย การ annotate `out T` บน class ที่ push เป็น method shorthand compile ผ่านสะอาดทั้งที่ unsoundness ข้างใต้ยังอยู่
+- **mutable generic container ใน TypeScript เป็น invariant เหมือนใน Java** มันเป็น structural covariant เหมือนทุกอย่างอื่นใน object model ของ TypeScript — ไม่มีอะไรหยุดคุณจาก assign `Box<Dog>` ให้ `Box<Animal>` แล้ว corrupt ตัวต้นฉบับผ่านฝั่งเขียนได้เลย
+
+## อ่านโค้ดที่ AI เขียน
+
+สองคำถามจับความผิดพลาดส่วนใหญ่ของโค้ด generate เรื่อง type parameter ได้:
+
+- **type parameter อยู่บน declaration ที่ถูกต้องไหม?** ถ้าทุกการเรียก method ต้องการ type ของตัวเองแบบอิสระ แต่ class ประกาศ parameter แทน ให้มองหา type argument ของ class ที่ถูก "ล็อก" ไว้แบบไม่เข้าท่าตอน construct สำหรับสิ่งที่ควร vary ไปตาม call
+- **type parameter ระดับ method ผูกกับสิ่งที่ instance เก็บไว้จริงไหม?** ถ้า class เก็บข้อมูลเป็น `any[]` (หรือ representation ที่ไม่มี type/widen ไปแล้วแบบอื่น) ในขณะที่ method ประกาศ `<U>` ของตัวเอง type parameter นั้นก็แค่ตกแต่ง — มันให้ผู้เรียก *อ้าง* type ตอนขาออกโดยไม่มีอะไรตรวจคำอ้างนั้นกับสิ่งที่เก็บไว้จริง
+
+<SpotTheBug code={`class Cache {
+  private store: any[] = [];
+
+  set<T>(value: T): number {
+    return this.store.push(value) - 1;
+  }
+
+  get<T>(index: number): T {
+    return this.store[index];
+  }
+}
+
+const cache = new Cache();
+const id = cache.set({ name: "Ada" });
+const later = cache.get<string[]>(id);
+console.log(later.join(", "));`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย `Cache` เก็บทุกอย่างใน `store: any[]` ดังนั้น `set<T>` กับ `get<T>` ต่างประกาศ `T` อิสระของตัวเองต่อ call — ไม่มีอะไรผูกสิ่งที่ `set` เก็บไว้กับสิ่งที่ `get` ได้รับอนุญาตให้อ้างกลับ `cache.set({ name: "Ada" })` เก็บ object; `cache.get<string[]>(id)` ก็ assert ว่าผู้เรียกรู้ว่าค่าที่เก็บไว้เป็น `string[]` และ compiler ไม่มีทางตรวจคำอ้างนั้นกับ `any` ที่เก็บไว้จริง `later.join(", ")` type-check ผ่านเพราะ `string[]` มี `.join` แต่ตอนรันจริง `later` คือ `{ name: "Ada" }` มันเลยพังด้วย `later.join is not a function` type parameter ควรอยู่ที่ *class* (`Cache<T>`) fix ครั้งเดียวต่อ instance เพื่อบังคับให้ `set` กับ `get` ใช้ `T` เดียวกัน — นั่นคือ shape ของ `Stack<T>` จากต้นบท และเป็นสิ่งที่ type parameter ระดับ call บน store ที่ไม่มี type ร่วมกันไม่มีทางให้ได้
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-interface, type alias และ class รับ type parameter ได้หมด บน **class** parameter (`Stack<T>`) ถูก fix ตอน construct instance และทุก method ใช้ร่วมกัน parameter ที่ประกาศบน **method** (`map<U>`) ถูกเลือกใหม่ทุกครั้งที่เรียก การอ่าน generic class คือการถามแต่ละ parameter ว่า: fix ต่อ instance หรือต่อ call?
+interface, type alias และ class รับ type parameter ได้หมด บน **class** parameter (`Stack<T>`) ถูก fix ตอน construct instance และทุก method ใช้ร่วมกัน บน **method** มันถูกเลือกใหม่ทุกครั้งที่เรียก — วางผิดที่แล้วจะได้ coupling ข้าม call ที่งุ่มง่าม หรือ type parameter ที่ตกแต่งแล้วโกหก พอ parameter ถูก fix ต่อ instance แล้ว ให้ถามว่า `Stack<Dog>` เข้าแทน `Stack<Animal>` ได้อย่างปลอดภัยไหม: ได้สำหรับ `readonly` array หรือ method ที่เขียนด้วย shorthand syntax (แบบ unsound — bivariance) และไม่ได้สำหรับ method แบบ property-function หรือ (ในเชิง structural) สำหรับ invariance จริง ๆ ซึ่ง TypeScript ไม่ได้บังคับใช้กับ mutable field ธรรมดา
 </Callout>
 
 export const quizClasses = [
@@ -143,6 +522,7 @@ export const quizClasses = [
       'เป็น `any` เสมอ',
     ],
     answer: 1,
+    explain: 'type parameter ระดับ class ถูก fix ครั้งเดียวตอน construct และทุก method ของ instance นั้นใช้ type ที่ resolve แล้วเดียวกัน',
   },
   {
     q: 'ใน class `Collection<T>` ที่มี method `map<U>(...)` `T` กับ `U` ต่างกันอย่างไร?',
@@ -153,26 +533,51 @@ export const quizClasses = [
       'ทั้งคู่ infer ไม่ได้',
     ],
     answer: 1,
+    explain: '`T` เป็นของ class declaration และถูก fix ตอน construct ส่วน `U` เป็นของ method และถูก infer ใหม่อิสระทุกครั้งที่เรียก `map`',
   },
   {
-    q: '`type Result<T> = { ok: true; value: T } | { ok: false; error: string }` เป็นตัวอย่างของอะไร?',
+    q: '`new Box()` โดยไม่มี type argument และไม่มีอะไรให้ infer ให้ `Box<`อะไร`>` แล้วมันหมายความว่ายังไงกับ `.push(1)` ตอนหลัง?',
     options: [
-      'generic discriminated union',
-      'mapped type',
-      'class',
-      'enum',
-    ],
-    answer: 0,
-  },
-  {
-    q: 'class จะทำตาม `Repository<T>` สำหรับ entity หนึ่ง ๆ ได้อย่างไร?',
-    options: [
-      'implement generic interface ไม่ได้',
-      'implement `Repository<User>` โดย fix parameter เป็น type ตรง ๆ',
-      'ใส่ `any` ให้ทุก method',
-      'extends `T`',
+      '`Box<any>` — อะไรก็ได้ทั้งเข้าและออก ไม่ต้อง narrow เลย',
+      '`Box<unknown>` — `push` รับอะไรก็ได้ (unknown ในตำแหน่ง parameter ไม่มีข้อจำกัด) แต่อ่านค่าที่เก็บไว้กลับมายังต้อง narrow ก่อนใช้',
+      'compile error — TypeScript ปฏิเสธการ construct โดยไม่มี type argument',
+      '`Box<never>` — push อะไรไม่ได้เลย',
     ],
     answer: 1,
+    explain: 'เมื่อไม่มี inference site เลย T จะ default เป็น unknown ไม่ใช่ any ตำแหน่ง parameter ยอมรับทุกอย่างภายใต้ unknown แต่ค่าที่อ่านกลับมายังเป็น unknown จนกว่าจะ narrow — ต่างจาก any ที่จะข้ามข้อกำหนดนี้ไปด้วย',
+  },
+  {
+    q: '```ts\nclass StackWrong {\n  private items: any[] = [];\n  push<U>(item: U): void { this.items.push(item); }\n  pop<U>(): U | undefined { return this.items.pop(); }\n}\nconst sw = new StackWrong();\nsw.push("first");\nsw.push(42);\nconst claimed = sw.pop<string>();\nclaimed!.toUpperCase();\n```\nโค้ดนี้ compile ผ่านไหม แล้วตอนรันเกิดอะไรขึ้น?',
+    options: [
+      'compile error — push กับ pop ต้องใช้ type parameter ร่วมกัน',
+      'compile ผ่านโดยไม่มี error แล้วพังตอนรัน — `<U>` ของ pop เป็น type parameter อิสระใหม่ทุก call และ `items: any[]` ไม่เคยตรวจว่า claimed คืออะไรจริง ๆ',
+      'compile ผ่านและรันปลอดภัย — type parameter รับประกันว่าค่าเป็น string',
+      'compile error — ใช้ `any[]` ข้างใน generic class ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'เพราะ push กับ pop ต่างประกาศ U ของตัวเองต่อ call แทนที่จะแชร์ T ระดับ class และ store คือ any[] ไม่มีอะไรผูกสิ่งที่ push เข้าไปกับสิ่งที่ pop ได้รับอนุญาตให้อ้าง top item จริงคือ 42 (number) ดังนั้น claimed!.toUpperCase() throw "claimed.toUpperCase is not a function"',
+  },
+  {
+    q: 'การ assign `Stack<Dog>` ให้ตัวแปรที่ type เป็น `Stack<Animal>` แล้วเรียก `.push(new Cat())` — compile ผ่านไหม และขึ้นกับวิธีเขียน `push` หรือเปล่า?',
+    options: [
+      'ไม่ compile ผ่านเลยไม่ว่า syntax ไหน — TypeScript ปฏิเสธ generic assignment ที่ unsound เสมอ',
+      'compile ผ่านเมื่อ `push` ใช้ method shorthand (`push(item: T): void`) — bivariant และ unsound — แต่ถูกปฏิเสธถูกต้อง (TS2322) เมื่อ `push` เขียนเป็น property function (`push: (item: T) => void`)',
+      'compile ผ่านเสมอไม่ว่า push จะเขียนแบบไหน',
+      'compile ผ่านก็ต่อเมื่อ `T` มี default type parameter',
+    ],
+    answer: 1,
+    explain: 'method shorthand syntax บน class หรือ interface ถูกตรวจแบบ bivariant ซึ่งยอมให้เกิดการ assign ที่ unsound จริงแบบนี้ signature เดียวกันเป๊ะที่เขียนเป็น property ที่ถือ function type ถูกตรวจแบบ contravariant (ภายใต้ strictFunctionTypes) และปฏิเสธถูกต้อง',
+  },
+  {
+    q: 'TypeScript ให้คุณเขียน `interface Producer<out T>` ได้ annotation `out` ทำอะไรจริง ๆ?',
+    options: [
+      'ทำให้ `Producer<Dog>` assignable ให้ `Producer<Animal>` ทั้งที่ปกติจะไม่ได้',
+      'บันทึกและ assert variance ที่ TypeScript คำนวณแบบ structural อยู่แล้ว — ถ้า variance ที่ประกาศไม่ตรงกับวิธีใช้ `T` จริง checker จะรายงาน TS2636 แต่ตัว annotation เองไม่ได้เปลี่ยนสิ่งที่ assignability ธรรมดายอมรับที่อื่น',
+      'ปิด variance checking ทั้งหมดสำหรับ type parameter นั้น',
+      'จำเป็นต้องมีในทุก generic interface ตั้งแต่ TypeScript 4.7',
+    ],
+    answer: 1,
+    explain: 'annotation in/out (4.7+) เป็นตัวช่วยด้านเอกสารและการยืนยันแบบ optional ที่มุ่งเป้าไปที่คนเขียน library กับ performance ของ checker สำหรับ type ที่ซับซ้อนเป็นหลัก — TypeScript วัด variance แบบ structural อยู่แล้วไม่ว่าจะยังไง และ annotation ที่ผิดจะถูกจับในฐานะ assertion ล้มเหลว (TS2636) ไม่ใช่ถูกยอมรับเงียบ ๆ หรือถูกบังคับใช้เป็นกฎใหม่',
   },
 ];
 

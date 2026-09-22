@@ -1,6 +1,6 @@
 ---
 title: 'Conditional Types'
-description: 'Types that branch — T extends U ? X : Y, nested conditions, distribution over unions, and how to turn distribution off.'
+description: 'Types that branch — T extends U ? X : Y, nested conditions, distribution over unions, [T] extends [never], infer in covariant vs contravariant positions, and reading long inferred types.'
 sidebar:
   order: 4
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## An if-statement for types
 
@@ -44,7 +46,7 @@ type T3 = TypeName<number[]>; // "object"
 
 Each condition is tried in order, exactly like a chain of `else if`.
 
-## Distribution over unions
+## Distribution requires a *naked* type parameter
 
 Here is the behavior that surprises everyone. When the checked type is a **naked type parameter** and you hand it a **union**, the conditional distributes over each member and unions the results:
 
@@ -78,9 +80,37 @@ type NoRed = MyExclude<Colors, "red">;
 
 Each member that matches `U` becomes `never` (and `never` vanishes from a union), so only the non-matching members survive.
 
-## Turning distribution off
+"Naked" specifically means *only* the type parameter, alone, on the checked side. Wrapping it in **anything** — a tuple, an array, an object — stops distribution, because the compiler is no longer checking the union member-by-member; it's checking one compound type built *from* the whole union at once. Three fences, same union, three different outcomes:
 
-Sometimes you want to test the union *as a whole*, not member by member. Wrap both sides in a one-element tuple to stop distribution — the type parameter is no longer "naked":
+```ts
+// naked T: distributes, one branch per union member
+type Naked<T> = T extends string ? "str" : "other";
+
+type N1 = Naked<"a" | 42>;
+//   ^? "str" | "other"   — "a" branch gives "str", 42 branch gives "other", unioned
+```
+
+```ts
+// [T]: wrapped in a tuple — does NOT distribute, tests the whole union at once
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+
+type W1 = Wrapped<"a" | 42>;
+//   ^? "other"   — the whole union "a" | 42 is not assignable to string, so it's one test, one answer
+```
+
+```ts
+// T[]: wrapped in an array — also does NOT distribute, for the same reason
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type A1 = ArrWrapped<"a" | 42>;
+//   ^? "other"   — ("a" | 42)[] is not assignable to string[] as a whole
+```
+
+Only the first form checks `T` *by itself* on the checked side of `extends`. The other two check a type parameter *wrapped inside something else*, and wrapping — with a tuple, an array, or anything — is precisely what turns distribution off.
+
+## Turning distribution off on purpose: `[T] extends [U]`
+
+Sometimes you want to test the union *as a whole*, not member by member — the `[T]` form from above is also the standard idiom for that:
 
 ```ts
 type IsUnionOfStrings<T> = [T] extends [string] ? true : false;
@@ -93,11 +123,141 @@ type D2 = Bad<"a" | number>; // boolean  (true | false — distributed!)
 type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string)
 ```
 
-The `[T] extends [U]` trick is a standard idiom: reach for it whenever a conditional over a union gives you a surprising `boolean` (a sign it distributed and unioned `true | false`).
+Reach for `[T] extends [U]` whenever a conditional over a union gives you a surprising `boolean` (a sign it distributed and unioned `true | false`).
+
+## `[T] extends [never]`: the idiom, and why it's needed
+
+`never` deserves special attention because it's the **empty union** — a union of zero members. A distributive conditional runs once *per member*, so distributing over a union with zero members runs zero times, and the result is `never` itself, not `true` or `false`:
+
+```ts
+type IsNever<T> = T extends never ? true : false;
+
+type R1 = IsNever<never>;
+//   ^? never   — NOT true. Distributing over zero members produces zero branches to union.
+```
+
+This is the single most common surprise with `never` and conditional types: `T extends never ? true : false` looks like it should always resolve to a boolean, but for `T = never` specifically, there's nothing to distribute over, so the whole expression evaporates into `never` too. The same `[T]` wrapping trick that turns off ordinary distribution fixes this the same way:
+
+```ts
+type IsNeverFixed<T> = [T] extends [never] ? true : false;
+
+type R2 = IsNeverFixed<never>;
+//   ^? true
+```
+
+Wrapping both sides in a tuple stops the checked type from being naked, so `[never] extends [never]` is checked as one whole comparison — trivially `true` — instead of distributing over `never`'s zero members.
+
+## `infer` in covariant vs. contravariant positions, side by side
+
+The Inference & `infer` lesson showed that repeating an `infer` name across a covariant (output) position produces a **union**. Put the same repeated name in a contravariant (parameter) position instead, and it produces an **intersection** — the two behaviors sit right next to each other in real code:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// covariant position (a return type): repeated infer produces a UNION
+type ReturnOf<T> = T extends { a: () => infer R; b: () => infer R } ? R : never;
+type Cov = ReturnOf<{ a: () => string; b: () => number }>;
+type _cov = Expect<Equal<Cov, string | number>>;
+
+// contravariant position (a parameter type): repeated infer produces an INTERSECTION
+type ParamOf<T> = T extends { a: (x: infer P) => void; b: (x: infer P) => void } ? P : never;
+type Contra = ParamOf<{ a: (x: string) => void; b: (x: number) => void }>;
+type _contra = Expect<Equal<Contra, string & number>>;
+```
+
+`Equal` and `Expect` above are a minimal, local type-level test — compiling with no errors *is* the proof that both claims hold. (The course has a full lesson on this style of type-level testing later; this is the smallest useful version of it.) The intuition: a value you can *read* out of either branch has to be *something* both branches could have produced — a union covers that. A value you must be prepared to *hand to* either branch has to satisfy both branches' requirements at once — only an intersection does that. `string & number` collapses to a type with no real values, which is itself a hint that requiring one value to simultaneously be both a `string` and a `number` is normally a sign something upstream is asking for the wrong shape.
+
+## Is there a `strictInference` flag?
+
+The spec for this course flagged this as worth double-checking against the real compiler rather than assuming. Running `tsc --help --all` against TypeScript 7.0.2 turns up no flag named `strictInference` — only `strict`, `strictBindCallApply`, `strictBuiltinIteratorReturn`, `strictFunctionTypes`, `strictNullChecks`, and `strictPropertyInitialization`. The "tighter inference" behavior mentioned in the Inference & `infer` lesson's "Other 5.9 refinements" section is not something you opt into with a flag — it shipped as an unconditional change to how inference resolves candidates. If you're looking for a switch to turn that behavior off, there isn't one in 7.0.2; the fix path when a call breaks after upgrading is the same one described there: supply the type argument explicitly.
+
+## Reading a long inferred type from an error message
+
+Conditional types compound quickly once they distribute, and the resulting error messages can look intimidating before you notice they're just listing branches:
+
+```ts
+// @expect-error TS2322
+type ToArray<T> = T extends any ? T[] : never;
+
+declare const value: ToArray<string | number | boolean>;
+const bad: string[] = value;
+```
+
+```text
+error TS2322: Type 'string[] | number[] | false[] | true[]' is not assignable to type 'string[]'.
+  Type 'number[]' is not assignable to type 'string[]'.
+    Type 'number' is not assignable to type 'string'.
+```
+
+Two things worth annotating here. First, the compiler printed the *entire* distributed result: `string[] | number[] | false[] | true[]` — one array-of branch for every member `ToArray` distributed over, in order. That's not the error; it's the compiler faithfully showing you what `T` distributed into before it even got to complaining. Second — a genuine, easy-to-miss TypeScript fact — `boolean` isn't one type as far as distribution is concerned: it's `true | false` under the hood, so distributing over it produces *two* branches (`false[]` and `true[]`), not one `boolean[]`. The actual complaint is the second line: it picked one incompatible member (`number[]`) and reported that against the target `string[]`, then explained *that* mismatch one level deeper (`number` vs. `string`). Reading any long compiler-printed type the same way — top line is the full shape involved, then each nested line narrows to the one real incompatibility — turns an intimidating wall of text into three short, ordinary facts.
+
+<TSPlayground code={distributionCode} id="conditional-distribution-proof" title="Naked distributes, wrapped doesn't — try it yourself" />
+
+export const distributionCode = `type Naked<T> = T extends string ? "str" : "other";
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type N1 = Naked<"a" | 42>;
+//   ^? "str" | "other" -- distributes: one branch per union member
+
+type W1 = Wrapped<"a" | 42>;
+//   ^? "other" -- [T] is not naked -- tests the whole union at once
+
+type A1 = ArrWrapped<"a" | 42>;
+//   ^? "other" -- T[] is not naked either -- same reason as [T]
+
+// try it: what does Naked<never> give you? (hint: it's the section above this one)
+type NakedNever = Naked<never>;
+//   ^? never -- distributing over zero union members gives zero branches`;
 
 <Callout title="The one-line takeaway">
-A conditional type `T extends U ? X : Y` is an if-statement at the type level, using the same subset test as `extends` elsewhere. Its signature behavior is **distribution**: a naked type parameter checked against a union runs once per member and unions the results (which is how `Exclude` and `Extract` work). Wrap both sides in `[T] extends [U]` to test the union as a whole and switch distribution off.
+A conditional type `T extends U ? X : Y` is an if-statement at the type level. Its signature behavior is **distribution**, and distribution requires `T` to be genuinely *naked* on the checked side — wrap it in anything (`[T]`, `T[]`, an object) and the compiler tests the union as one whole instead. `never` is the empty union, so a distributive conditional over `never` distributes zero times and evaporates into `never` itself — `[T] extends [never]` is the standard fix. `infer` mirrors this same covariant/contravariant split: repeated in an output position it unions candidates; repeated in a parameter position it intersects them.
 </Callout>
+
+## Mental Model
+
+<Mermaid title="Distribution is member-by-member re-running of the whole conditional" code={condMentalDiagram} />
+
+export const condMentalDiagram = `flowchart TD
+  naked["Checked type is T, naked, alone"] --> isUnion{"Argument is a union?"}
+  isUnion -->|yes| perMember["Run the conditional once per member\nunion the branch results together"]
+  isUnion -->|no| once["Run the conditional once, normally"]
+  wrapped["Checked type is [T], T[], or T wrapped in anything"] --> whole["Test the whole argument as one type -- no distribution, ever"]`;
+
+Every distributive surprise in this lesson comes from one question: is the checked type parameter naked, or is it wrapped in something? Naked means "re-run this conditional once per union member and union the answers" — which is also why `never`, the zero-member union, evaporates the whole expression instead of picking a branch. Wrapped means "this is one ordinary type-level comparison," no different in kind from any non-generic conditional.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Naked `T extends U ? X : Y` | Automatically maps a transformation over every member of a union — the mechanism behind `Exclude`, `Extract`, `NonNullable` | Silently does nothing useful for `T = never`, and can produce much larger types than expected for a wide union |
+| `[T] extends [U]` | Tests the union as one whole; the standard, predictable fix for both "surprising boolean" and the `never` evaporation case | Easy to forget when you actually *wanted* per-member behavior somewhere else in the same file |
+| `infer` in an output position (union result) | Natural for "what could this position have produced" questions | A union result can be wider than any single call site actually needs |
+| `infer` in a parameter position (intersection result) | Natural for "what must satisfy every one of these requirements" questions | An intersection of unrelated primitive types (`string & number`) collapses to a type with no real values — often a sign of a modeling mistake, not a bug in `infer` |
+
+## Common Misconceptions
+
+- **Wrapping a type parameter in `[T]` changes what values are allowed.** It doesn't touch the value-level type at all — `[T]` and `T` describe the same values in every other context. It only changes whether *this specific conditional* distributes.
+- **`T extends never ? true : false` always evaluates to a boolean.** For every concrete, non-`never` type it does. For `T = never` itself, distribution runs zero times over the empty union and the whole conditional becomes `never`, not `false`.
+- **`infer` always produces a union when a name repeats.** Only in covariant (output) positions. The exact same repeated name in a contravariant (parameter) position produces an intersection instead — the position, not the keyword, decides.
+- **A flag exists to make TypeScript's generic inference "stricter," the way `strictNullChecks` makes null-checking stricter.** As of 7.0.2, `tsc --help --all` shows no `strictInference` flag. The 5.9 inference tightening mentioned elsewhere in this module is unconditional behavior, not something toggled by a setting.
+
+## Reading AI-generated code
+
+Distribution is easy to get backwards in generated utility types — especially ones meant to filter or transform a union — because both the "it silently does nothing" and "it silently distributes when it shouldn't" failure modes compile with zero errors:
+
+- A conditional meant to test "is this whole union assignable to X" written as a naked `T extends X ? ... : ...` will instead test each member separately and union the results — often producing `boolean` where a single `true`/`false` was intended, exactly the tell from the "turning distribution off" section.
+- A conditional meant to filter a union (`Exclude`-style) written with `T` wrapped in brackets (`[T] extends [U] ? never : T`) will not filter anything — it tests the whole union at once and returns all-or-nothing instead of member-by-member.
+- Any conditional utility applied to `never` deserves a specific check: does the author's own code (or its tests) ever exercise the `never` case, or would it silently evaporate to `never` unnoticed?
+
+<SpotTheBug code={`type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+type ExtractValue<T> = [T] extends [{ ok: true; value: infer V }] ? V : never;
+
+type A = ExtractValue<Result<number> | Result<string>>;`}>
+This compiles with zero errors, but `A` is `never`, not `number | string` as the name `ExtractValue` implies. Wrapping the checked type in `[T]` (presumably copied from the `[T] extends [never]` idiom or the "turn distribution off" pattern elsewhere in this lesson) turns off exactly the distribution this utility actually needs: with `T` wrapped, the whole union `Result<number> | Result<string>` — which includes the `{ ok: false; error: string }` members from *both* results — is tested against `{ ok: true; value: infer V }` as one piece, fails to match because not every member has an `ok: true; value` shape, and falls to the `never` branch. The fix is to remove the brackets and let `ExtractValue<T> = T extends { ok: true; value: infer V } ? V : never` distribute naturally: each of the four union members is tested individually, the two `{ ok: false; ... }` members correctly become `never` and drop out, and the two `{ ok: true; value: ... }` members contribute `number` and `string`, unioned into the intended `number | string`.
+</SpotTheBug>
 
 export const quizConditional = [
   {
@@ -109,6 +269,7 @@ export const quizConditional = [
       'It is a runtime if-statement',
     ],
     answer: 1,
+    explain: 'A conditional type is a type-level ternary using the same assignability test as `extends` elsewhere — no inheritance or runtime execution involved.',
   },
   {
     q: 'What is `ToArray<string | number>` for `type ToArray<T> = T extends any ? T[] : never`?',
@@ -119,26 +280,51 @@ export const quizConditional = [
       'any[]',
     ],
     answer: 1,
+    explain: 'Because T is naked on the checked side, the conditional runs once per union member and unions the branch results, rather than producing one array of the whole union.',
   },
   {
-    q: 'How does the built-in `Exclude<T, U>` remove members from a union?',
+    q: '```ts\ntype Naked<T> = T extends string ? "str" : "other";\ntype Wrapped<T> = [T] extends [string] ? "str" : "other";\ntype ArrWrapped<T> = T[] extends string[] ? "str" : "other";\n\ntype N = Naked<"a" | 42>;\ntype W = Wrapped<"a" | 42>;\ntype A = ArrWrapped<"a" | 42>;\n```\nWhat are `N`, `W`, and `A`?',
     options: [
-      'It deletes them at runtime',
-      'Via `T extends U ? never : T` — matching members become `never` and drop out of the union',
-      'By sorting the union',
-      'It cannot remove union members',
+      'All three are `"other"`',
+      '`N` is `"str" | "other"` (distributes); `W` and `A` are both `"other"` (wrapped in a tuple or array, so neither distributes)',
+      'All three are `"str" | "other"`',
+      '`N` and `A` distribute; only `W` does not',
     ],
     answer: 1,
+    explain: 'Only a bare, naked T on the checked side distributes. Wrapping it in a tuple ([T]) or an array (T[]) — or anything else — checks the whole union as one type instead, for both forms equally.',
   },
   {
-    q: 'Why wrap both sides as `[T] extends [U]`?',
+    q: '`type IsNever<T> = T extends never ? true : false;` — what is `IsNever<never>`, and why?',
     options: [
-      'To make it run faster',
-      'To stop distribution and test the union as a whole instead of member by member',
-      'To convert `T` to an array',
-      'It is required syntax for all conditionals',
+      '`true`, because `never` is assignable to itself',
+      '`never`, because distributing over the empty union (never has zero members) produces zero branches to union together, not a boolean at all',
+      '`false`, because `never` never matches any conditional',
+      'A compile error',
     ],
     answer: 1,
+    explain: 'never is the union of zero types. A distributive conditional runs once per member; with zero members there are zero branches, so the whole expression evaporates to never rather than resolving to true or false.',
+  },
+  {
+    q: 'For repeated `infer` names, what determines whether the result is a union or an intersection?',
+    options: [
+      'The order the infer names appear in the source',
+      'Whether the repeated position is covariant (e.g. a return type — produces a union) or contravariant (e.g. a parameter type — produces an intersection)',
+      'It is always a union, regardless of position',
+      'It depends on whether the type alias is exported',
+    ],
+    answer: 1,
+    explain: 'Covariant (output) positions merge multiple inferred candidates into a union — "could have come from either branch." Contravariant (parameter) positions merge them into an intersection — "must satisfy every branch\'s requirement."',
+  },
+  {
+    q: 'Does TypeScript 7.0.2 have a `strictInference` compiler flag?',
+    options: [
+      'Yes, and it must be enabled to get the 5.9 "tighter inference" behavior',
+      'No — `tsc --help --all` lists no such flag; the 5.9 inference tightening is unconditional behavior, not something toggled by a setting',
+      'Yes, but only under `strict: true`',
+      'It was removed in TypeScript 7.0 but existed in 6.x',
+    ],
+    answer: 1,
+    explain: 'Checking tsc --help --all against the actual 7.0.2 binary shows only strict, strictBindCallApply, strictBuiltinIteratorReturn, strictFunctionTypes, strictNullChecks, and strictPropertyInitialization — no strictInference. The tightened candidate inference from 5.9 ships unconditionally.',
   },
 ];
 

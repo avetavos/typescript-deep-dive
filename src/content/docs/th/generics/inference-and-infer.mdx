@@ -1,6 +1,6 @@
 ---
 title: 'Inference & infer'
-description: 'TypeScript เลือก type argument จาก inference site อย่างไร และ keyword infer ดึง type ออกจาก type อื่นอย่างไร — พร้อม NoInfer และสิ่งที่เปลี่ยนใน 5.9 กับ 6.0'
+description: 'TypeScript เลือก type argument จาก inference site อย่างไร inference priority, infer X extends constraint, infer ใน template literal และสูตร debug "ทำไม infer เป็น string?"'
 sidebar:
   order: 5
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## inference เอาคำตอบมาจากไหน: inference site
 
@@ -97,7 +99,7 @@ type Merge<T> = T extends { a: infer U; b: infer U } ? U : never;
 type M = Merge<{ a: string; b: number }>; // string | number (union)
 ```
 
-สำหรับงานทั่วไปในแต่ละวัน `infer` หนึ่งตัวต่อ pattern ก็พอแล้ว
+บท Conditional Types เอากรณีนี้มาวางเทียบข้าง ๆ กับกรณี contravariant (intersection) แล้วพิสูจน์ทั้งคู่ด้วย type equality check
 
 ## `NoInfer<T>`: block inference site (5.4)
 
@@ -139,13 +141,192 @@ callIt({
 
 ก่อน 6.0 `y` จะเป็น `unknown` ตรงนี้ถ้าไม่ annotate เอง กฎง่าย ๆ ยังเหมือนเดิม — annotate parameter เมื่อ inference มองไม่เห็นจริง ๆ — แค่ต้องทำน้อยลง
 
+## `infer X extends` constraint (4.7+)
+
+type variable ที่ถูก infer มี constraint ของตัวเองได้ กรองว่ามัน bind เป็นอะไรได้บ้าง แทนที่จะรับทุกอย่างที่ pattern match เจอ:
+
+```ts
+type FirstIfString<T> = T extends [infer F extends string, ...unknown[]] ? F : "not a string";
+
+type A = FirstIfString<["a", 1, 2]>;
+//   ^? "a"
+type B = FirstIfString<[1, 2, 3]>;
+//   ^? "not a string"   — the first element didn't satisfy `extends string`
+```
+
+ถ้าไม่มี constraint `infer F` เดี่ยว ๆ จะ bind `F` เป็นอะไรก็ตามที่อยู่ตรงตำแหน่งนั้น — รวมถึง `1` ด้วย — แล้วคุณจะต้องมี conditional ที่*สอง*แยกต่างหากเพื่อเช็คว่า `F extends string` `infer F extends string` รวมการเช็คนั้นเข้าไปใน pattern match เองเลย: ถ้า element แรกไม่ตรง constraint ทั้ง pattern จะ match ไม่ได้เลย แล้วตกไปที่ branch `false` ทันที
+
+## `infer` ข้างใน template literal type
+
+`infer` ทำงานข้างใน template literal pattern เหมือนกับที่ทำงานข้างใน pattern ของ function-shape หรือ array เป๊ะ — bind variable กับ substring ที่ match ช่องว่างใน template:
+
+```ts
+type ParseRoute<S> = S extends `/users/${infer Id}/posts/${infer PostId}`
+  ? { id: Id; postId: PostId }
+  : never;
+
+type R = ParseRoute<"/users/42/posts/7">;
+//   ^? { id: "42"; postId: "7" }
+```
+
+นี่คือวิธีที่ tool เกี่ยวกับ route-typing, URL-parsing และ CSS-in-TS จำนวนมากทำงาน: string literal type เองก็*คือ* data structure และ `infer` ข้างใน template pattern คือกลไกในการ destructure มัน
+
+## return-type inference จาก context
+
+inference site ไม่ได้มีแค่ตำแหน่ง argument — type ที่ value ถูก assign *เข้าไป* ก็ seed type parameter ได้ เมื่อไม่มี argument ให้ infer จากที่อื่น:
+
+```ts
+function make<T>(): T[] { return []; }
+
+const arr: string[] = make();
+//    ^? string[]   — T inferred as string from the assignment's contextual type, not from any argument
+```
+
+โดยไม่มี argument เลย `make()` ต้องได้ `T` มาจากที่ไหนสักที่ TypeScript ดูว่าผลลัพธ์ถูกใช้*เป็น*อะไร — ตรงนี้คือ annotation บน `arr` — แล้วใช้เป็น inference site เป็นทางเลือกสุดท้าย ถ้าไม่มีแม้แต่ contextual type ให้ตกไปพึ่ง `T` ก็ไม่มีอะไรให้ infer จริง ๆ และจบที่ `unknown` — ผลลัพธ์ "ไม่มีอะไรให้ infer" แบบเดียวกับที่บท Generic Classes โชว์ให้ `new Stack()`:
+
+```ts
+function make<T>(): T[] { return []; }
+
+const loose = make();
+//    ^? unknown[]   — no argument, no contextual type — nothing to infer T from
+```
+
+## inference priority: argument ชนะ contextual type เสมอ
+
+เมื่อมีทั้ง argument และ contextual (expected) type อยู่ argument จะชนะ — contextual type แค่เติมช่องว่างเท่านั้น มันไม่เคย override candidate ที่ inference มีอยู่แล้ว:
+
+```ts
+function wrap<T>(value: T): T[] { return [value]; }
+
+const direct = wrap(1);
+//    ^? number[]   — T comes from the argument: 1
+
+const strict: (string | number)[] = wrap(1);
+//    ^? (string | number)[] as far as `strict`'s own annotation is concerned,
+//       but wrap's inferred T is still number — the annotation widens the
+//       *variable*, it does not change what T was inferred as inside wrap
+```
+
+`wrap(1)` infer `T` เป็น `number` ทั้งสองครั้ง — annotation บน `strict` มีผลแค่*หลังจาก*ที่ `wrap` return `number[]` มาแล้ว ทำให้ array ที่ return มาถูกปฏิบัติแบบกว้างขึ้นในภายหลัง มันไม่เคยย้อนกลับเข้าไปใน inference ของ `wrap` แล้วขอ `T` ตัวอื่น
+
+## สูตร debug: "ทำไม infer เป็น `string` ไม่ใช่ literal?"
+
+ความสับสนที่พบบ่อย: generic ที่ควรรักษา literal type ไว้กลับ return ตัวที่ widen แล้ว และ generic function เองถูกตำหนิ ปกติแล้ว literal หายไป*ก่อน*ที่ generic จะเห็นมันด้วยซ้ำ:
+
+```ts
+function identity<T>(x: T): T { return x; }
+
+let mode = "dark"; // let widens the initializer to string immediately
+const r1 = identity(mode);
+//    ^? string   — too late: mode was already widened to string at its own declaration
+```
+
+จุดสังเกต: `as const` ที่ call site แก้ไม่ได้ และเหตุผลที่มัน*แก้ไม่ได้*ก็เป็นตัว diagnostic เอง — `as const` รับแค่ literal expression ไม่ใช่ reference ไปยัง mutable variable:
+
+```ts
+// @expect-error TS1355
+function identity<T>(x: T): T { return x; }
+let mode = "dark";
+const r1b = identity(mode as const);
+```
+
+ถ้า `mode as const` compile ไม่ผ่านด้วยซ้ำ นั่นคือ compiler กำลังยืนยันว่าไม่เหลือ literal ให้รักษาตรงจุดนั้นแล้ว — `mode` เป็น `string` เต็มตัวและถาวรตั้งแต่ตอนที่ประกาศ ทางแก้จริงสองทาง และทางที่ดูเหมือนจะแก้แต่ไม่แก้อีกหนึ่ง:
+
+```ts
+function identity<T>(x: T): T { return x; }
+
+// fix 1: declare with const, so the literal is never widened away in the first place
+const literalMode = "dark";
+const r2 = identity(literalMode);
+//    ^? "dark"
+
+// fix 2: keep the let, but pass a fresh literal expression through `as const`
+let mode2 = "dark";
+const r3 = identity("dark" as const);
+//    ^? "dark"
+```
+
+```ts
+// @expect-error TS2345
+// non-fix: naming the type argument explicitly does NOT rescue an
+// already-widened source — mode2 is `string`, and `string` isn't
+// assignable to the narrower `"dark"` this now demands
+function identity<T>(x: T): T { return x; }
+let mode2 = "dark";
+const r4 = identity<"dark">(mode2);
+```
+
+สูตร: เมื่อ generic "ทำ literal หาย" ให้มองย้อนไปต้นทาง*ก่อน*ถึง call ไม่ใช่ที่ signature ของ generic หาว่า value ถูกประกาศตรงไหน แล้วเช็คว่ามันเป็น `let` (widen ทันที) หรือ mutable array/object literal (widen element/property ของมัน) *ก่อน*ที่ value จะมาถึง generic call `const T` (จากบทก่อนหน้า) และ `as const` ต่างรักษาแค่ literal ที่ยังมองเห็นได้ตอนที่มันรัน — ทั้งคู่ย้อนกลับไปกู้อันที่หายไปแล้วไม่ได้
+
+<TSPlayground code={routeParseCode} id="infer-template-literal" title="infer destructuring a route out of a string literal type" />
+
+export const routeParseCode = `type ParseRoute<S> = S extends \`/users/\${infer Id}/posts/\${infer PostId}\`
+  ? { id: Id; postId: PostId }
+  : never;
+
+type R = ParseRoute<"/users/42/posts/7">;
+//   ^? { id: "42"; postId: "7" }
+
+// try changing the literal type below and re-running Check types
+type Bad = ParseRoute<"/users/42">;
+//   ^? never -- the pattern doesn't match at all`;
+
 ## การปรับปรุงอื่นใน 5.9
 
-- **inference เข้มขึ้น** การแก้ bug ที่ type variable "รั่ว" ออกจาก inference ทำให้บาง call ที่เคยยอมรับ `T` ผิด ๆ กลายเป็น error ถ้า call ไหน compile ไม่ผ่านหลังอัปเกรด วิธีแก้ที่ตั้งใจไว้คือระบุ type argument ให้ชัด: `f<Expected>(...)`
+- **inference เข้มขึ้น** การแก้ bug ที่ type variable "รั่ว" ออกจาก inference ทำให้บาง call ที่เคยยอมรับ `T` ผิด ๆ กลายเป็น error ถ้า call ไหน compile ไม่ผ่านหลังอัปเกรด วิธีแก้ที่ตั้งใจไว้คือระบุ type argument ให้ชัด: `f<Expected>(...)` นี่คือการเปลี่ยนพฤติกรรม ไม่ใช่สิ่งที่คุณเปิด/ปิดเอง — ไม่มี flag ชื่อ `strictInference` ใน TypeScript 7.0.2 (เช็คกับ `tsc --help --all` แล้ว) inference ที่เข้มขึ้นแค่มาพร้อม inference ปกติเลย
 - **instantiation เร็วขึ้น** instantiation ระหว่างทางถูก cache เป็นเหตุผลที่ generic library หนัก ๆ (Zod, tRPC) เจอ error "excessively deep" น้อยลงมาก
 
+## Mental Model
+
+<Callout title="ลำดับการอ่านสำหรับคำถามเรื่อง inference ใด ๆ">
+สำหรับคำถาม "ทำไม T ถึงกลายเป็น X?" ใด ๆ ให้เช็คตามลำดับนี้: (1) type argument ที่ระบุตรง ๆ (`f<X>(...)`) ชนะเสมอ (2) ตำแหน่ง argument เรียงซ้ายไปขวา แต่ละตัวถูกเช็คกับ candidate ที่ใช้งานอยู่ (3) contextual (expected) type เฉพาะตอนที่ไม่มี argument ไหนให้มา `const`/`as const` เปลี่ยนสิ่งที่ site หนึ่ง*เสนอ*เป็น candidate (literal หรือ widen แล้ว) — มันไม่ได้เพิ่ม site ใหม่หรือเปลี่ยนลำดับนี้
+</Callout>
+
+ผลลัพธ์ inference ที่ "เซอร์ไพรส์" ทุกอันในบทนี้ยุบลงมาเป็นการอ่านแบบเดียวกัน: หาทุกตำแหน่งที่ `T` ปรากฏ เรียงตาม priority ข้างบน แล้วถามว่าตัว*แรก*ที่มีคำตอบเสนออะไรจริง ๆ — type ที่ widen แล้ว เพราะต้นทาง widen ไปก่อนมาถึง หรือ literal เพราะมันยังไม่ทันถูก widen
+
+## ข้อแลกเปลี่ยน
+
+| เครื่องมือ | ข้อดี | ต้นทุน |
+|---|---|---|
+| ปล่อยให้ inference ทำงาน (ไม่ระบุ type argument) | เขียนน้อยกว่า ยังถูกต้องแม้ call site เปลี่ยน | เลือก candidate ที่ไม่คาดคิด (literal, `unknown`, union กว้าง) แบบเงียบ ๆ โดยไม่มีสัญญาณที่ call site |
+| ระบุ type argument ตรง ๆ (`f<T>(...)`) | ตัด ambiguity เรื่อง `T` ทั้งหมดออก | ต้องดูแลให้ตรงกับมือเองถ้า constraint จริงของ function เปลี่ยน |
+| `infer X extends C` | รวมการเช็ค shape เข้าไปใน pattern match เอง — conditional เดียวแทนสอง | ใช้ได้แค่กับ site ของ `infer` ไม่ช่วยนอก conditional type |
+| contextual (expected-type) inference | ให้ generic call ที่ตำแหน่ง "leaf" (ไม่มี argument) ยัง infer อะไรที่มีประโยชน์ได้ | ตกไปที่ `unknown` แบบเงียบ ๆ ทันทีที่ไม่มี contextual type ด้วย — พลาดง่าย |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **annotate return type ของ call เปลี่ยนสิ่งที่ type parameter ของ generic function ถูก infer เป็น** มันไม่ย้อนกลับเข้าไปใน call — มีแค่ตำแหน่ง argument และถ้าไม่มีก็ contextual type ที่ call site เองเท่านั้นที่ป้อน inference annotation บน*ตัวแปร*ที่ผลลัพธ์ถูก widen เข้าไปทีหลังไม่เปลี่ยนอะไรต้นทางเลย
+- **`as const` ที่ call site ช่วยกู้ value ที่ widen แล้วได้เสมอ** `as const` รับแค่ literal expression reference ไปยัง `let` variable ที่ widen ไปแล้วตอนประกาศ compile ไม่ผ่านเป็น `as const` เลยด้วยซ้ำ (`TS1355`) — ความล้มเหลวนั้นเองคือหลักฐานว่า literal หายไปแล้ว ไม่ใช่ case ที่ต้องหาทางเลี่ยงด้วย cast
+- **ระบุ type argument ตรง ๆ (`f<"dark">(x)`) แก้ value ที่ widen ไปแล้ว** มันเปลี่ยนสิ่งที่*ต้องการ* ไม่ใช่สิ่งที่ argument เป็นจริง ๆ ถ้า `x` เป็น `string` การเรียกร้องให้ `T` เป็น `"dark"` ก็แค่สร้าง error ใหม่ที่ไม่เกี่ยวกัน (`TS2345`) แทนที่จะกู้ literal กลับมา
+- **conditional type ที่ไม่มี `infer` site ตรงเลยแค่ปล่อย variable ไว้ไม่ set** มันไม่ทำแบบนั้น — ถ้า pattern โดยรวม match ไม่ได้เลย conditional ทั้งอันจะไป branch `false` และ `infer` variable ไม่เคย bind เป็นอะไรเลย ไม่ว่าส่วนอื่นของ pattern จะ "ดูเหมือน" match หรือไม่
+
+## อ่านโค้ดที่ AI เขียน
+
+inferred type ยาว ๆ ใน error message จริงพบบ่อยเมื่อ generic กับ object literal มารวมกัน และการอ่านมันคือทักษะ ไม่ใช่ปัญหาการสแกน:
+
+```text
+error TS2322: Type '{ id: number; name: string; email: string; roles: string[]; active: boolean; }' is not assignable to type '{ id: string; }'.
+  Types of property 'id' are incompatible.
+    Type 'number' is not assignable to type 'string'.
+```
+
+อันนี้มาจาก `identity({ id: 1, name: "Ada", email: "ada@example.com", roles: ["admin", "user"], active: true })` ที่ถูก assign ให้ตัวแปร type เป็น `{ id: string }` compiler กำลังโชว์คุณ ตรงตัวเป๊ะ ว่า `T` ถูก infer เป็นอะไรจาก object literal argument — อ่านมันทีละ property เหมือน object type อื่น ๆ อย่ากลัวเพราะความยาวของมัน ความไม่ตรงกัน*จริง*ฝังอยู่ในบรรทัดที่สอง: `id: number` เทียบกับ `id: string` ของ target ทุกอย่างก่อนหน้านั้นคือ compiler รายงาน shape ที่มันสรุปได้อย่างซื่อสัตย์ ไม่ใช่ส่วนของปัญหา
+
+ตอน review โค้ด generate ควรระวังทิศตรงข้ามด้วย: generic call ที่ inferred type ใหญ่ผิดปกติหรือ union กว้างผิดปกติ เป็นสัญญาณว่า literal บางตัวต้นทาง widen เร็วกว่าที่ตั้งใจ หรือ inference site ที่ผู้เขียนไม่คาดคิด (default parameter, fallback value) ป้อน candidate ที่ไม่ควรป้อน — คือ shape เดียวกับที่ `NoInfer<T>` มีไว้แก้เป๊ะ
+
+<SpotTheBug code={`function createStreetLight<C extends string>(colors: C[], defaultColor?: C) {
+  return { colors, defaultColor };
+}
+
+const config = createStreetLight(["red", "yellow", "green"], "off");
+function isValidColor(c: string): c is "red" | "yellow" | "green" {
+  return config.colors.includes(c as "red" | "yellow" | "green");
+}`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย แต่ `config.defaultColor` ไม่ใช่หนึ่งในสามสีจริงเลย `defaultColor?: C` เป็น inference site ของ `C` เหมือน `colors: C[]` เป๊ะ ดังนั้นส่ง `"off"` เข้าไปไม่ถูกปฏิเสธ — มัน widen `C` เป็น `"red" | "yellow" | "green" | "off"` และ `config.colors` ถูก infer เป็น union ที่ widen แล้วตัวเดียวกัน ไม่ใช่แค่สามสีจริง return type ของ type predicate ของ `isValidColor` ยังอ้างแค่ `"red" | "yellow" | "green"` แต่ไม่มีอะไรตรวจคำอ้างนั้นกับ `C` ที่ widen ไปแล้ว — ทางแก้จาก section NoInfer ของบทนี้ใช้ได้ตรง ๆ: annotate fallback parameter เป็น `defaultColor?: NoInfer<C>` เพื่อให้มันถูกเช็คกับ `C` ที่ infer จาก `colors` เพียงอย่างเดียว แทนที่จะป้อน candidate ของตัวเอง
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-generic inference อ่าน **ตำแหน่งของ argument** (inference site) แล้วประนีประนอมเป็น type เดียว — จึงเป็นเหตุผลว่าทำไม argument (ไม่ใช่ return annotation) เป็นตัวตัดสินว่า `T` กลายเป็นอะไร keyword `infer` ที่ใช้ภายใน conditional type แนะนำ variable ที่ TypeScript แก้ให้ด้วยการ pattern-match structure: วาง `infer X` ตรงที่ส่วนที่คุณต้องการอยู่ (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) แล้ว TypeScript ยื่นชิ้นนั้นให้ นี่คือวิธีสร้าง `ReturnType` และเพื่อน ๆ
+generic inference อ่าน **ตำแหน่งของ argument** (inference site) ก่อน ตกไปพึ่ง **contextual type** เมื่อไม่มี argument ให้อ่าน และจบที่ `unknown` เมื่อไม่มีทั้งคู่ — ไม่เคยเป็น `any` keyword `infer` ที่ใช้ภายใน conditional type แนะนำ variable ที่ TypeScript แก้ให้ด้วยการ pattern-match structure ใส่ constraint `extends` ของตัวเองได้ และทำงานข้างใน template literal pattern เหมือนกับที่ทำงานกับ pattern ของ function และ array เมื่อ literal type หายไป การสูญเสียเกือบทุกครั้งเกิดต้นทางก่อน generic call ไม่ใช่ข้างในมัน
 </Callout>
 
 export const quizInfer = [
@@ -153,11 +334,12 @@ export const quizInfer = [
     q: 'TypeScript เอาค่าของ type parameter ของ generic function มาจากไหน?',
     options: [
       'จาก return type annotation',
-      'จากตำแหน่งของ argument (inference site) แล้วประนีประนอมเป็น type เดียว',
+      'จากตำแหน่งของ argument (inference site) ประนีประนอมเป็น type เดียว แล้วตกไปพึ่ง contextual type หรือ unknown',
       'จาก config file',
       'เป็น `any` เสมอถ้าไม่เขียนชัด ๆ',
     ],
     answer: 1,
+    explain: 'inference อ่านตำแหน่ง argument ก่อน ถ้าไม่มีเลยก็ตกไปพึ่ง contextual (expected) type ที่ call site และถ้าไม่มีทั้งคู่ parameter จะกลายเป็น unknown ไม่ใช่ any',
   },
   {
     q: '`infer R` ใน `T extends (...args: any[]) => infer R ? R : never` ทำอะไร?',
@@ -168,6 +350,7 @@ export const quizInfer = [
       'throw error ถ้า `T` ไม่ใช่ function',
     ],
     answer: 1,
+    explain: '`infer` แนะนำ type variable ที่ถูกแก้ด้วย structural pattern matching — ตรงนี้มันจับ type อะไรก็ตามที่อยู่ในตำแหน่ง return ของ function type',
   },
   {
     q: 'จะดึง element type ออกจาก array type อย่างไร?',
@@ -178,16 +361,40 @@ export const quizInfer = [
       '`T[number][]`',
     ],
     answer: 0,
+    explain: 'วาง `infer E` ตรงตำแหน่งที่ element type จะอยู่ใน array pattern จะจับตำแหน่งนั้นได้เป๊ะ',
   },
   {
-    q: 'built-in `ReturnType<T>` ถูกสร้างด้วย:',
+    q: 'การใส่ constraint ตรง ๆ บน `infer` variable แบบ `infer F extends string` (TypeScript 4.7+) ทำอะไร?',
     options: [
-      'mapped type',
-      'conditional type ที่มี `infer` ในตำแหน่ง return',
-      'runtime reflection call',
-      'class',
+      'ไม่ทำอะไรเลย — constraint บน `infer` ถูกละเว้น',
+      'รวมการเช็ค shape เข้าไปใน pattern match เอง: ถ้า value ที่ match ไม่ตรง constraint conditional ทั้งอันจะไป false branch',
+      'บังคับให้ `F` เป็น `string` เป๊ะเสมอ',
+      'ใช้ได้แค่นอก conditional type',
     ],
     answer: 1,
+    explain: 'ถ้าไม่มี constraint แบบ inline คุณจะต้องมี conditional ที่สองแยกต่างหากเพื่อเช็ค infer variable `infer F extends string` รวม structural match กับการเช็ค shape เข้าเป็นขั้นตอนเดียว',
+  },
+  {
+    q: '```ts\nfunction identity<T>(x: T): T { return x; }\nlet mode = "dark";\nconst r1 = identity(mode);\n```\n`r1` ได้ type อะไร และทำไมการห่อ call เป็น `identity(mode as const)` ถึงแก้ไม่ได้?',
+    options: [
+      '`r1` คือ `"dark"`; `as const` ไม่จำเป็นแต่ไม่เสียหาย',
+      '`r1` คือ `string` เพราะ `mode` ถูก widen เป็น `string` ไปแล้วตอนประกาศด้วย `let`; `mode as const` compile ไม่ผ่านด้วยซ้ำ (`TS1355`) เพราะ `as const` รับแค่ literal expression ไม่ใช่ reference ไปยัง mutable variable',
+      '`r1` คือ `unknown` เพราะ `identity` infer จาก `let` ไม่ได้',
+      '`r1` คือ `never` เพราะส่ง `let` variable เข้า generic ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'literal หายไปตั้งแต่ `let mode = "dark"` widen มัน ก่อนที่ `identity` จะถูกเรียกด้วยซ้ำ `as const` ต้องการ literal expression จริง ๆ ตรงตำแหน่งนั้น ดังนั้นการใส่มันกับ reference ไปยัง variable ที่ widen ไปแล้วเป็น compile error ไม่ใช่ทางแก้',
+  },
+  {
+    q: '```ts\nfunction make<T>(): T[] { return []; }\nconst arr: string[] = make();\nconst loose = make();\n```\n`arr` กับ `loose` ได้ type อะไร และทำไมถึงต่างกัน?',
+    options: [
+      'ทั้งคู่เป็น `unknown[]` — `make` ไม่มีอะไรให้ infer เลย',
+      '`arr` คือ `string[]` — `T` ถูก infer จาก contextual type ของการ assign; `loose` คือ `unknown[]` — ไม่มี argument และไม่มี contextual type จึงไม่มีอะไรให้ infer `T` เลย',
+      'ทั้งคู่เป็น `string[]` — TypeScript จำ inference ก่อนหน้าไว้',
+      '`arr` เป็น compile error; `loose` เป็น `any[]`',
+    ],
+    answer: 1,
+    explain: 'inference site เป็นตำแหน่ง argument หรือถ้าไม่มีก็ contextual (expected) type ที่ call site annotation ของ `arr` ให้ contextual type นั้น; `loose` ไม่มีทั้ง argument และ contextual type จึงตกไปที่ unknown ไม่ใช่ any',
   },
 ];
 

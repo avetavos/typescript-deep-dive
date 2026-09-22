@@ -1,6 +1,6 @@
 ---
 title: 'Generic Functions & Constraints'
-description: 'Type parameters, constraining them with extends, default type parameters, multiple parameters, const type parameters, and how to avoid over-generalizing.'
+description: 'Type parameters, constraining them with extends, default type parameters, multiple parameters, const type parameters, when a type parameter is a smell, and overload vs generic.'
 sidebar:
   order: 2
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## A type parameter is inferred, not usually written
 
@@ -84,9 +86,9 @@ const c2: Container<number> = { value: 1 }; // T explicitly number
 
 Defaults are common on generic classes and interfaces where a sensible fallback exists.
 
-## Don't over-generalize
+## Don't over-generalize — but "used once" needs a nuance
 
-Generics are a tool, not a goal. A type parameter that appears **only once** in a signature is usually a mistake — it's not linking anything, so it might as well be a concrete type or `unknown`:
+Generics are a tool, not a goal. A type parameter that appears **only once in the entire signature, and nowhere else** is usually a mistake — it's not linking anything, so it might as well be a concrete type or `unknown`:
 
 ```ts
 // pointless generic: T is used once, links nothing
@@ -95,7 +97,24 @@ function logLoose<T>(x: T): void { console.log(x); }
 function log(x: unknown): void { console.log(x); }
 ```
 
-A generic earns its keep when the type parameter connects two or more positions (input to output, or one parameter to another). If it doesn't create a *relationship*, drop it.
+But "used once" needs to be read carefully. The rule isn't "counted in the parameter list" — it's "does this type parameter connect an input to an output at all?" A `T` that appears exactly once **among the parameters**, but also shows up in the return type, is still linking two positions, and that makes it a real generic, not a smell:
+
+```ts
+// @expect-error TS2339
+interface Tagged<T> { value: T }
+
+// T appears once in the parameter list — but it ALSO appears in the return
+// type, tying the argument to the result. That IS a link, so this is fine.
+function tag<T>(value: T): Tagged<T> {
+  return { value };
+}
+
+const t = tag(42);
+//    ^? Tagged<number>
+t.value.toUpperCase(); // ❌ number has no toUpperCase — the link still catches real bugs
+```
+
+Compare the two: `logLoose<T>(x: T): void` has `T` in exactly one position, period — the return type is `void`, so nothing downstream is ever checked against it. `tag<T>(value: T): Tagged<T>` also has `T` written once among the *parameters*, but `T` reappears in the return type, so a caller who does something wrong with `t.value` still gets caught. Count **links**, not raw appearances.
 
 ## `const` type parameters (5.0)
 
@@ -112,9 +131,110 @@ const t = tuple("a", 1, true);
 
 The constraint usually needs `readonly` (the inferred literal is a readonly tuple or object). Use it for APIs that key off literal values — route tables, enum-like configs, builders — and leave ordinary generics alone.
 
+### `const T` still widens — it isn't `as const` retroactively
+
+`const` on a type parameter only changes how *that call's own arguments* get inferred. It cannot reach back and un-widen a value that was already widened somewhere else before it arrived:
+
+```ts
+function firstOf<const T>(items: T[]): T {
+  return items[0];
+}
+
+const arr = ["a", "b"]; // arr is already string[] — an ordinary mutable array, not a tuple
+const f = firstOf(arr);
+//    ^? string   — NOT "a" | "b": arr was widened at its own declaration, long before firstOf saw it
+```
+
+`const` on `tuple`'s `T` worked because the rest parameter (`...items: T`) captures each argument as its own literal at the call site, before anything widens it. `firstOf`'s `T` is inferred from `arr`'s *element type*, and `arr` was already `string[]` by the time it got there — there is no literal left for `const` to preserve. `const T` preserves literals it can see arriving; it doesn't reverse widening that already happened upstream.
+
+## Overload vs generic
+
+Both let one name serve several call shapes, but they solve different problems. A **generic** is right when the same formula applies uniformly across every type — `T` in, `T` (or something built from `T`) out. An **overload set** is right when you have a small, fixed number of specific (input, output) *pairings* that don't reduce to one formula.
+
+Overloads can also produce a clearer error than a poorly-chosen generic. Compare two versions of a function that must receive two arguments of the *same* type:
+
+```ts
+// @expect-error TS2345
+function both<T>(a: T, b: T): T { return a; }
+
+const y = both(1, "two"); // the first argument fixes T to the literal 1, not number
+```
+
+```ts
+// @expect-error TS2769
+function bothOverload(a: string, b: string): string;
+function bothOverload(a: number, b: number): number;
+function bothOverload(a: unknown, b: unknown): unknown { return a; }
+
+bothOverload(1, "two");
+```
+
+<TSPlayground code={bothCompareCode} id="overload-vs-generic" title="A generic can give a worse error than an overload" />
+
+export const bothCompareCode = `// @expect-error TS2345 TS2769
+function both<T>(a: T, b: T): T { return a; }
+const y = both(1, "two");
+// TS2345: Argument of type '"two"' is not assignable to parameter of type '1'.
+// -- confusing: "type '1'"? T was inferred from the literal 1, not widened to number,
+// because nothing in this signature asks for the number the literal belongs to.
+
+function bothOverload(a: string, b: string): string;
+function bothOverload(a: number, b: number): number;
+function bothOverload(a: unknown, b: unknown): unknown { return a; }
+bothOverload(1, "two");
+// TS2769: No overload matches this call. The last overload gave the following error.
+//   Argument of type 'string' is not assignable to parameter of type 'number'.
+// -- clearer: it names the actual types, string and number, not a literal.`;
+
+Click **Check types** above: `both`'s error reads `Argument of type '"two"' is not assignable to parameter of type '1'` — a reader has to stop and wonder why a parameter's type is the *literal* `1` rather than `number`. It happens because `T` was pinned to the literal type of the first argument before the second was even checked. `bothOverload`'s error, `No overload matches this call. ... Argument of type 'string' is not assignable to parameter of type 'number'`, names the real types involved. Neither message is *wrong*, but the overload's is easier for a reader to act on immediately — this is the case the "generics are always better than overloads" instinct gets backwards.
+
+The reverse is common too: once you have more than two or three pairings, or the relationship between input and output is uniform (an array in, an array of the same element type out), an overload set turns into unmaintainable repetition and a generic is clearly right — every function you've seen so far in this lesson (`first`, `longest`, `getProp`) is exactly that case.
+
 <Callout title="The one-line takeaway">
-Type parameters are usually **inferred** from arguments, not written. Constrain them with `extends` when you need `T` to have a certain shape (`T extends { length: number }`) or to be a key of another type (`K extends keyof T`, returning `T[K]`). Give defaults where a sensible fallback exists. And drop any type parameter that appears only once — a generic should link positions, not decorate one.
+Type parameters are usually **inferred** from arguments, not written. Constrain them with `extends` when you need `T` to have a certain shape (`T extends { length: number }`) or to be a key of another type (`K extends keyof T`, returning `T[K]`). Drop a type parameter that links nothing — but "links nothing" means no connection between positions anywhere in the signature, not "appears once in the parameter list." Reach for an overload set instead of a generic when you have a small, fixed number of exact pairings; a generic can sometimes produce a more confusing error than an overload would.
 </Callout>
+
+## Mental Model
+
+A type parameter is a variable whose "value" is a type, solved once per call from the positions it's written into. Ask two questions about any `T` you read: **where does it come from** (which argument position feeds it), and **where does it go** (which other positions — parameters, return type — does it constrain once it's fixed)? If the answer to "where does it go" is "nowhere else," the type parameter is decorative. If a constraint doesn't actually get used inside the body, it's also worth asking whether the constraint is doing anything beyond documentation.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Unconstrained `T` | Works for literally any type | Can't assume any shape — no property access, no arithmetic |
+| `T extends { shape }` | Lets the body use the shape while keeping the specific type in the return | Every caller's type must satisfy the constraint, which can reject otherwise-valid values that just don't have that exact shape |
+| `const T` | Preserves literal/tuple shape without `as const` at every call site | Only helps when the literal is still visible to that call — can't undo widening that already happened |
+| Overload set | Clear, per-case error messages; documents exact valid pairings | Doesn't scale — each new valid combination is a new signature to write and maintain |
+
+## Common Misconceptions
+
+- **A type parameter used once in the parameter list is always a smell.** Only if it's used once in the *whole signature*. If it also appears in the return type, it's linking input to output — that's a real generic.
+- **A generic function's error messages are always clearer than an overload's.** Not necessarily — a generic can pin a type parameter to a narrow literal type early, producing a confusing "not assignable to type '1'"-style message that an equivalent overload set would state in plain, named types.
+- **`const` on a type parameter reaches back and un-widens whatever you pass, no matter how it got there.** It only captures literals that are still literals *at the call site*. A value already widened by its own `let` declaration, or read out of an already-widened array, arrives at the generic call pre-widened, and `const` has nothing left to preserve.
+
+## Reading AI-generated code
+
+A generic that exists purely to wrap a cast is a common AI-generated shape — it looks like type safety, but the type parameter is unconstrained and never checked against anything real:
+
+- Look for a generic helper whose body is `return value as T` (or `as unknown as T`) with `T` unconstrained. This compiles for *any* `T` the caller names, exactly like a plain `as` cast — the generic adds nothing but the appearance of having "typed" the value.
+- Check whether the function ever narrows, validates, or otherwise inspects the value before returning it as `T`. If it doesn't, the function's real type is `(value: unknown) => any`, no matter what its signature claims.
+- A chain of two such helpers (one parses to `unknown`, the next casts `unknown` to `T`) has the exact same problem as a single cast, just spread across two calls that each look individually reasonable.
+
+<SpotTheBug code={`interface Config { retries: number; timeout: number }
+
+function assertType<T>(value: unknown): T {
+  return value as T;
+}
+
+function loadConfig(raw: unknown): Config {
+  return assertType<Config>(raw);
+}
+
+const cfg = loadConfig({ retries: 3 });
+console.log(cfg.timeout.toFixed(0));`}>
+This compiles with zero errors. `assertType<T>` is unconstrained and its body is a bare `value as T` — it will "successfully" claim *any* shape for *any* input, because `as` from `unknown` to a concrete type is always allowed with no runtime check attached. `loadConfig({ retries: 3 })` has no `timeout` field at all, but `assertType<Config>(raw)` asserts it into a `Config` anyway, so `loadConfig`'s return type lies about what it actually validated. Calling `cfg.timeout.toFixed(0)` then crashes with `Cannot read properties of undefined (reading 'toFixed')`, because `cfg.timeout` really is `undefined` at runtime — the generic never checked. The fix is the same theme as the module's index lesson: a generic type parameter is only as trustworthy as an actual runtime check somewhere in the chain — replace the cast with real validation (a schema library, or explicit field checks) before trusting the shape.
+</SpotTheBug>
 
 export const quizConstraints = [
   {
@@ -126,6 +246,7 @@ export const quizConstraints = [
       'It is required for all generics',
     ],
     answer: 1,
+    explain: 'A constraint like `T extends { length: number }` lets the function body safely use `.length` while still returning the caller\'s specific type, not the wider constraint.',
   },
   {
     q: 'In `function getProp<T, K extends keyof T>(obj: T, key: K): T[K]`, what does the return type `T[K]` represent?',
@@ -136,26 +257,51 @@ export const quizConstraints = [
       'A union of all property types',
     ],
     answer: 1,
+    explain: '`T[K]` is an indexed access — the exact type of the property whose name is the specific literal `K` was inferred as.',
   },
   {
-    q: 'A type parameter that appears only once in a signature is usually:',
+    q: 'Is `function tag<T>(value: T): Tagged<T>` (where `Tagged<T> = { value: T }`) a "used once" smell?',
     options: [
-      'The most powerful kind of generic',
-      'A sign the generic is pointless — it links nothing, so use a concrete type or `unknown`',
-      'Required by the compiler',
-      'Faster than a constrained one',
+      'Yes — `T` appears only once in the parameter list',
+      'No — `T` also appears in the return type, so it links the argument to the result even though it appears once among the parameters',
+      'Yes — every type parameter must appear at least twice in the parameters',
+      'No — because `Tagged` is an interface',
     ],
     answer: 1,
+    explain: 'The smell is about links, not raw counts. `T` connects the argument to the return type here, so a caller misusing the result is still caught — unlike `logLoose<T>(x: T): void`, where `T` links nothing.',
   },
   {
-    q: 'What does a default type parameter like `<T = string>` do?',
+    q: '```ts\nfunction both<T>(a: T, b: T): T { return a; }\nconst y = both(1, "two");\n```\nWhat does the resulting error say, and why is it confusing?',
     options: [
-      'Forces every caller to pass `string`',
-      'Supplies a fallback type used when `T` is not inferred or provided',
-      'Makes `T` read-only',
-      'Disables inference',
+      '"Argument of type string is not assignable to parameter of type number" — perfectly clear',
+      '"Argument of type \'\\"two\\"\' is not assignable to parameter of type \'1\'" — confusing because it names the literal type 1, not number, since T was pinned to the first argument\'s literal type',
+      'It does not compile-error at all',
+      '"T is not a valid type parameter name"',
     ],
     answer: 1,
+    explain: 'The first argument fixes T to the literal type 1 (not the widened number), so the second argument is checked against that literal — producing a message that confuses readers unfamiliar with how literal inference works.',
+  },
+  {
+    q: 'Compared to the `both<T>` generic above, why can an overload set give a clearer error for the same kind of call?',
+    options: [
+      'Overloads never produce errors',
+      'Each overload signature names concrete types (like `string` and `number`) directly, so a mismatch is reported against those names instead of an inferred literal type',
+      'Overloads are always shorter to write',
+      'Generics cannot have more than one parameter',
+    ],
+    answer: 1,
+    explain: 'An overload set states its valid pairings in plain, named types up front. When a call fails, the reported mismatch names those types directly, without going through type-parameter inference and its literal-pinning behavior.',
+  },
+  {
+    q: 'A generic helper `function firstOf<const T>(items: T[]): T` is called with `firstOf(arr)` where `const arr = ["a", "b"]`. What type does `firstOf` return, and why?',
+    options: [
+      '`"a" | "b"` — `const T` preserves the literal union from the array',
+      '`string` — `arr` was already widened to `string[]` at its own declaration, before `firstOf` ever saw it, so there is no literal left for `const` to preserve',
+      '`readonly ["a", "b"]` — `const T` always produces a readonly tuple',
+      'A compile error, because `const T` requires a `readonly` array',
+    ],
+    answer: 1,
+    explain: '`const arr = [...]` still widens element types in an ordinary mutable array literal; only `as const` or a rest-parameter capture at the call site keeps literals. `const T` cannot retroactively undo widening that already happened before the call.',
   },
 ];
 

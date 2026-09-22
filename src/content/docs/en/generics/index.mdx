@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem generics solve
 
@@ -54,12 +56,114 @@ export const genDiagram = `flowchart LR
 | Lesson | What you'll learn |
 |--------|-------------------|
 | Functions & constraints | Type parameters, `extends` constraints, default type parameters |
-| Classes & interfaces | Generic classes, interfaces, and per-method type parameters |
+| Classes & interfaces | Generic classes, interfaces, per-method type parameters, and variance |
 | Conditional types | `T extends U ? X : Y` and distribution over unions |
 | Inference & `infer` | How type arguments are inferred, and extracting types with `infer` |
 
+## The link only exists if the implementation keeps it
+
+Everything above sells generics on one promise: `identity<T>` returns *exactly* the type it received, unlike `identityAny`. That promise is a property of the **signature**, and the compiler enforces it at every call site — but nothing forces the *implementation* to actually honor it internally. A "generic" that appears in the signature purely to look safe, while the body quietly breaks the link with a cast, is no safer than `identityAny` was:
+
+```ts
+interface User { id: string; name: string }
+
+// T appears ONLY in the return position — nothing links it to any argument,
+// so it can never be inferred from a call. This "generic" is really `as T`
+// with extra steps: the caller supplies T by hand, and the compiler trusts it.
+function parseAs<T>(json: string): T {
+  return JSON.parse(json);
+}
+
+const user = parseAs<User>('{"id":"1"}'); // no "name" field at all — still compiles
+console.log(user.name.toUpperCase());
+```
+
+```ts
+// @run
+interface User { id: string; name: string }
+
+function parseAs<T>(json: string): T {
+  return JSON.parse(json);
+}
+
+const user = parseAs<User>('{"id":"1"}');
+console.log(user.name.toUpperCase());
+```
+
+This compiles with zero errors — `JSON.parse` returns `any`, and `any` is assignable to anything, including the caller's chosen `T`. Running it crashes:
+
+```text
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+Compare that with a generic that keeps its promise, because its type parameter genuinely connects an argument to the result:
+
+<TSPlayground code={boxCode} id="generics-index-box" title="A real link between input and output" />
+
+export const boxCode = `interface Box<T> { value: T }
+
+// T appears once in the parameter list — but it ALSO appears in the return
+// type, linking the argument to the result. That is a real generic link,
+// not a decoration, even though T shows up only once among the parameters.
+function box<T>(value: T): Box<T> {
+  return { value };
+}
+
+const b = box("hi");
+//    ^? Box<string>
+console.log(b.value.toUpperCase()); // ✅ still string — the link survived`;
+
+The difference is not how many times `T` is written — it is whether `T` actually ties something the caller supplies to something the caller gets back. `box`'s `T` does that. `parseAs`'s `T` does not: it is a caller-supplied label glued onto a value the function never inspected, which is exactly what a cast is. The rest of this module is about building generics whose type parameters genuinely link positions — and about the two lessons ahead (classes, and conditional types + inference) that show exactly how far that link can be trusted.
+
+## Mental Model
+
+<Mermaid title="A generic is a promise the signature makes and the implementation must keep" code={genMentalDiagram} />
+
+export const genMentalDiagram = `flowchart TD
+  sig["Signature: identity of T takes T returns T"] --> promise["Promise: whatever comes in, comes back out unchanged"]
+  promise --> kept["Implementation actually uses the argument\n(box, identity, first)"] --> real["Link is real — compiler-checked at every call"]
+  promise --> broken["Implementation ignores the argument, casts, or parses untyped data\n(parseAs, JSON.parse as T)"] --> fake["Link is fake — caller's T is trusted, never verified"]`;
+
+A generic signature is a contract, but TypeScript only checks that the contract's *shape* is consistent — that every place `T` appears agrees with every other place. It does not, and cannot, check that the function's body actually derives the output from the input the way the signature implies. `identity<T>(x: T): T { return x; }` keeps the promise because it is trivially forced to: there is nothing else to return. The moment a function's body can produce a `T`-shaped value without deriving it from an argument — parsing JSON, reading `any`, casting — the signature becomes a claim floated on trust, identical in kind to the custom type guards from the narrowing lesson that the compiler trusts without checking their bodies.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| `any` | Simplest to write, accepts everything | Throws away the input↔output link entirely; every use is silently unchecked |
+| Generic (`T` linking real positions) | Compiler enforces the link at every call site, for every concrete type | Requires designing a signature where `T` is actually inferable, not just declared |
+| Generic used as a disguised cast (`T` only in output) | Looks exactly like a safe generic in the signature | Cannot be inferred, must be supplied by the caller, and is only as trustworthy as whatever the caller claims |
+| Overload set | Documents a small, fixed set of exact input→output pairings individually | Doesn't scale past a handful of cases; see Generic Functions & Constraints for a case where it beats a generic |
+
+## Common Misconceptions
+
+- **Any function with `<T>` in its signature is automatically type-safe.** Only if `T` is actually derived from something the caller passes in. A `T` that appears only in the return position is filled in by the caller's own annotation, with nothing to check it against — no different from an `as` cast.
+- **A generic function is always better than one typed with `any`.** Only if the generic's type parameter genuinely links a position the caller controls to a position the caller reads back. Otherwise it's `any` wearing a safer-looking signature.
+- **Generics exist to make code "more type-safe" in the abstract.** They exist for one specific reason: to preserve a link between input and output types that a single concrete type or `any` would lose. If there's no link to preserve, a generic adds ceremony without adding safety.
+
+## Reading AI-generated code
+
+Before trusting a generic function in generated code, find every position `T` (or any other type parameter) appears in, and ask whether at least one of those positions is a *parameter* the compiler can actually inspect at the call site:
+
+- A type parameter that appears **only in the return type** (`function parseAs<T>(json: string): T`) can never be inferred — it is supplied by the caller and trusted, exactly like a cast. This is one of the most common shapes in AI-generated data-fetching and parsing code.
+- A type parameter that appears in a parameter **whose value is itself untyped or `any`** (the result of `JSON.parse`, `fetch().json()`, a third-party callback typed `any`) gives you the appearance of a link with none of the safety — the "input" side was never actually checked either.
+- A generic wrapper that immediately casts its own parameter to `any` or `unknown` internally, then casts the result back to `T`, has the same problem as `parseAs`, just spread across two lines instead of one.
+
+<SpotTheBug code={`interface Product { id: string; price: number }
+
+function fetchTyped<T>(url: string): Promise<T> {
+  return fetch(url).then((r) => r.json());
+}
+
+async function run() {
+  const product = await fetchTyped<Product>("/api/product/1");
+  console.log(product.price.toFixed(2));
+}`}>
+This compiles with zero errors and can still crash or silently misbehave at runtime. `T` appears only in the return position of `fetchTyped` — it is never derived from `url` or from anything the function actually inspects. `.json()` returns `Promise<any>`, and `any` is assignable to the caller's chosen `T` with no verification at all. If the endpoint's real response shape doesn't match `Product` (a renamed field, a price sent as a string, a wrapped `{ data: ... }` envelope), `fetchTyped<Product>` still "returns" a `Product` as far as the type system is concerned, and `product.price.toFixed(2)` either crashes or silently does the wrong thing depending on what actually came back. The fix is the same one from the Typing APIs & Boundaries lesson: validate the shape at the boundary (a schema library, or at minimum a runtime check) instead of asserting it through a generic type parameter that nothing ever checks against reality.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Generics let one implementation work across many types **without losing type information** — the thing `any` throws away. A type parameter like `T` is a placeholder filled in by the caller or by inference, so `identity<T>` returns exactly the type it received. Think of a generic as a function that runs at the type level.
+Generics let one implementation work across many types **without losing type information** — the thing `any` throws away. A type parameter like `T` is a placeholder filled in by the caller or by inference, so `identity<T>` returns exactly the type it received — but that guarantee only holds when `T` is genuinely derived from something the caller passes in; a `T` that appears only in the return type is a cast wearing a safer-looking signature.
 </Callout>
 
 export const quizIndex = [
@@ -72,6 +176,7 @@ export const quizIndex = [
       'Memory layout',
     ],
     answer: 1,
+    explain: 'A generic keeps the input and output types tied together for every concrete type it is called with; `any` breaks that link entirely, so nothing downstream is checked.',
   },
   {
     q: 'In `function identity<T>(x: T): T`, what is `T`?',
@@ -82,6 +187,7 @@ export const quizIndex = [
       'An alias for `any`',
     ],
     answer: 1,
+    explain: '`T` is resolved at each call site, either by inference from the argument or by an explicit type argument — it never exists as a runtime value.',
   },
   {
     q: 'What is the name for "one implementation parameterized over types"?',
@@ -92,6 +198,40 @@ export const quizIndex = [
       'Duck typing',
     ],
     answer: 1,
+    explain: 'Parametric polymorphism is one implementation that works uniformly across many types via a type parameter, as opposed to overloading (multiple signatures) or inheritance.',
+  },
+  {
+    q: '```ts\ninterface User { id: string; name: string }\n\nfunction parseAs<T>(json: string): T {\n  return JSON.parse(json);\n}\n\nconst user = parseAs<User>(\'{"id":"1"}\');\nconsole.log(user.name.toUpperCase());\n```\nDoes this compile, and why or why not?',
+    options: [
+      'Compile error — `T` cannot be used in a return type alone',
+      'Compiles with zero errors — `T` appears only in the return position, so it is never checked against the actual argument or the real JSON shape',
+      'Compile error — `JSON.parse` cannot be assigned to a generic type',
+      'Compiles, and it is fully safe because `T` is a generic',
+    ],
+    answer: 1,
+    explain: '`JSON.parse` returns `any`, which is assignable to anything including the caller-supplied `T`. Since `T` never appears in a parameter, nothing ties it to the real shape of the data — calling `user.name.toUpperCase()` crashes at runtime because the parsed object has no `name` field.',
+  },
+  {
+    q: 'Why does `function box<T>(value: T): Box<T>` count as a genuine generic link, even though `T` appears only once among the *parameters*?',
+    options: [
+      'It does not — a type parameter must appear at least twice in the parameter list',
+      '`T` also appears in the return type (`Box<T>`), tying the argument to the result — that is what makes it a real link, not the raw count of appearances',
+      'Because `Box` is an interface, not a type alias',
+      'Because the caller must always supply `T` explicitly',
+    ],
+    answer: 1,
+    explain: 'What matters is whether a type parameter connects an input position to an output position, not how many times it is written. `box` connects them; a function like `log<T>(x: T): void` does not, even though `T` also appears once.',
+  },
+  {
+    q: 'A generic class or interface can also have a variance problem — assigning `Stack<Dog>` to a variable typed `Stack<Animal>`. Where in this module is that covered in full?',
+    options: [
+      'Generics index (this lesson)',
+      'Generic Classes & Interfaces',
+      'Conditional Types',
+      'It is not covered in this module',
+    ],
+    answer: 1,
+    explain: 'Variance — whether a compound generic type is safe to treat as a supertype of itself with a different type argument — is covered in full where generic classes are introduced, since it only arises once a type parameter is fixed per instance.',
   },
 ];
 

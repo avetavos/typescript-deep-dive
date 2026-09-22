@@ -1,6 +1,6 @@
 ---
 title: 'Generic Classes & Interfaces'
-description: 'Parameterizing classes, interfaces, and type aliases — and the difference between a type parameter fixed at construction and one chosen per method call.'
+description: 'Parameterizing classes, interfaces, and type aliases, the difference between a type parameter fixed at construction and one chosen per method call, the AI smell of mixing them up, and variance in full.'
 sidebar:
   order: 3
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Generic interfaces and type aliases
 
@@ -65,7 +67,9 @@ const last = numbers.pop();
 
 Once you write `new Stack<number>()`, `T` is `number` for the life of that object. Often you don't even write it — `new Stack()` with a first `push(1)` can't infer, but many designs let inference fill `T` from a constructor argument.
 
-When nothing lets it infer at all, `T` doesn't become an error — it becomes `unknown`. `new Stack()` alone gives you a `Stack<unknown>`, and since `unknown` in a *parameter* position accepts anything, both pushes below type-check:
+## `unknown`, not `any`, when there is nothing to infer from
+
+When nothing lets `T` infer at all, `T` doesn't become an error and it doesn't become `any` either — it becomes **`unknown`**. `new Stack()` alone gives you a `Stack<unknown>`:
 
 ```ts
 class Box<T> {
@@ -78,6 +82,25 @@ const b = new Box();
 b.push(1);
 b.push("two"); // ✅ also compiles — unknown accepts any value in parameter position
 ```
+
+Both pushes above type-check, and that's easy to misread as `T` having quietly become `any`. It hasn't — the difference matters everywhere else `b` is used. `unknown` in a **parameter position accepts anything**, which is why `push` never complains no matter what you hand it; but `unknown` in a position you *read from* still forces you to narrow before you can do anything with it, the same as any other `unknown` value. `any` would have let you do both — write anything in, and read the result back out as any type you like, no narrowing required. `unknown` only gives you the first half:
+
+```ts
+// @expect-error TS18046
+class Box<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const b = new Box();
+b.push(1);
+const x = b.pop();
+//    ^? unknown | undefined
+x.toFixed(0); // ❌ 'x' is of type 'unknown' — you must narrow it first, unlike any
+```
+
+That's the real fix implied by the earlier example: don't leave `T` for the compiler to default — write `new Stack<number>()`, or design the constructor so an argument lets inference fill it in. `unknown` is the compiler being honest about "I genuinely don't know," not a silent downgrade to "anything goes."
 
 ## Per-method type parameters
 
@@ -129,8 +152,364 @@ class UserRepository implements Repository<User> {
 }
 ```
 
+## An AI smell: type parameter fixed at the wrong scope
+
+Now that you know class parameters are per-instance and method parameters are per-call, there's a specific mistake generated code makes surprisingly often: putting the type parameter on the *wrong one* of the two.
+
+**Smell 1 — should be a method parameter, declared on the class instead.** A `T`/`U` pair on the class forces every use of an instance to agree on the same types, even when each call was really meant to be independent:
+
+```ts
+// @expect-error TS2322 TS2339
+class MapperWrong<T, U> {
+  transform(items: T[], fn: (item: T) => U): U[] {
+    return items.map(fn);
+  }
+}
+
+const m = new MapperWrong<number, string>();
+m.transform([1, 2, 3], (n) => n.toString());
+m.transform(["a", "b"], (s) => s.length); // ❌ T is locked to number for this instance
+```
+
+Once `m` is constructed as `MapperWrong<number, string>`, every later `.transform` call is stuck with `T = number`, even though nothing about "transform this array with this function" needs to remember a type across calls. The fix is to move `T` and `U` onto the method, where they belong:
+
+```ts
+class Mapper {
+  transform<T, U>(items: T[], fn: (item: T) => U): U[] {
+    return items.map(fn);
+  }
+}
+
+const m = new Mapper();
+m.transform([1, 2, 3], (n) => n.toString());   // T = number, U = string, this call only
+m.transform(["a", "b"], (s) => s.length);       // ✅ T = string, U = number, independent call
+```
+
+**Smell 2 — should be a class parameter, declared on the method instead.** This direction is sneakier, because it often still compiles and still "looks" generic:
+
+```ts
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42); // compiles — push<U> is a fresh, disconnected U every call
+const claimed = sw.pop<string>(); // claims string — but the real top item is 42
+console.log(claimed!.toUpperCase()); // "trust me" — U isn't linked to what was actually pushed
+```
+
+```ts
+// @run
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42);
+const claimed = sw.pop<string>();
+console.log(claimed!.toUpperCase());
+```
+
+This compiles with **zero errors**, and running it crashes:
+
+```text
+TypeError: claimed.toUpperCase is not a function
+```
+
+Here `items` is typed `any[]` internally, so it never actually shares a type with `push`'s or `pop`'s per-call `U` — each `U` is decorative, exactly like the "used once, links nothing" smell from the previous lesson, just spread across two methods that superficially look linked because they share a letter. The real `Stack<T>` from the top of this lesson is the fix: one class-level `T`, shared by `push` and `pop`, actually tying what goes in to what can come out.
+
+## Variance: does `Stack<Dog>` fit where `Stack<Animal>` is expected?
+
+Once a type parameter is fixed per instance, a new question appears that never comes up for a plain function: if `Dog` is a subtype of `Animal`, is `Stack<Dog>` a subtype of `Stack<Animal>`? This question — **variance** — has a different answer depending on *how* the type parameter is used inside the generic type, and TypeScript's answer is, in one specific case, unsound on purpose.
+
+### Method shorthand: bivariant, and unsound
+
+Assign a `Stack<Dog>` to a variable typed `Stack<Animal>`, using the ordinary method-shorthand `push(item: T): void` from this lesson's `Stack`:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackMethod<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackMethod<Dog>();
+const animals: StackMethod<Animal> = dogs; // allowed — no error at all
+animals.push(new Cat()); // pushes a Cat into what is really the Dog stack
+```
+
+This compiles with **zero errors**. `animals` is typed `StackMethod<Animal>`, so pushing a `Cat` (an `Animal`) looks completely fine — but `animals` and `dogs` are the *same object*. Pop from the real `Dog` stack and you get the `Cat` back, typed as `Dog`:
+
+```ts
+// @run
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackMethod<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackMethod<Dog>();
+const animals: StackMethod<Animal> = dogs;
+animals.push(new Cat());
+const back = dogs.pop();
+console.log(back!.bark());
+```
+
+```text
+TypeError: back.bark is not a function
+```
+
+This is real, known unsoundness, not a bug you triggered by accident: methods written with **shorthand syntax** (`push(item: T): void`) are checked **bivariantly** — TypeScript allows the assignment in *either* direction, `Stack<Dog>` to `Stack<Animal>` or the reverse, because enforcing strict contravariance here broke enough real-world code (especially callback-heavy APIs) when it was tried. `strictFunctionTypes` — the flag that tightens this exact check — was deliberately scoped to skip method shorthand for this reason.
+
+### Property function syntax: correctly rejected
+
+Write the same method as a **property whose type is a function** instead of shorthand, and the same assignment is rejected:
+
+```ts
+// @expect-error TS2322
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class StackProp<T> {
+  private items: T[] = [];
+  push: (item: T) => void = (item) => { this.items.push(item); };
+  pop(): T | undefined { return this.items.pop(); }
+}
+
+const dogs = new StackProp<Dog>();
+const animals: StackProp<Animal> = dogs;
+animals.push(new Cat());
+```
+
+The error names exactly the mismatch a sound type system should catch:
+
+```text
+error TS2322: Type 'StackProp<Dog>' is not assignable to type 'StackProp<Animal>'.
+  Types of property 'push' are incompatible.
+    Type '(item: Dog) => void' is not assignable to type '(item: Animal) => void'.
+      Types of parameters 'item' and 'item' are incompatible.
+        Property 'bark' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+Same class shape, same intent, two different outcomes — purely because of *how the method was spelled*. This is one of the sharpest "reading TypeScript" lessons in the language: a method written with shorthand syntax on a class or interface is checked more permissively than the exact same signature written as a property.
+
+### `in` and `out`: TypeScript does have variance annotations
+
+Unlike some type systems that only reason about variance implicitly, TypeScript (4.7+) lets you *declare* it, and checks your declaration against how the type parameter is actually used:
+
+```ts
+// @expect-error TS2636
+interface Consumer<out T> {
+  consume: (value: T) => void; // T is only ever consumed -- this is really contravariant
+}
+```
+
+```text
+error TS2636: Type 'Consumer<sub-T>' is not assignable to type 'Consumer<super-T>' as implied by variance annotation.
+  Types of property 'consume' are incompatible.
+    Type '(value: sub-T) => void' is not assignable to type '(value: super-T) => void'.
+      Types of parameters 'value' and 'value' are incompatible.
+        Type 'super-T' is not assignable to type 'sub-T'.
+```
+
+`out T` means "`T` only appears in output positions" (covariant — the same direction as the type argument: `Dog` in, `Dog` out means `Producer<Dog>` fits where `Producer<Animal>` is expected). `in T` means "`T` only appears in input positions" (contravariant — the opposite direction). `in out T` means both, i.e. **invariant** — no safe subtyping either way. You'll meet this same vocabulary in other languages' own variance systems: Kotlin and C# use the identical `in`/`out` keywords; Java spells it with wildcards (`? extends T` for covariant, `? super T` for contravariant); Flow uses `+`/`-` prefixes. TypeScript's version is unusual in one way worth naming explicitly: **the annotations are optional, and mainly a documentation-and-performance aid for library authors** — TypeScript already computes variance structurally whether you annotate or not, and the annotation is checked as an assertion (that's what produced `TS2636` above) rather than a request that changes what the checker enforces elsewhere.
+
+That last point matters: annotating `Stack<out T>` doesn't change whether `Stack<Dog>` fits where `Stack<Animal>` is expected — the structural rules from this section already decided that before you wrote a single `in`/`out`. And because the annotation is checked using the *same* variance measurement as ordinary assignability, it inherits the exact same method-shorthand blind spot:
+
+```ts
+// declaring `out T` on a class whose push is method shorthand -- compiles clean,
+// even though push(item: T) is genuinely used contravariantly. The bivariance
+// that lets Stack<Dog> assign to Stack<Animal> also fools the annotation checker.
+class StackOut<out T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+  pop(): T | undefined { return this.items.pop(); }
+}
+```
+
+Change `push` to property-function syntax on the same declaration and `TS2636` fires immediately, for the identical reason the assignment itself gets rejected in the previous section. `in`/`out` in TypeScript, in other words, is a real feature you will meet in error messages and in library `.d.ts` files — but it documents and double-checks the same variance the compiler was already computing, it doesn't add a new enforcement mechanism on top of it.
+
+### Covariance: `readonly` arrays
+
+An array you can only read from is safe to treat covariantly, and TypeScript allows exactly that:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare const dogs: readonly Dog[];
+const animals: readonly Animal[] = dogs; // ✅ covariant — readonly arrays allow this safely
+```
+
+There's no `push` to smuggle a `Cat` through, so there's no unsoundness here — every `Dog` really is a valid `Animal` to read.
+
+### The same thing, but mutable: known, deliberate unsoundness
+
+Drop `readonly` and the identical assignment is **still allowed** — arrays are covariant in TypeScript even when mutable, which is well-known, long-standing unsoundness kept for JavaScript-code compatibility reasons:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+declare const dogs: Dog[];
+const animals: Animal[] = dogs; // compiles — mutable arrays are covariant too
+animals.push(new Cat()); // pushes a Cat into the array dogs also points at
+```
+
+```ts
+// @run
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+declare const dogsSrc: Dog[];
+const dogs: Dog[] = [new Dog()];
+const animals: Animal[] = dogs;
+animals.push(new Cat());
+console.log(dogs[dogs.length - 1].bark());
+```
+
+```text
+TypeError: dogs[dogs.length - 1].bark is not a function
+```
+
+### Contravariance: callback parameters
+
+A standalone function type (not a method) is checked **contravariantly** in parameter position under `strictFunctionTypes` — the *opposite* direction from the type argument, and this direction is sound. A callback that accepts a *wider* type than required is safe to use where a narrower one is expected, because it can still handle every value that arrives:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare function forEachDog(cb: (d: Dog) => void): void;
+const handleAnimal = (a: Animal) => console.log(a.name);
+forEachDog(handleAnimal); // ✅ a callback that handles ANY Animal can certainly handle a Dog
+```
+
+The reverse fails, correctly — a callback that only knows how to handle `Dog` can't be trusted with every `Animal`:
+
+```ts
+// @expect-error TS2345
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare function forEachAnimal(cb: (a: Animal) => void): void;
+const handleDog = (d: Dog) => console.log(d.bark());
+forEachAnimal(handleDog); // ❌ handleDog can't handle every Animal (e.g. a Cat)
+```
+
+```text
+error TS2345: Argument of type '(d: Dog) => void' is not assignable to parameter of type '(a: Animal) => void'.
+  Types of parameters 'd' and 'a' are incompatible.
+    Property 'bark' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+### Invariance: mutable containers should reject both directions — TypeScript doesn't enforce it
+
+In a type system with real invariance (Java's `List<T>`, for instance), a mutable container's type parameter can't safely vary in *either* direction: reading requires covariance, writing requires contravariance, and a container that does both needs both, which only invariance — no safe substitution either way — actually guarantees. TypeScript has no invariant *enforcement* for an ordinary mutable field; it checks object properties structurally and covariantly, the same unsoundness you just saw for mutable arrays, and it corrupts state through the write side exactly the same way:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class Box<T> {
+  value: T;
+  constructor(value: T) { this.value = value; }
+}
+
+const dogBox = new Box<Dog>(new Dog());
+const animalBox: Box<Animal> = dogBox; // TS allows this — Box<T> is not enforced invariant
+animalBox.value = new Cat(); // writes THROUGH to the same object dogBox holds
+```
+
+<TSPlayground code={invarianceCode} id="variance-invariance" title="Invariance TypeScript doesn't enforce: a write-through corruption" />
+
+export const invarianceCode = `class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class Box<T> {
+  value: T;
+  constructor(value: T) { this.value = value; }
+}
+
+const dogBox = new Box<Dog>(new Dog());
+const animalBox: Box<Animal> = dogBox; // TS allows this -- Box<T> is not enforced invariant
+animalBox.value = new Cat(); // writes through the SAME object dogBox holds
+console.log(dogBox.value.bark()); // dogBox.value is now a Cat -- crash`;
+
+Click **Check types**: zero diagnostics. Click **Run**: it crashes with `dogBox.value.bark is not a function`, because `animalBox.value = new Cat()` really did overwrite the `Dog` that `dogBox` was holding — `dogBox` and `animalBox` are the same object in memory, and the assignment went through the wider, permissive type. A language with real invariance for mutable generics (Java, Kotlin's `Array<T>`) rejects the `dogBox`-to-`animalBox` assignment outright, at the first line. TypeScript's structural, property-by-property covariant check doesn't have a concept of "this field is written to, so treat it invariantly" — it just checks whether `Dog` is assignable to `Animal` for that property and calls it done.
+
+<Callout title="A dedicated lesson follows">
+This section covers what you need to *read* variance correctly today. A dedicated lesson later in this course goes deeper — the formal covariant/contravariant/invariant rules for every position, and how to reason about variance in your own generic types systematically.
+</Callout>
+
+## Mental Model
+
+Ask three questions about any generic type you're reading, in order: **(1)** Is the type parameter fixed per instance (class-level) or fresh per call (method-level)? **(2)** For each position `T` appears in, is it something you read (covariant, safe to widen), something you write (contravariant for a standalone function parameter, but bivariant and unsound for a method-shorthand parameter), or both (invariant — but TypeScript rarely actually enforces this for a plain mutable field)? **(3)** If two variables of the same generic type but different type arguments end up aliasing the same object — through exactly the unsound assignments this lesson demonstrated — what's the worst thing one of them can do to the other?
+
+## Trade-offs
+
+| Design | Benefit | Cost |
+|---|---|---|
+| Class-level type parameter | One type shared correctly across every method of an instance | Wrong choice if different calls genuinely need independent types — see Smell 1 |
+| Method-level type parameter | Independent per call, no cross-call coupling | Wrong choice if the type needs to persist across calls on the same instance — see Smell 2 (decorative, unsound) |
+| Method shorthand (`f(x: T): void`) | Concise, and needed for normal OOP method overriding to work at all | Bivariant — unsound for mutating generic containers, as this lesson's `StackMethod` showed |
+| Property function (`f: (x: T) => void`) | Correctly contravariant under `strictFunctionTypes` — catches real bugs | More verbose; loses some OOP override ergonomics |
+| `readonly T[]` / `in`/`out` annotations | Documents and enforces the safe direction explicitly | Doesn't retroactively fix a design that needs to both read and write unsoundly |
+
+## Common Misconceptions
+
+- **`unknown` in a generic that couldn't infer means the class is now unsafe, just like `any`.** It's `unknown`, not `any` — writing into it (parameter positions) is unrestricted, but reading it back out still requires narrowing before use, unlike `any`.
+- **A generic class's variance is one fixed property of the class.** It depends on *how each member uses* the type parameter, position by position, and — for methods — on whether that member is written with shorthand or property-function syntax. The exact same `Stack<T>` shape can be sound or unsound in the same file depending on which syntax you pick for `push`.
+- **TypeScript's `in`/`out` annotations make a generic type safe.** They document and *assert* a variance the checker already computes, and are checked against the *measured* variance — which itself inherits method-shorthand bivariance. Annotating `out T` on a class whose push is method shorthand compiles clean even though the underlying unsoundness is still there.
+- **Mutable generic containers in TypeScript are invariant, the way they are in Java.** They're structurally covariant like everything else in TypeScript's object model — nothing stops you from assigning `Box<Dog>` to `Box<Animal>` and corrupting the original through the write side.
+
+## Reading AI-generated code
+
+Two questions catch most generated-code mistakes with type parameters:
+
+- **Is the type parameter on the right declaration?** If every call to a method needs its own, independent type, and the class declares the parameter instead, look for the class's type argument being "locked in" awkwardly at construction for something that should vary call to call.
+- **Is a per-method type parameter actually connected to anything the instance stores?** If a class stores its data as `any[]` (or another untyped/widened internal representation) while its methods declare their own `<U>`, the type parameter is decorative — it lets the caller *claim* a type on the way out with nothing checking the claim against what's really stored.
+
+<SpotTheBug code={`class Cache {
+  private store: any[] = [];
+
+  set<T>(value: T): number {
+    return this.store.push(value) - 1;
+  }
+
+  get<T>(index: number): T {
+    return this.store[index];
+  }
+}
+
+const cache = new Cache();
+const id = cache.set({ name: "Ada" });
+const later = cache.get<string[]>(id);
+console.log(later.join(", "));`}>
+This compiles with zero errors. `Cache` stores everything in `store: any[]`, so `set<T>` and `get<T>` each declare their own, completely independent `T` per call — nothing links what `set` stored to what `get` is allowed to claim back. `cache.set({ name: "Ada" })` stores an object; `cache.get<string[]>(id)` then asserts the caller knows the stored value is a `string[]`, and the compiler has no way to check that claim against the real stored `any`. `later.join(", ")` type-checks because `string[]` has `.join`, but at runtime `later` is `{ name: "Ada" }`, so it crashes with `later.join is not a function`. The type parameter should have been on the *class* (`Cache<T>`), fixed once per instance, so `set` and `get` are forced to agree on the same `T` — that's the `Stack<T>` shape from earlier in this lesson, and it's exactly what per-call type parameters on a shared, untyped store can never provide.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Interfaces, type aliases, and classes can all take type parameters. On a **class**, the parameter (`Stack<T>`) is fixed when you construct the instance and shared by every method. A parameter declared on a **method** (`map<U>`) is chosen fresh on each call. Reading a generic class means asking, for each parameter: is this fixed per instance, or per call?
+Interfaces, type aliases, and classes can all take type parameters. On a **class**, the parameter (`Stack<T>`) is fixed when you construct the instance and shared by every method; on a **method**, it's chosen fresh on each call — put it on the wrong one and you get either awkward cross-call coupling or a decorative type parameter that lies. Once a parameter is fixed per instance, ask whether `Stack<Dog>` safely fits where `Stack<Animal>` is expected: it does for a `readonly` array or a method written with shorthand syntax (unsoundly — bivariance), and it doesn't for a property-function method or (structurally) for genuine invariance, which TypeScript doesn't actually enforce on ordinary mutable fields.
 </Callout>
 
 export const quizClasses = [
@@ -143,6 +522,7 @@ export const quizClasses = [
       'It is always `any`',
     ],
     answer: 1,
+    explain: 'A class-level type parameter is fixed once, at construction, and every method of that instance shares the same resolved type.',
   },
   {
     q: 'In a class `Collection<T>` with a method `map<U>(...)`, how do `T` and `U` differ?',
@@ -153,26 +533,51 @@ export const quizClasses = [
       'Neither can be inferred',
     ],
     answer: 1,
+    explain: '`T` belongs to the class declaration and is fixed at construction; `U` belongs to the method and is re-inferred independently every time `map` is called.',
   },
   {
-    q: 'What is `type Result<T> = { ok: true; value: T } | { ok: false; error: string }` an example of?',
+    q: '`new Box()` with no type argument and nothing else to infer from produces a `Box<`what`>`, and what does that mean for a later `.push(1)`?',
     options: [
-      'A generic discriminated union',
-      'A mapped type',
-      'A class',
-      'An enum',
-    ],
-    answer: 0,
-  },
-  {
-    q: 'How can a class satisfy `Repository<T>` for a specific entity?',
-    options: [
-      'It cannot implement generic interfaces',
-      'By implementing `Repository<User>`, fixing the parameter to a concrete type',
-      'By marking every method `any`',
-      'By extending `T`',
+      '`Box<any>` — anything goes, in and out, with no narrowing ever required',
+      '`Box<unknown>` — `push` accepts anything (unknown in parameter position is unrestricted), but reading a stored value back out still requires narrowing before use',
+      'A compile error — TypeScript refuses to construct without a type argument',
+      '`Box<never>` — nothing can ever be pushed',
     ],
     answer: 1,
+    explain: 'With no inference site at all, T defaults to unknown, not any. Parameter positions accept anything under unknown, but values read back out are still unknown until narrowed — unlike any, which would skip that requirement too.',
+  },
+  {
+    q: '```ts\nclass StackWrong {\n  private items: any[] = [];\n  push<U>(item: U): void { this.items.push(item); }\n  pop<U>(): U | undefined { return this.items.pop(); }\n}\nconst sw = new StackWrong();\nsw.push("first");\nsw.push(42);\nconst claimed = sw.pop<string>();\nclaimed!.toUpperCase();\n```\nDoes this compile, and what happens when it runs?',
+    options: [
+      'Compile error — push and pop must share the same type parameter',
+      'Compiles with zero errors, then crashes at runtime — pop\'s `<U>` is a fresh, disconnected type parameter each call, and `items: any[]` never actually checked what `claimed` really is',
+      'Compiles and runs safely — the type parameter guarantees the value is a string',
+      'Compile error — `any[]` cannot be used inside a generic class',
+    ],
+    answer: 1,
+    explain: 'Because push and pop each declare their own per-call U instead of sharing a class-level T, and the backing store is any[], nothing ties what was pushed to what pop is allowed to claim. The real top item is 42 (a number), so claimed!.toUpperCase() throws "claimed.toUpperCase is not a function".',
+  },
+  {
+    q: 'Assigning `Stack<Dog>` to a variable typed `Stack<Animal>` and then calling `.push(new Cat())` on it — does this compile, and does it depend on how `push` is written?',
+    options: [
+      'Never compiles, regardless of syntax — TypeScript always rejects unsound generic assignments',
+      'Compiles when `push` uses method shorthand (`push(item: T): void`) — bivariant and unsound — but is correctly rejected (TS2322) when `push` is written as a property function (`push: (item: T) => void`)',
+      'Always compiles, no matter how `push` is written',
+      'Only compiles if `T` has a default type parameter',
+    ],
+    answer: 1,
+    explain: 'Method-shorthand syntax on a class or interface is checked bivariantly, which permits this genuinely unsound assignment. The identical signature written as a property holding a function type is checked contravariantly (under strictFunctionTypes) and correctly rejects it.',
+  },
+  {
+    q: 'TypeScript lets you write `interface Producer<out T>`. What does the `out` annotation actually do?',
+    options: [
+      'It makes `Producer<Dog>` assignable to `Producer<Animal>` when it otherwise would not be',
+      'It documents and asserts the variance TypeScript already computes structurally — if the declared variance doesn\'t match how `T` is actually used, the checker reports TS2636, but the annotation itself doesn\'t change what ordinary assignability allows elsewhere',
+      'It disables variance checking entirely for that type parameter',
+      'It is required on every generic interface since TypeScript 4.7',
+    ],
+    answer: 1,
+    explain: 'in/out annotations (4.7+) are optional documentation-and-verification aids mainly aimed at library authors and checker performance for complex types — TypeScript already measures variance structurally regardless, and a wrong annotation is caught as an assertion failure (TS2636), not silently accepted or enforced as a new rule.',
   },
 ];
 

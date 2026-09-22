@@ -1,6 +1,6 @@
 ---
 title: 'Conditional Types'
-description: 'type ที่แตกกิ่ง — T extends U ? X : Y, การซ้อน condition, การ distribute ผ่าน union และวิธีปิด distribution'
+description: 'type ที่แตกกิ่ง — T extends U ? X : Y, การซ้อน condition, การ distribute ผ่าน union, [T] extends [never], infer ในตำแหน่ง covariant กับ contravariant และการอ่าน inferred type ยาว ๆ'
 sidebar:
   order: 4
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## if-statement สำหรับ type
 
@@ -44,7 +46,7 @@ type T3 = TypeName<number[]>; // "object"
 
 แต่ละ condition ถูกลองตามลำดับ เหมือน chain ของ `else if`
 
-## การ distribute ผ่าน union
+## การ distribute ต้องการ type parameter ที่ *naked*
 
 นี่คือพฤติกรรมที่ทำทุกคนงง เมื่อ type ที่ถูกตรวจเป็น **naked type parameter** และคุณส่ง **union** ให้ conditional จะ distribute ไปทีละ member แล้ว union ผลลัพธ์เข้าด้วยกัน:
 
@@ -78,9 +80,37 @@ type NoRed = MyExclude<Colors, "red">;
 
 member ที่ match `U` จะกลายเป็น `never` (และ `never` หายไปจาก union) ดังนั้นเหลือแค่ member ที่ไม่ match
 
-## ปิด distribution
+"naked" หมายถึง type parameter *เดี่ยว ๆ* ล้วน ๆ อยู่ฝั่งที่ถูกตรวจ ห่ออะไรก็ตาม — tuple, array, object — จะหยุด distribution เพราะ compiler ไม่ได้ตรวจ union ทีละ member อีกต่อไป มันตรวจ compound type ตัวเดียวที่สร้าง*จาก*ทั้ง union ทีเดียว สามอันนี้ union เดียวกัน แต่ผลลัพธ์ต่างกันสามแบบ:
 
-บางครั้งคุณอยากตรวจ union *ทั้งก้อน* ไม่ใช่ทีละ member ห่อทั้งสองฝั่งด้วย tuple หนึ่งช่องเพื่อหยุด distribution — type parameter จะไม่ "naked" อีกต่อไป:
+```ts
+// naked T: distributes, one branch per union member
+type Naked<T> = T extends string ? "str" : "other";
+
+type N1 = Naked<"a" | 42>;
+//   ^? "str" | "other"   — "a" branch gives "str", 42 branch gives "other", unioned
+```
+
+```ts
+// [T]: wrapped in a tuple — does NOT distribute, tests the whole union at once
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+
+type W1 = Wrapped<"a" | 42>;
+//   ^? "other"   — the whole union "a" | 42 is not assignable to string, so it's one test, one answer
+```
+
+```ts
+// T[]: wrapped in an array — also does NOT distribute, for the same reason
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type A1 = ArrWrapped<"a" | 42>;
+//   ^? "other"   — ("a" | 42)[] is not assignable to string[] as a whole
+```
+
+มีแค่แบบแรกเท่านั้นที่ตรวจ `T` *เดี่ยว ๆ* อยู่ฝั่งที่ถูกตรวจของ `extends` อีกสองแบบตรวจ type parameter ที่*ห่ออยู่ข้างในอะไรบางอย่าง* และการห่อ — ด้วย tuple, array หรืออะไรก็ตาม — คือสิ่งที่ปิด distribution พอดี
+
+## ปิด distribution ตั้งใจ: `[T] extends [U]`
+
+บางครั้งคุณอยากตรวจ union *ทั้งก้อน* ไม่ใช่ทีละ member — แบบ `[T]` ข้างบนก็เป็น idiom มาตรฐานสำหรับสิ่งนี้เช่นกัน:
 
 ```ts
 type IsUnionOfStrings<T> = [T] extends [string] ? true : false;
@@ -93,11 +123,141 @@ type D2 = Bad<"a" | number>; // boolean  (true | false — distributed!)
 type D3 = IsUnionOfStrings<"a" | number>; // false (whole union isn't all string)
 ```
 
-ทริก `[T] extends [U]` เป็น idiom มาตรฐาน — หยิบมาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่า distribute แล้ว union `true | false` เข้าด้วยกัน)
+หยิบ `[T] extends [U]` มาใช้เมื่อ conditional ผ่าน union ให้ผลเป็น `boolean` แบบแปลก ๆ (สัญญาณว่า distribute แล้ว union `true | false` เข้าด้วยกัน)
+
+## `[T] extends [never]`: idiom และทำไมถึงจำเป็น
+
+`never` ควรได้รับความสนใจเป็นพิเศษเพราะมันคือ **union ว่างเปล่า** — union ที่มี 0 member distributive conditional รันครั้งเดียว*ต่อ member* ดังนั้น distribute ผ่าน union ที่มี 0 member ก็รัน 0 ครั้ง และผลลัพธ์คือ `never` เอง ไม่ใช่ `true` หรือ `false`:
+
+```ts
+type IsNever<T> = T extends never ? true : false;
+
+type R1 = IsNever<never>;
+//   ^? never   — NOT true. Distributing over zero members produces zero branches to union.
+```
+
+นี่คือเซอร์ไพรส์ที่พบบ่อยที่สุดกับ `never` และ conditional type: `T extends never ? true : false` ดูเหมือนควรได้ boolean เสมอ แต่สำหรับ `T = never` โดยเฉพาะ ไม่มีอะไรให้ distribute เลย นิพจน์ทั้งหมดเลยระเหยกลายเป็น `never` ไปด้วย ทริกห่อด้วย `[T]` แบบเดียวกับที่ปิด distribution ธรรมดาก็แก้ปัญหานี้ในแบบเดียวกัน:
+
+```ts
+type IsNeverFixed<T> = [T] extends [never] ? true : false;
+
+type R2 = IsNeverFixed<never>;
+//   ^? true
+```
+
+การห่อทั้งสองฝั่งด้วย tuple หยุด type ที่ถูกตรวจจากการเป็น naked ดังนั้น `[never] extends [never]` ถูกตรวจเป็นการเทียบทั้งก้อนครั้งเดียว — เป็น `true` แบบตรงไปตรงมา — แทนที่จะ distribute ผ่าน 0 member ของ `never`
+
+## `infer` ในตำแหน่ง covariant เทียบกับ contravariant เคียงข้างกัน
+
+บท Inference & `infer` โชว์ว่าการซ้ำชื่อ `infer` ในตำแหน่ง covariant (output) ให้ **union** วางชื่อซ้ำเดียวกันในตำแหน่ง contravariant (parameter) แทน แล้วมันให้ **intersection** — สองพฤติกรรมนี้อยู่เคียงข้างกันในโค้ดจริง:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// covariant position (a return type): repeated infer produces a UNION
+type ReturnOf<T> = T extends { a: () => infer R; b: () => infer R } ? R : never;
+type Cov = ReturnOf<{ a: () => string; b: () => number }>;
+type _cov = Expect<Equal<Cov, string | number>>;
+
+// contravariant position (a parameter type): repeated infer produces an INTERSECTION
+type ParamOf<T> = T extends { a: (x: infer P) => void; b: (x: infer P) => void } ? P : never;
+type Contra = ParamOf<{ a: (x: string) => void; b: (x: number) => void }>;
+type _contra = Expect<Equal<Contra, string & number>>;
+```
+
+`Equal` กับ `Expect` ข้างบนคือ type-level test เล็ก ๆ ในตัว — การ compile ผ่านโดยไม่มี error*คือ*หลักฐานว่าคำกล่าวอ้างทั้งสองเป็นจริง (คอร์สนี้มีบทเต็มเรื่อง type-level testing สไตล์นี้ทีหลัง นี่คือเวอร์ชันเล็กที่สุดที่ใช้งานได้) สัญชาตญาณ: ค่าที่คุณ*อ่านออกมา*จากกิ่งไหนก็ได้ ต้องเป็น*อะไรสักอย่าง*ที่ทั้งสองกิ่งผลิตได้ — union ครอบคลุมสิ่งนั้น ค่าที่คุณต้องเตรียม*ส่งให้*กิ่งไหนก็ได้ ต้องตอบสนอง requirement ของทั้งสองกิ่งพร้อมกัน — มีแค่ intersection เท่านั้นที่ทำแบบนั้น `string & number` ยุบเหลือ type ที่ไม่มี value จริงเลย ซึ่งเป็นสัญญาณในตัวว่าการต้องการให้ value เดียวเป็นทั้ง `string` และ `number` พร้อมกันมักเป็นสัญญาณว่าต้นทางขอ shape ผิด
+
+## มี flag `strictInference` ไหม?
+
+spec ของคอร์สนี้ตั้งข้อสังเกตว่าควรเช็คกับ compiler จริงแทนที่จะสมมติ รัน `tsc --help --all` กับ TypeScript 7.0.2 ไม่เจอ flag ชื่อ `strictInference` เลย — มีแค่ `strict`, `strictBindCallApply`, `strictBuiltinIteratorReturn`, `strictFunctionTypes`, `strictNullChecks` และ `strictPropertyInitialization` พฤติกรรม "inference เข้มขึ้น" ที่พูดถึงใน section "การปรับปรุงอื่นใน 5.9" ของบท Inference & `infer` ไม่ใช่สิ่งที่คุณเปิดด้วย flag — มันมาพร้อมเป็นการเปลี่ยนพฤติกรรมแบบไม่มีเงื่อนไข ถ้าคุณกำลังหา switch เพื่อปิดพฤติกรรมนั้น ใน 7.0.2 ไม่มี — ทางแก้เมื่อ call พังหลังอัปเกรดก็เหมือนที่บทนั้นบอกไว้: ระบุ type argument ให้ชัดเจน
+
+## อ่าน inferred type ยาว ๆ จาก error message
+
+conditional type ทบต้นได้เร็วเมื่อมัน distribute แล้ว error message ที่ได้อาจดูน่ากลัวก่อนที่คุณจะสังเกตว่ามันแค่ list กิ่งทั้งหมดออกมา:
+
+```ts
+// @expect-error TS2322
+type ToArray<T> = T extends any ? T[] : never;
+
+declare const value: ToArray<string | number | boolean>;
+const bad: string[] = value;
+```
+
+```text
+error TS2322: Type 'string[] | number[] | false[] | true[]' is not assignable to type 'string[]'.
+  Type 'number[]' is not assignable to type 'string[]'.
+    Type 'number' is not assignable to type 'string'.
+```
+
+มีสองอย่างที่ควร annotate ตรงนี้ อย่างแรก compiler พิมพ์ผล distribute *ทั้งหมด*: `string[] | number[] | false[] | true[]` — กิ่ง array-of หนึ่งอันต่อ member ที่ `ToArray` distribute ผ่าน ตามลำดับ นั่นไม่ใช่ตัว error มันคือ compiler กำลังโชว์อย่างซื่อสัตย์ว่า `T` distribute ออกมาเป็นอะไรก่อนที่มันจะเริ่ม complain ด้วยซ้ำ อย่างที่สอง — ข้อเท็จจริงจริงของ TypeScript ที่พลาดง่าย — `boolean` ไม่ใช่ type เดียวในสายตาของ distribution มันคือ `true | false` ข้างใน ดังนั้น distribute ผ่านมันได้*สอง*กิ่ง (`false[]` กับ `true[]`) ไม่ใช่ `boolean[]` อันเดียว คำ complain จริง ๆ คือบรรทัดที่สอง: มันเลือก member ที่ไม่ตรง (`number[]`) มาหนึ่งตัวแล้วรายงานเทียบกับ target `string[]` จากนั้นอธิบายความไม่ตรงนั้นลึกลงไปอีกชั้น (`number` เทียบ `string`) การอ่าน type ยาว ๆ ที่ compiler พิมพ์แบบนี้เสมอ — บรรทัดบนสุดคือ shape เต็มที่เกี่ยวข้อง แล้วแต่ละบรรทัดที่ซ้อนลงไปจะแคบลงจนถึงความไม่ตรงกันจริงหนึ่งจุด — เปลี่ยนกำแพงข้อความที่น่ากลัวให้เป็นข้อเท็จจริงสั้น ๆ ธรรมดาสามอย่าง
+
+<TSPlayground code={distributionCode} id="conditional-distribution-proof" title="Naked distributes, wrapped doesn't — try it yourself" />
+
+export const distributionCode = `type Naked<T> = T extends string ? "str" : "other";
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type N1 = Naked<"a" | 42>;
+//   ^? "str" | "other" -- distributes: one branch per union member
+
+type W1 = Wrapped<"a" | 42>;
+//   ^? "other" -- [T] is not naked -- tests the whole union at once
+
+type A1 = ArrWrapped<"a" | 42>;
+//   ^? "other" -- T[] is not naked either -- same reason as [T]
+
+// try it: what does Naked<never> give you? (hint: it's the section above this one)
+type NakedNever = Naked<never>;
+//   ^? never -- distributing over zero union members gives zero branches`;
 
 <Callout title="สรุปหนึ่งบรรทัด">
-conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type ใช้การทดสอบ subset แบบเดียวกับ `extends` ที่อื่น พฤติกรรมเด่นของตัวเองคือ **distribution**: naked type parameter ที่ตรวจกับ union จะรันทีละ member แล้ว union ผลลัพธ์ (นั่นคือวิธีที่ `Exclude` และ `Extract` ทำงาน) ห่อทั้งสองฝั่งเป็น `[T] extends [U]` เพื่อตรวจ union ทั้งก้อนและปิด distribution
+conditional type `T extends U ? X : Y` คือ if-statement ในระดับ type พฤติกรรมเด่นของตัวเองคือ **distribution** และ distribution ต้องการให้ `T` เป็น naked จริง ๆ อยู่ฝั่งที่ถูกตรวจ — ห่อมันด้วยอะไรก็ตาม (`[T]`, `T[]`, object) แล้ว compiler จะตรวจ union ทั้งก้อนแทน `never` คือ union ว่างเปล่า ดังนั้น distributive conditional ผ่าน `never` distribute ศูนย์ครั้งและระเหยกลายเป็น `never` เอง — `[T] extends [never]` คือทางแก้มาตรฐาน `infer` สะท้อนการแบ่ง covariant/contravariant แบบเดียวกันนี้: ซ้ำในตำแหน่ง output ก็ union candidate ซ้ำในตำแหน่ง parameter ก็ intersect พวกมัน
 </Callout>
+
+## Mental Model
+
+<Mermaid title="Distribution is member-by-member re-running of the whole conditional" code={condMentalDiagram} />
+
+export const condMentalDiagram = `flowchart TD
+  naked["Checked type คือ T เดี่ยว ๆ naked"] --> isUnion{"Argument เป็น union ไหม?"}
+  isUnion -->|ใช่| perMember["รัน conditional ครั้งเดียวต่อ member\nunion ผลของแต่ละกิ่งเข้าด้วยกัน"]
+  isUnion -->|ไม่| once["รัน conditional ครั้งเดียว ปกติ"]
+  wrapped["Checked type คือ [T], T[] หรือ T ที่ห่ออยู่ในอะไรก็ตาม"] --> whole["ตรวจ argument ทั้งก้อนเป็น type เดียว -- ไม่ distribute เลย"]`;
+
+เซอร์ไพรส์เรื่อง distribution ทุกอันในบทนี้มาจากคำถามเดียว: type parameter ที่ถูกตรวจ naked หรือถูกห่ออยู่ในอะไรบางอย่าง? naked แปลว่า "รัน conditional นี้ใหม่ทีละ union member แล้ว union คำตอบเข้าด้วยกัน" — ซึ่งก็เป็นเหตุผลที่ `never` union ที่มี 0 member ทำให้นิพจน์ทั้งหมดระเหยแทนที่จะเลือกกิ่งไหนกิ่งหนึ่ง wrapped แปลว่า "นี่คือการเปรียบเทียบระดับ type ธรรมดาอันหนึ่ง" ไม่ต่างอะไรจาก conditional ที่ไม่ใช่ generic เลย
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| naked `T extends U ? X : Y` | map การแปลงไปทีละ member ของ union ให้อัตโนมัติ — กลไกเบื้องหลัง `Exclude`, `Extract`, `NonNullable` | ไม่ทำอะไรที่มีประโยชน์เลยแบบเงียบ ๆ สำหรับ `T = never` และให้ type ที่ใหญ่กว่าที่คาดไว้มากสำหรับ union กว้าง ๆ ได้ |
+| `[T] extends [U]` | ตรวจ union ทั้งก้อนเป็นหนึ่งเดียว เป็นทางแก้มาตรฐานที่คาดเดาได้ทั้งสำหรับ "boolean แปลก ๆ" และ case ที่ `never` ระเหย | ลืมง่ายเมื่อคุณ*ต้องการ*พฤติกรรมทีละ member จริง ๆ ที่อื่นในไฟล์เดียวกัน |
+| `infer` ในตำแหน่ง output (ผล union) | เป็นธรรมชาติสำหรับคำถาม "ตำแหน่งนี้ผลิตอะไรได้บ้าง" | ผล union อาจกว้างกว่าที่ call site ไหน ๆ ต้องการจริง |
+| `infer` ในตำแหน่ง parameter (ผล intersection) | เป็นธรรมชาติสำหรับคำถาม "ต้องตอบสนอง requirement ของทุกอันนี้พร้อมกัน" | intersection ของ primitive type ที่ไม่เกี่ยวกัน (`string & number`) ยุบเหลือ type ที่ไม่มี value จริง — มักเป็นสัญญาณของความผิดพลาดในการ model ไม่ใช่ bug ของ `infer` |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **การห่อ type parameter ด้วย `[T]` เปลี่ยน value ที่ยอมรับได้** มันไม่แตะ type ระดับ value เลย — `[T]` กับ `T` บรรยาย value เดียวกันในทุก context อื่น มันแค่เปลี่ยนว่า *conditional ตัวนี้เฉพาะ* จะ distribute หรือไม่
+- **`T extends never ? true : false` ให้ boolean เสมอ** สำหรับ type ที่เป็นรูปธรรมทุกตัวที่ไม่ใช่ `never` มันให้จริง สำหรับ `T = never` เอง distribution รันศูนย์ครั้งผ่าน union ว่างเปล่า และ conditional ทั้งอันกลายเป็น `never` ไม่ใช่ `false`
+- **`infer` ให้ union เสมอเมื่อชื่อซ้ำกัน** แค่ในตำแหน่ง covariant (output) เท่านั้น ชื่อซ้ำเดียวกันเป๊ะในตำแหน่ง contravariant (parameter) ให้ intersection แทน — ตำแหน่งเป็นตัวตัดสิน ไม่ใช่ keyword
+- **มี flag ที่ทำให้ generic inference ของ TypeScript "เข้มขึ้น" แบบที่ `strictNullChecks` ทำให้การเช็ค null เข้มขึ้น** ณ 7.0.2 `tsc --help --all` ไม่โชว์ flag `strictInference` เลย inference ที่เข้มขึ้นจาก 5.9 ที่พูดถึงที่อื่นในโมดูลนี้เป็นพฤติกรรมแบบไม่มีเงื่อนไข ไม่ใช่สิ่งที่สลับด้วย setting
+
+## อ่านโค้ดที่ AI เขียน
+
+distribution เป็นเรื่องที่โค้ด generate ได้ผิดทิศทางง่าย โดยเฉพาะ utility type ที่ตั้งใจ filter หรือแปลง union — เพราะทั้ง failure mode "ไม่ทำอะไรเลยแบบเงียบ ๆ" และ "distribute แบบเงียบ ๆ ทั้งที่ไม่ควร" ต่าง compile ผ่านโดยไม่มี error:
+
+- conditional ที่ตั้งใจตรวจ "union ทั้งก้อนนี้ assignable ให้ X ไหม" ที่เขียนเป็น naked `T extends X ? ... : ...` จะตรวจแต่ละ member แยกกันแล้ว union ผลลัพธ์แทน มักให้ `boolean` ในที่ที่ตั้งใจให้เป็น `true`/`false` เดี่ยว ๆ ตรงตามจุดสังเกตจาก section "ปิด distribution"
+- conditional ที่ตั้งใจ filter union (แบบ `Exclude`) ที่เขียนโดยห่อ `T` ด้วยวงเล็บ (`[T] extends [U] ? never : T`) จะไม่ filter อะไรเลย — มันตรวจ union ทั้งก้อนทีเดียวแล้วให้ผลแบบทั้งหมดหรือไม่มีเลยแทนที่จะทีละ member
+- conditional utility ใด ๆ ที่ใช้กับ `never` ควรเช็คเป็นพิเศษ: โค้ดของผู้เขียนเอง (หรือ test ของมัน) เคยใช้ case `never` จริงไหม หรือมันจะระเหยเป็น `never` แบบเงียบ ๆ โดยไม่มีใครสังเกต?
+
+<SpotTheBug code={`type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+type ExtractValue<T> = [T] extends [{ ok: true; value: infer V }] ? V : never;
+
+type A = ExtractValue<Result<number> | Result<string>>;`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย แต่ `A` คือ `never` ไม่ใช่ `number | string` ตามที่ชื่อ `ExtractValue` บอกเป็นนัย การห่อ type ที่ถูกตรวจด้วย `[T]` (คงลอกมาจาก idiom `[T] extends [never]` หรือ pattern "ปิด distribution" ที่อื่นในบทนี้) ปิด distribution ที่ utility ตัวนี้ต้องการจริง ๆ พอดี: พอ `T` ถูกห่อ union ทั้งก้อน `Result<number> | Result<string>` — ซึ่งรวม member `{ ok: false; error: string }` จาก*ทั้งสอง* result — ถูกตรวจกับ `{ ok: true; value: infer V }` เป็นก้อนเดียว match ไม่ได้เพราะไม่ใช่ทุก member มี shape `ok: true; value` แล้วตกไปที่กิ่ง `never` ทางแก้คือเอาวงเล็บออกแล้วปล่อยให้ `ExtractValue<T> = T extends { ok: true; value: infer V } ? V : never` distribute ตามธรรมชาติ: แต่ละ 4 member ของ union ถูกตรวจแยกกัน สอง member `{ ok: false; ... }` กลายเป็น `never` ถูกต้องแล้วหลุดออกไป และสอง member `{ ok: true; value: ... }` ให้ `number` กับ `string` union กันเป็น `number | string` ตามที่ตั้งใจ
+</SpotTheBug>
 
 export const quizConditional = [
   {
@@ -109,6 +269,7 @@ export const quizConditional = [
       'เป็น if-statement ตอน runtime',
     ],
     answer: 1,
+    explain: 'conditional type คือ ternary ในระดับ type ที่ใช้การทดสอบ assignability เดียวกับ `extends` ที่อื่น — ไม่มี inheritance หรือการรันจริงตอน runtime เข้ามาเกี่ยวข้อง',
   },
   {
     q: '`ToArray<string | number>` สำหรับ `type ToArray<T> = T extends any ? T[] : never` ได้อะไร?',
@@ -119,26 +280,51 @@ export const quizConditional = [
       'any[]',
     ],
     answer: 1,
+    explain: 'เพราะ T naked อยู่ฝั่งที่ถูกตรวจ conditional รันครั้งเดียวต่อ union member แล้ว union ผลของแต่ละกิ่งเข้าด้วยกัน แทนที่จะให้ array ของ union ทั้งก้อน',
   },
   {
-    q: 'built-in `Exclude<T, U>` เอา member ออกจาก union อย่างไร?',
+    q: '```ts\ntype Naked<T> = T extends string ? "str" : "other";\ntype Wrapped<T> = [T] extends [string] ? "str" : "other";\ntype ArrWrapped<T> = T[] extends string[] ? "str" : "other";\n\ntype N = Naked<"a" | 42>;\ntype W = Wrapped<"a" | 42>;\ntype A = ArrWrapped<"a" | 42>;\n```\n`N`, `W`, `A` ได้อะไร?',
     options: [
-      'ลบ member ตอน runtime',
-      'ผ่าน `T extends U ? never : T` — member ที่ match กลายเป็น `never` แล้วหลุดจาก union',
-      'sort union',
-      'เอา member ออกจาก union ไม่ได้',
+      'ทั้งสามตัวเป็น `"other"`',
+      '`N` เป็น `"str" | "other"` (distribute); `W` กับ `A` เป็น `"other"` ทั้งคู่ (ห่อด้วย tuple หรือ array เลยไม่ distribute)',
+      'ทั้งสามตัวเป็น `"str" | "other"`',
+      '`N` กับ `A` distribute; มีแค่ `W` ที่ไม่ distribute',
     ],
     answer: 1,
+    explain: 'มีแค่ T เดี่ยว ๆ naked อยู่ฝั่งที่ถูกตรวจเท่านั้นที่ distribute การห่อด้วย tuple ([T]) หรือ array (T[]) — หรืออะไรก็ตาม — ตรวจ union ทั้งก้อนเป็น type เดียวแทน เท่ากันทั้งสองแบบ',
   },
   {
-    q: 'ทำไมต้องห่อทั้งสองฝั่งเป็น `[T] extends [U]`?',
+    q: '`type IsNever<T> = T extends never ? true : false;` — `IsNever<never>` คืออะไร และทำไม?',
     options: [
-      'เพื่อให้รันเร็วขึ้น',
-      'เพื่อหยุด distribution และตรวจ union ทั้งก้อนแทนที่จะทีละ member',
-      'เพื่อแปลง `T` เป็น array',
-      'เป็น syntax ที่จำเป็นสำหรับ conditional ทุกตัว',
+      '`true` เพราะ `never` assignable ให้ตัวเอง',
+      '`never` เพราะ distribute ผ่าน union ว่างเปล่า (never มี 0 member) ให้ 0 กิ่งที่จะ union เข้าด้วยกัน ไม่ใช่ boolean เลย',
+      '`false` เพราะ `never` ไม่เคย match conditional ไหนเลย',
+      'compile error',
     ],
     answer: 1,
+    explain: 'never คือ union ของ 0 type distributive conditional รันครั้งเดียวต่อ member พอมี 0 member ก็มี 0 กิ่ง นิพจน์ทั้งหมดเลยระเหยเป็น never แทนที่จะ resolve เป็น true หรือ false',
+  },
+  {
+    q: 'สำหรับชื่อ `infer` ที่ซ้ำกัน อะไรตัดสินว่าผลลัพธ์จะเป็น union หรือ intersection?',
+    options: [
+      'ลำดับที่ชื่อ infer ปรากฏใน source',
+      'ตำแหน่งที่ซ้ำเป็น covariant (เช่น return type — ให้ union) หรือ contravariant (เช่น parameter type — ให้ intersection)',
+      'เป็น union เสมอ ไม่ว่าตำแหน่งไหน',
+      'ขึ้นกับว่า type alias ถูก export หรือเปล่า',
+    ],
+    answer: 1,
+    explain: 'ตำแหน่ง covariant (output) รวม candidate ที่ infer ได้หลายตัวเป็น union — "มาจากกิ่งไหนก็ได้" ตำแหน่ง contravariant (parameter) รวมเป็น intersection — "ต้องตอบสนอง requirement ของทุกกิ่ง"',
+  },
+  {
+    q: 'TypeScript 7.0.2 มี compiler flag ชื่อ `strictInference` ไหม?',
+    options: [
+      'มี และต้องเปิดเพื่อให้ได้พฤติกรรม "inference เข้มขึ้น" ของ 5.9',
+      'ไม่มี — `tsc --help --all` ไม่ list flag แบบนี้เลย inference ที่เข้มขึ้นจาก 5.9 เป็นพฤติกรรมแบบไม่มีเงื่อนไข ไม่ใช่สิ่งที่สลับด้วย setting',
+      'มี แต่มีผลแค่ภายใต้ `strict: true`',
+      'ถูกลบออกใน TypeScript 7.0 แต่เคยมีใน 6.x',
+    ],
+    answer: 1,
+    explain: 'การเช็ค tsc --help --all กับ binary 7.0.2 จริง โชว์แค่ strict, strictBindCallApply, strictBuiltinIteratorReturn, strictFunctionTypes, strictNullChecks และ strictPropertyInitialization — ไม่มี strictInference candidate inference ที่เข้มขึ้นจาก 5.9 มาพร้อมแบบไม่มีเงื่อนไข',
   },
 ];
 

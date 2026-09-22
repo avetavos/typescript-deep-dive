@@ -1,6 +1,6 @@
 ---
 title: 'Generic Functions & Constraints'
-description: 'type parameter, การ constrain ด้วย extends, default type parameter, หลาย parameter const type parameter และการเลี่ยงไม่ให้ generic เกินจำเป็น'
+description: 'type parameter, การ constrain ด้วย extends, default type parameter, หลาย parameter, const type parameter, เมื่อไร type parameter คือกลิ่นไม่ดี และ overload กับ generic'
 sidebar:
   order: 2
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type parameter ส่วนใหญ่ถูก infer ไม่ใช่เขียนเอง
 
@@ -84,9 +86,9 @@ const c2: Container<number> = { value: 1 }; // T explicitly number
 
 default พบบ่อยกับ generic class และ interface ที่มีค่า fallback ที่สมเหตุสมผล
 
-## อย่า generic เกินจำเป็น
+## อย่า generic เกินจำเป็น — แต่ "ใช้แค่ครั้งเดียว" ต้องแยกละเอียด
 
-generics เป็นเครื่องมือ ไม่ใช่เป้าหมาย type parameter ที่ปรากฏ **แค่ครั้งเดียว** ใน signature มักเป็นความผิดพลาด — ไม่ได้เชื่อมอะไรเลย ก็เลยควรเป็น type ตรง ๆ หรือ `unknown` ไปเลย:
+generics เป็นเครื่องมือ ไม่ใช่เป้าหมาย type parameter ที่ปรากฏ **แค่ครั้งเดียวในทั้ง signature และไม่ปรากฏที่อื่นเลย** มักเป็นความผิดพลาด — ไม่ได้เชื่อมอะไรเลย ก็เลยควรเป็น type ตรง ๆ หรือ `unknown` ไปเลย:
 
 ```ts
 // pointless generic: T is used once, links nothing
@@ -95,7 +97,24 @@ function logLoose<T>(x: T): void { console.log(x); }
 function log(x: unknown): void { console.log(x); }
 ```
 
-generic จะคุ้มค่าก็ต่อเมื่อ type parameter เชื่อมตำแหน่งตั้งแต่สองที่ขึ้นไป (input ไป output, หรือ parameter ตัวหนึ่งไปอีกตัว) ถ้า type parameter ไม่ได้สร้าง *ความสัมพันธ์* ก็ตัดทิ้ง
+แต่ "ใช้แค่ครั้งเดียว" ต้องอ่านให้ละเอียด กฎนี้ไม่ใช่ "นับใน parameter list" — แต่คือ "type parameter ตัวนี้เชื่อม input กับ output อยู่หรือเปล่า" `T` ที่ปรากฏแค่ครั้งเดียว **ใน parameter** แต่ปรากฏใน return type ด้วย ก็ยังเชื่อมสองตำแหน่งอยู่ นั่นทำให้มันเป็น generic จริง ไม่ใช่กลิ่นไม่ดี:
+
+```ts
+// @expect-error TS2339
+interface Tagged<T> { value: T }
+
+// T appears once in the parameter list — but it ALSO appears in the return
+// type, tying the argument to the result. That IS a link, so this is fine.
+function tag<T>(value: T): Tagged<T> {
+  return { value };
+}
+
+const t = tag(42);
+//    ^? Tagged<number>
+t.value.toUpperCase(); // ❌ number has no toUpperCase — the link still catches real bugs
+```
+
+เทียบสองอันนี้: `logLoose<T>(x: T): void` มี `T` อยู่ตำแหน่งเดียวจริง ๆ — return type เป็น `void` ดังนั้นไม่มีอะไรต่อจากนั้นถูกตรวจกับมันเลย `tag<T>(value: T): Tagged<T>` ก็เขียน `T` แค่ครั้งเดียวใน *parameter* เหมือนกัน แต่ `T` กลับมาปรากฏใน return type ด้วย ดังนั้นถ้าผู้เรียกใช้ `t.value` ผิด ก็ยังถูกจับได้ ให้นับ **การเชื่อม** ไม่ใช่นับจำนวนครั้งที่ปรากฏ
 
 ## `const` type parameter (5.0)
 
@@ -112,9 +131,110 @@ const t = tuple("a", 1, true);
 
 constraint มักต้องมี `readonly` (literal ที่ infer ได้เป็น readonly tuple หรือ object) ใช้กับ API ที่อิง literal value — route table, config แบบ enum, builder — ส่วน generic ทั่วไปปล่อยไว้ตามเดิม
 
+### `const T` ก็ยัง widen — มันไม่ใช่ `as const` ย้อนหลัง
+
+`const` บน type parameter เปลี่ยนแค่วิธี infer *argument ของ call นั้นเอง* มันย้อนกลับไปทำให้ value ที่ widen ไปแล้วที่อื่นก่อนมาถึงมันกลับเป็น literal ไม่ได้:
+
+```ts
+function firstOf<const T>(items: T[]): T {
+  return items[0];
+}
+
+const arr = ["a", "b"]; // arr is already string[] — an ordinary mutable array, not a tuple
+const f = firstOf(arr);
+//    ^? string   — NOT "a" | "b": arr was widened at its own declaration, long before firstOf saw it
+```
+
+`const` บน `T` ของ `tuple` ทำงานได้เพราะ rest parameter (`...items: T`) จับแต่ละ argument เป็น literal ของตัวเองตั้งแต่ตอนเรียก ก่อนที่อะไรจะ widen มัน ส่วน `T` ของ `firstOf` ถูก infer จาก *element type* ของ `arr` และ `arr` เป็น `string[]` ไปแล้วตั้งแต่ก่อนมาถึงตรงนั้น — ไม่เหลือ literal ให้ `const` รักษาไว้เลย `const T` รักษา literal ที่มันยังเห็นตอนมาถึง มันย้อนกลับไปแก้การ widen ที่เกิดไปแล้วก่อนหน้าไม่ได้
+
+## overload กับ generic
+
+ทั้งสองแบบทำให้ชื่อเดียวรองรับหลายรูปแบบการเรียกได้ แต่แก้ปัญหาคนละแบบ **generic** เหมาะเมื่อสูตรเดียวกันใช้ได้สม่ำเสมอกับทุก type — `T` เข้า `T` (หรือสิ่งที่สร้างจาก `T`) ออก **overload set** เหมาะเมื่อคุณมีคู่ (input, output) ที่เจาะจงจำนวนน้อยและตายตัว ที่ไม่ยุบรวมเป็นสูตรเดียวได้
+
+overload ยังให้ error ที่ชัดกว่า generic ที่เลือกไม่ดีได้ด้วย เทียบ function สองแบบที่ต้องรับ argument สองตัวที่ type *เดียวกัน*:
+
+```ts
+// @expect-error TS2345
+function both<T>(a: T, b: T): T { return a; }
+
+const y = both(1, "two"); // the first argument fixes T to the literal 1, not number
+```
+
+```ts
+// @expect-error TS2769
+function bothOverload(a: string, b: string): string;
+function bothOverload(a: number, b: number): number;
+function bothOverload(a: unknown, b: unknown): unknown { return a; }
+
+bothOverload(1, "two");
+```
+
+<TSPlayground code={bothCompareCode} id="overload-vs-generic" title="A generic can give a worse error than an overload" />
+
+export const bothCompareCode = `// @expect-error TS2345 TS2769
+function both<T>(a: T, b: T): T { return a; }
+const y = both(1, "two");
+// TS2345: Argument of type '"two"' is not assignable to parameter of type '1'.
+// -- confusing: "type '1'"? T was inferred from the literal 1, not widened to number,
+// because nothing in this signature asks for the number the literal belongs to.
+
+function bothOverload(a: string, b: string): string;
+function bothOverload(a: number, b: number): number;
+function bothOverload(a: unknown, b: unknown): unknown { return a; }
+bothOverload(1, "two");
+// TS2769: No overload matches this call. The last overload gave the following error.
+//   Argument of type 'string' is not assignable to parameter of type 'number'.
+// -- clearer: it names the actual types, string and number, not a literal.`;
+
+กด **Check types** ข้างบน: error ของ `both` อ่านว่า `Argument of type '"two"' is not assignable to parameter of type '1'` — ผู้อ่านต้องหยุดคิดว่าทำไม type ของ parameter ถึงเป็น *literal* `1` ไม่ใช่ `number` มันเกิดเพราะ `T` ถูกตรึงไว้กับ literal type ของ argument แรกก่อนที่ argument ตัวที่สองจะถูกตรวจด้วยซ้ำ error ของ `bothOverload` คือ `No overload matches this call. ... Argument of type 'string' is not assignable to parameter of type 'number'` ระบุ type จริง ๆ ที่เกี่ยวข้อง ไม่มีข้อความไหน "ผิด" แต่ของ overload อ่านแล้วลงมือแก้ได้ทันทีง่ายกว่า — นี่คือ case ที่สัญชาตญาณ "generic ดีกว่า overload เสมอ" กลับตาลปัตร
+
+ในทางกลับกันก็พบบ่อยเหมือนกัน: พอมี pairing มากกว่าสองสามคู่ หรือความสัมพันธ์ระหว่าง input กับ output สม่ำเสมอ (array เข้า array ของ element type เดียวกันออก) overload set จะกลายเป็นการซ้ำที่ดูแลไม่ไหว และ generic ก็เป็นตัวเลือกที่ถูกต้องชัดเจน — ทุก function ที่คุณเห็นมาก่อนหน้านี้ในบทนี้ (`first`, `longest`, `getProp`) ก็คือ case แบบนั้นเป๊ะ
+
 <Callout title="สรุปหนึ่งบรรทัด">
-type parameter ส่วนใหญ่ถูก **infer** จาก argument ไม่ใช่เขียนเอง constrain ด้วย `extends` เมื่อต้องการให้ `T` มี shape บางอย่าง (`T extends { length: number }`) หรือเป็น key ของ type อื่น (`K extends keyof T` คืน `T[K]`) ใส่ default ตรงที่มี fallback สมเหตุสมผล และตัด type parameter ที่ปรากฏแค่ครั้งเดียวทิ้ง — generic ควรเชื่อมตำแหน่ง ไม่ใช่ตกแต่งตำแหน่งเดียว
+type parameter ส่วนใหญ่ถูก **infer** จาก argument ไม่ใช่เขียนเอง constrain ด้วย `extends` เมื่อต้องการให้ `T` มี shape บางอย่าง (`T extends { length: number }`) หรือเป็น key ของ type อื่น (`K extends keyof T` คืน `T[K]`) ตัด type parameter ที่ไม่เชื่อมอะไรทิ้ง — แต่ "ไม่เชื่อมอะไร" หมายถึงไม่มีการเชื่อมตำแหน่งไหนเลยใน signature ไม่ใช่ "ปรากฏครั้งเดียวใน parameter list" หันไปใช้ overload set แทน generic เมื่อคุณมี pairing ที่เจาะจงจำนวนน้อยและตายตัว — บางที generic ให้ error ที่งงกว่า overload ได้
 </Callout>
+
+## Mental Model
+
+type parameter คือตัวแปรที่ "ค่า" ของมันคือ type ถูกแก้ครั้งเดียวต่อการเรียก จากตำแหน่งที่มันถูกเขียนไว้ ถาม `T` ที่คุณเจอสองคำถาม: **มันมาจากไหน** (argument ตำแหน่งไหนป้อนให้มัน) และ **มันไปไหนต่อ** (ตำแหน่งอื่น ๆ — parameter, return type — ที่มันไปจำกัดหลังจากถูก fix แล้ว)? ถ้าคำตอบของ "มันไปไหนต่อ" คือ "ไม่ไปไหนเลย" type parameter ตัวนั้นก็แค่ตกแต่ง ถ้า constraint ไม่ได้ถูกใช้จริงข้างใน body ก็ควรถามด้วยว่า constraint นั้นทำอะไรมากกว่าเป็นเอกสารประกอบหรือเปล่า
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `T` ไม่มี constraint | ใช้ได้กับ type อะไรก็ได้จริง ๆ | สมมติ shape อะไรไม่ได้เลย — เข้าถึง property ไม่ได้ คำนวณเลขไม่ได้ |
+| `T extends { shape }` | ให้ body ใช้ shape นั้นได้ พร้อมยังคง type เฉพาะเจาะจงใน return | type ของทุกผู้เรียกต้องตรง constraint ซึ่งอาจปฏิเสธ value ที่ใช้ได้จริงแต่ไม่มี shape นั้นเป๊ะ |
+| `const T` | รักษา shape แบบ literal/tuple ได้โดยไม่ต้องใส่ `as const` ทุกจุดเรียก | ช่วยได้แค่ตอนที่ literal ยังมองเห็นได้ตอน call นั้น — ย้อนแก้ widen ที่เกิดไปแล้วไม่ได้ |
+| overload set | error message ชัดเจนต่อ case, บันทึก pairing ที่ใช้ได้แบบตายตัว | ขยายไม่ไหว — combination ใหม่แต่ละอันต้องเขียน signature เพิ่มและดูแลเอง |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **type parameter ที่ใช้ครั้งเดียวใน parameter list เป็นกลิ่นไม่ดีเสมอ** เป็นกลิ่นไม่ดีก็ต่อเมื่อใช้ครั้งเดียวใน *ทั้ง signature* ถ้ามันปรากฏใน return type ด้วย ก็คือกำลังเชื่อม input กับ output อยู่ — นั่นคือ generic จริง
+- **error message ของ generic function ชัดกว่า overload เสมอ** ไม่เสมอไป — generic ตรึง type parameter ไว้กับ literal type แคบ ๆ ได้ตั้งแต่ต้น ทำให้เกิด message แบบ "not assignable to type '1'" ที่งง ในขณะที่ overload set ที่เทียบเท่ากันจะบอกด้วย type ที่มีชื่อชัดเจน
+- **`const` บน type parameter ย้อนกลับไปแก้ widen ของอะไรก็ได้ที่คุณส่งเข้ามา ไม่ว่ามันจะมาจากไหน** มันจับได้แค่ literal ที่ยัง*เป็น* literal อยู่ตอน call site value ที่ถูก widen ไปแล้วโดย `let` declaration ของตัวมันเอง หรืออ่านออกมาจาก array ที่ widen ไปแล้ว จะมาถึง generic call แบบ widen ไปก่อนแล้ว และ `const` ก็ไม่เหลืออะไรให้รักษา
+
+## อ่านโค้ดที่ AI เขียน
+
+generic ที่มีอยู่แค่เพื่อห่อ cast เป็นรูปแบบที่ AI generate บ่อยมาก — มันดูเหมือน type safety แต่ type parameter ไม่มี constraint และไม่เคยถูกตรวจกับอะไรจริงเลย:
+
+- มองหา generic helper ที่ body คือ `return value as T` (หรือ `as unknown as T`) โดย `T` ไม่มี constraint สิ่งนี้ compile ผ่านสำหรับ `T` *อะไรก็ได้* ที่ผู้เรียกตั้งชื่อ เหมือน `as` cast ธรรมดาเป๊ะ — generic ไม่ได้เพิ่มอะไรนอกจากรูปลักษณ์ว่า "type" value นั้นแล้ว
+- เช็คว่า function เคย narrow, validate หรือตรวจสอบ value ก่อน return มันเป็น `T` หรือเปล่า ถ้าไม่เคย type จริงของ function ก็คือ `(value: unknown) => any` ไม่ว่า signature จะอ้างว่าอะไร
+- chain ของ helper แบบนี้สองตัว (ตัวแรก parse เป็น `unknown` ตัวถัดไป cast `unknown` เป็น `T`) มีปัญหาเดียวกับ cast ตัวเดียว แค่กระจายเป็นสอง call ที่แต่ละอันดูสมเหตุสมผลเมื่อมองแยกกัน
+
+<SpotTheBug code={`interface Config { retries: number; timeout: number }
+
+function assertType<T>(value: unknown): T {
+  return value as T;
+}
+
+function loadConfig(raw: unknown): Config {
+  return assertType<Config>(raw);
+}
+
+const cfg = loadConfig({ retries: 3 });
+console.log(cfg.timeout.toFixed(0));`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย `assertType<T>` ไม่มี constraint และ body ของมันคือ `value as T` เปล่า ๆ — มันจะ "อ้างสำเร็จ" ว่าเป็น shape *อะไรก็ได้* สำหรับ input *อะไรก็ได้* เพราะ `as` จาก `unknown` ไปเป็น type ที่เจาะจงได้รับอนุญาตเสมอโดยไม่มี runtime check แนบมาด้วย `loadConfig({ retries: 3 })` ไม่มี field `timeout` เลย แต่ `assertType<Config>(raw)` ก็ยัง assert มันเป็น `Config` อยู่ดี ดังนั้น return type ของ `loadConfig` จึงโกหกเรื่องสิ่งที่มัน validate จริง เรียก `cfg.timeout.toFixed(0)` แล้วพังด้วย `Cannot read properties of undefined (reading 'toFixed')` เพราะ `cfg.timeout` เป็น `undefined` จริง ๆ ตอนรัน — generic ไม่เคยตรวจเลย ทางแก้เหมือนธีมของบท index ในโมดูลนี้: type parameter ของ generic น่าเชื่อถือได้แค่เท่าที่มี runtime check จริง ๆ อยู่ที่ไหนสักที่ใน chain — เปลี่ยน cast เป็น validation จริง (schema library หรือเช็ค field ตรง ๆ) ก่อนเชื่อ shape นั้น
+</SpotTheBug>
 
 export const quizConstraints = [
   {
@@ -126,6 +246,7 @@ export const quizConstraints = [
       'จำเป็นสำหรับ generic ทุกตัว',
     ],
     answer: 1,
+    explain: 'constraint อย่าง `T extends { length: number }` ทำให้ body ของ function ใช้ `.length` ได้อย่างปลอดภัย และยัง return type เฉพาะเจาะจงของผู้เรียก ไม่ใช่ constraint ที่กว้างกว่า',
   },
   {
     q: 'ใน `function getProp<T, K extends keyof T>(obj: T, key: K): T[K]` return type `T[K]` แทนอะไร?',
@@ -136,26 +257,51 @@ export const quizConstraints = [
       'union ของ type ทุก property',
     ],
     answer: 1,
+    explain: '`T[K]` คือ indexed access — type เป๊ะ ๆ ของ property ที่ชื่อคือ literal `K` ที่ถูก infer มา',
   },
   {
-    q: 'type parameter ที่ปรากฏแค่ครั้งเดียวใน signature มักจะ:',
+    q: '`function tag<T>(value: T): Tagged<T>` (โดย `Tagged<T> = { value: T }`) เป็นกลิ่น "ใช้ครั้งเดียว" หรือเปล่า?',
     options: [
-      'เป็น generic ที่ทรงพลังที่สุด',
-      'เป็นสัญญาณว่า generic นั้นไร้ประโยชน์ — ไม่ได้เชื่อมอะไร ควรใช้ type ตรง ๆ หรือ `unknown`',
-      'จำเป็นสำหรับ compiler',
-      'เร็วกว่าแบบมี constraint',
+      'ใช่ — `T` ปรากฏแค่ครั้งเดียวใน parameter list',
+      'ไม่ — `T` ปรากฏใน return type ด้วย ดังนั้นมันเชื่อม argument กับผลลัพธ์ ทั้งที่ปรากฏแค่ครั้งเดียวใน parameter',
+      'ใช่ — type parameter ทุกตัวต้องปรากฏอย่างน้อยสองครั้งใน parameter',
+      'ไม่ — เพราะ `Tagged` เป็น interface',
     ],
     answer: 1,
+    explain: 'กลิ่นไม่ดีอยู่ที่การเชื่อม ไม่ใช่จำนวนที่ปรากฏดิบ ๆ `T` ผูก argument กับ return type ตรงนี้ ดังนั้นผู้เรียกที่ใช้ผลลัพธ์ผิดก็ยังถูกจับได้ — ต่างจาก `logLoose<T>(x: T): void` ที่ `T` ไม่ได้เชื่อมอะไรเลย',
   },
   {
-    q: 'default type parameter อย่าง `<T = string>` ทำอะไร?',
+    q: '```ts\nfunction both<T>(a: T, b: T): T { return a; }\nconst y = both(1, "two");\n```\nerror ที่ได้บอกว่าอะไร และทำไมมันงง?',
     options: [
-      'บังคับให้ผู้เรียกทุกคนส่ง `string`',
-      'ให้ type fallback ที่ใช้เมื่อ `T` ไม่ถูก infer หรือไม่ได้ส่งมา',
-      'ทำให้ `T` เป็น read-only',
-      'ปิด inference',
+      '"Argument of type string is not assignable to parameter of type number" — ชัดเจนมาก',
+      '"Argument of type \'\\"two\\"\' is not assignable to parameter of type \'1\'" — งงเพราะระบุ type เป็น literal 1 ไม่ใช่ number เพราะ T ถูกตรึงกับ literal type ของ argument แรก',
+      'ไม่ error เลย compile ผ่าน',
+      '"T is not a valid type parameter name"',
     ],
     answer: 1,
+    explain: 'argument แรกตรึง T ไว้กับ literal type 1 (ไม่ใช่ number ที่ widen แล้ว) ดังนั้น argument ตัวที่สองถูกตรวจกับ literal นั้น — ทำให้เกิด message ที่ทำให้ผู้อ่านที่ไม่คุ้นกับพฤติกรรม literal inference งง',
+  },
+  {
+    q: 'เทียบกับ generic `both<T>` ข้างบน ทำไม overload set ถึงให้ error ที่ชัดกว่าสำหรับการเรียกแบบเดียวกัน?',
+    options: [
+      'overload ไม่เคยเกิด error',
+      'แต่ละ overload signature ระบุ type ที่เป็นรูปธรรม (เช่น `string` กับ `number`) ตรง ๆ ดังนั้นความไม่ตรงจะถูกรายงานเทียบกับชื่อ type นั้นแทนที่จะเป็น literal type ที่ infer มา',
+      'overload สั้นกว่าเสมอ',
+      'generic มี parameter ได้แค่ตัวเดียว',
+    ],
+    answer: 1,
+    explain: 'overload set ระบุ pairing ที่ใช้ได้ด้วย type ที่มีชื่อชัดเจนไว้ล่วงหน้า พอ call ไหน fail ความไม่ตรงที่รายงานจะระบุ type เหล่านั้นตรง ๆ โดยไม่ผ่าน type-parameter inference และพฤติกรรมตรึง literal',
+  },
+  {
+    q: 'generic helper `function firstOf<const T>(items: T[]): T` ถูกเรียกด้วย `firstOf(arr)` โดย `const arr = ["a", "b"]` `firstOf` คืน type อะไร และทำไม?',
+    options: [
+      '`"a" | "b"` — `const T` รักษา literal union จาก array',
+      '`string` — `arr` ถูก widen เป็น `string[]` ไปแล้วตั้งแต่ตอนประกาศ ก่อนที่ `firstOf` จะเห็นมันด้วยซ้ำ จึงไม่เหลือ literal ให้ `const` รักษา',
+      '`readonly ["a", "b"]` — `const T` ให้ readonly tuple เสมอ',
+      'compile error เพราะ `const T` ต้องการ array แบบ `readonly`',
+    ],
+    answer: 1,
+    explain: '`const arr = [...]` ยัง widen element type ใน array literal แบบ mutable ธรรมดาอยู่ดี มีแค่ `as const` หรือการจับผ่าน rest parameter ตอน call site เท่านั้นที่รักษา literal ไว้ `const T` ย้อนกลับไปแก้ widen ที่เกิดไปแล้วก่อน call ไม่ได้',
   },
 ];
 
