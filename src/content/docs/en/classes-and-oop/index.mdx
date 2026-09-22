@@ -16,7 +16,7 @@ Almost everything else in this course is a *type* — a compile-time construct t
 
 ```ts
 class User {
-  constructor(public name: string) {}
+  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
 }
 
 const u: User = new User("Ada"); // `User` as a TYPE (annotation) and a VALUE (constructor)

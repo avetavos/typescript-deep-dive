@@ -39,6 +39,7 @@ const r: Result<number> = { ok: true, value: 10 };
 When a class is generic, its type parameter is chosen **when you construct an instance**, and every method of that instance shares it:
 
 ```ts
+// @expect-error TS2345
 class Stack<T> {
   private items: T[] = [];
 
@@ -56,11 +57,27 @@ class Stack<T> {
 const numbers = new Stack<number>();
 numbers.push(1);
 numbers.push("two"); // ❌ Argument of type 'string' is not assignable to 'number'
-const top = numbers.pop();
+const last = numbers.pop();
 //    ^? number | undefined
 ```
 
+(`last`, not `top` — a script-scope file shares globals with the DOM lib, and `top` already means `Window.top`; an `import`/`export` module wouldn't collide.)
+
 Once you write `new Stack<number>()`, `T` is `number` for the life of that object. Often you don't even write it — `new Stack()` with a first `push(1)` can't infer, but many designs let inference fill `T` from a constructor argument.
+
+When nothing lets it infer at all, `T` doesn't become an error — it becomes `unknown`. `new Stack()` alone gives you a `Stack<unknown>`, and since `unknown` in a *parameter* position accepts anything, both pushes below type-check:
+
+```ts
+class Box<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+}
+
+const b = new Box();
+//    ^? Box<unknown>
+b.push(1);
+b.push("two"); // ✅ also compiles — unknown accepts any value in parameter position
+```
 
 ## Per-method type parameters
 
@@ -98,6 +115,11 @@ A class can implement a generic interface either by fixing the parameter or by s
 interface Repository<T> {
   getById(id: string): T | undefined;
   save(entity: T): void;
+}
+
+interface User {
+  id: string;
+  name: string;
 }
 
 // fix the parameter to a concrete type

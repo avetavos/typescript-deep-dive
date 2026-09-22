@@ -22,13 +22,29 @@ const p = pair(1, "hi");
 //    ^? [number, string]   — A from the first arg, B from the second
 ```
 
-เมื่อ parameter หนึ่งปรากฏมากกว่าหนึ่งครั้ง TypeScript จะประนีประนอมระหว่าง candidate:
+เมื่อ parameter หนึ่งปรากฏมากกว่าหนึ่งครั้ง TypeScript จะประนีประนอมระหว่าง candidate — แต่ "ประนีประนอม" ไม่ได้แปลว่า "รวมเป็น best common type" argument แต่ละตัวถูกเช็คกับ `T` *ตัวเดียวกัน* ทีละ candidate:
 
 ```ts
 function both<T>(a: T, b: T): T { return a; }
 
-const x = both(1, 2);        // T = number
-const y = both(1, "two");    // T = number | string (best common type)
+const x = both(1, 2);
+//    ^? 1 | 2   — two literal candidates for the same T, kept as a union
+```
+
+```ts
+// @expect-error TS2345
+function both<T>(a: T, b: T): T { return a; }
+
+const y = both(1, "two"); // the first argument fixes T = 1, so "two" doesn't fit
+```
+
+argument แรกกลายเป็น candidate ที่ใช้งานของ `T`; ตัวที่สองถูกเช็ค *กับ candidate นั้น* ไม่ได้ถูก merge เป็น common type ที่กว้างขึ้น ดังนั้น `1` กับ `"two"` ไม่ได้ประนีประนอมเป็น `number | string` แต่ขัดกัน ถ้าอยากได้ union จาก `both` จริง ๆ ต้องระบุชัด:
+
+```ts
+function both<T>(a: T, b: T): T { return a; }
+
+const z = both<number | string>(1, "two");
+//    ^? number | string
 ```
 
 การเข้าใจว่า inference อ่าน *ตำแหน่งของ argument* อธิบายโมเมนต์ "ทำไม compiler infer แบบนั้น" ได้เกือบทั้งหมด — และอธิบายว่าทำไมการ annotate return type ไม่เคยเปลี่ยนสิ่งที่ argument infer ออกมา
@@ -40,6 +56,8 @@ const y = both(1, "two");    // T = number | string (best common type)
 ตัวอย่างคลาสสิก — เอา return type ของ function:
 
 ```ts
+interface User { id: string; name: string }
+
 type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
 
 type A = MyReturnType<() => number>;      // number
@@ -47,7 +65,7 @@ type B = MyReturnType<(x: string) => User>; // User
 type C = MyReturnType<string>;            // never (not a function)
 ```
 
-อ่าน `infer R` ว่า "match type นี้กับ pattern `(...args) => R` ถ้าเข้ากันได้ ให้ bind `R` เป็นอะไรก็ตามที่อยู่ในตำแหน่ง return" นี่คือวิธีที่ built-in `ReturnType<T>` ถูกนิยามเป๊ะ
+อ่าน `infer R` ว่า "match type นี้กับ pattern `(...args) => R` ถ้าเข้ากันได้ ให้ bind `R` เป็นอะไรก็ตามที่อยู่ในตำแหน่ง return" นี่คือวิธีที่ built-in `ReturnType<T>` ถูกนิยาม**โดยประมาณ** — ตัวจริง (`lib.es5.d.ts`) เพิ่ม constraint กับ fallback ที่ต่างออกไป: `type ReturnType<T extends (...args: any) => any> = T extends (...args: any) => infer R ? R : any;` constraint รับประกันว่า `T` เรียกได้จริง และ false branch เป็น `any` ไม่ใช่ `never` — ดังนั้นการส่ง type ที่ไม่ใช่ function เข้าไปจะไม่ทำให้สิ่งที่ใช้ผลลัพธ์ต่อ "เป็นพิษ" เหมือนที่ `never` จะทำ (`never` จะหายไปเงียบ ๆ จาก union ส่วน `any` ยังอยู่ให้เห็นและ complain ทันทีตอนใช้ครั้งแรก)
 
 ## pattern นี้ใช้ได้ทั่วไป: ดึงส่วนไหนออกมาก็ได้
 
@@ -81,12 +99,50 @@ type M = Merge<{ a: string; b: number }>; // string | number (union)
 
 สำหรับงานทั่วไปในแต่ละวัน `infer` หนึ่งตัวต่อ pattern ก็พอแล้ว
 
-## `NoInfer<T>` และการปรับปรุง inference อื่น ๆ
+## `NoInfer<T>`: block inference site (5.4)
 
-- **`NoInfer<T>` (5.4)** mark inference site ให้ *ไม่มีส่วนร่วม*: `defaultColor?: NoInfer<C>` จะถูกเช็คกับ `C` ที่ infer จาก argument อื่นแทนที่จะทำให้มันกว้างขึ้น มัน erase กลายเป็น `T` — เป็นคำใบ้ให้ inference engine ไม่ใช่ type ใหม่ (ตัวอย่างเต็มอยู่ในบท Type Inference ของโมดูล Foundations)
-- **callback ใน object literal (6.0)** function ที่ไม่ใช้ `this` ไม่ถูกนับเป็น context-sensitive อีก `T` จึง infer จาก callback ของ property หนึ่งแล้วไหลไปยังตัวอื่นได้ annotation `(x: T)` ใน option object จึงน้อยลง
-- **inference เข้มขึ้นใน 5.9** การแก้ bug ที่ type variable "รั่ว" ออกจาก inference ทำให้บาง call ที่เคยยอมรับ `T` ผิด ๆ กลายเป็น error ถ้า call ไหน compile ไม่ผ่านหลังอัปเกรด วิธีแก้ที่ตั้งใจไว้คือระบุ type argument ให้ชัด: `f<Expected>(...)`
-- **instantiation เร็วขึ้น (5.9)** instantiation ระหว่างทางถูก cache เป็นเหตุผลที่ generic library หนัก ๆ (Zod, tRPC) เจอ error "excessively deep" น้อยลงมาก
+ทุกที่ที่ type parameter ปรากฏใน parameter list คือ inference site — รวมถึงจุดที่คุณไม่อยากให้มัน *มีส่วนร่วม* parameter แบบ "default" หรือ "fallback" คือตัวอย่างคลาสสิก:
+
+```ts
+function createStreetLight<C extends string>(colors: C[], defaultColor?: C) {}
+
+createStreetLight(["red", "yellow", "green"], "blue");
+// ✅ compiles — C is inferred as "red" | "yellow" | "green" | "blue", widened by defaultColor
+```
+
+นั่นมักไม่ใช่สิ่งที่คุณต้องการ: `"blue"` ไม่ใช่สีจริงตัวหนึ่ง แต่เพราะ `defaultColor` ก็เป็น inference site ของ `C` ด้วย มันเลยแค่ทำให้ union กว้างขึ้นจนรวม `"blue"` เข้าไป ห่อจุดที่ไม่อยากให้มีส่วนร่วมด้วย built-in `NoInfer<T>`:
+
+```ts
+// @expect-error TS2345
+function createStreetLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>) {}
+
+createStreetLight(["red", "yellow", "green"], "blue");
+```
+
+`NoInfer` erase กลายเป็น `T` ในระดับ type — มันเปลี่ยน *ที่ที่ compiler มองหา candidate* ไม่ใช่ type ที่ได้ เมื่อใส่แล้ว `defaultColor` จะถูกเช็คกับ `C` ที่ infer จาก `colors` เพียงอย่างเดียว ทำให้ `"blue"` fail ถูกต้อง (บท Type Inference ของโมดูล Foundations แนะนำเรื่องนี้แบบสั้น ๆ ไว้ ส่วนนี้คือภาพเต็ม ตอนนี้ generics และ inference site อยู่ใน scope แล้ว)
+
+## callback inference ใน object literal (6.0)
+
+contextual typing มีจุดอ่อนคลาสสิก: เมื่อ object literal มี callback หลายตัวและ `T` ต้อง infer จากตัวใดตัวหนึ่ง TypeScript เคยนับ *ทุกตัว* เป็น context-sensitive defer รวมกันแล้วยอมแพ้ — ปล่อยให้ตัวที่ไม่ได้ annotate กลายเป็น `unknown` ตั้งแต่ 6.0 function ที่ไม่ใช้ `this` เลยไม่ถูกนับเป็น context-sensitive อีก inference จึงเลือก `T` จาก callback ที่ annotate แล้วตัวหนึ่งแล้วไหลไปยังตัวอื่นได้:
+
+```ts
+declare function callIt<T>(obj: {
+  produce: (x: number) => T;
+  consume: (y: T) => void;
+}): void;
+
+callIt({
+  consume(y) { return y.toFixed(); }, // y: number — inferred from produce
+  produce(x: number) { return x * 2; },
+});
+```
+
+ก่อน 6.0 `y` จะเป็น `unknown` ตรงนี้ถ้าไม่ annotate เอง กฎง่าย ๆ ยังเหมือนเดิม — annotate parameter เมื่อ inference มองไม่เห็นจริง ๆ — แค่ต้องทำน้อยลง
+
+## การปรับปรุงอื่นใน 5.9
+
+- **inference เข้มขึ้น** การแก้ bug ที่ type variable "รั่ว" ออกจาก inference ทำให้บาง call ที่เคยยอมรับ `T` ผิด ๆ กลายเป็น error ถ้า call ไหน compile ไม่ผ่านหลังอัปเกรด วิธีแก้ที่ตั้งใจไว้คือระบุ type argument ให้ชัด: `f<Expected>(...)`
+- **instantiation เร็วขึ้น** instantiation ระหว่างทางถูก cache เป็นเหตุผลที่ generic library หนัก ๆ (Zod, tRPC) เจอ error "excessively deep" น้อยลงมาก
 
 <Callout title="สรุปหนึ่งบรรทัด">
 generic inference อ่าน **ตำแหน่งของ argument** (inference site) แล้วประนีประนอมเป็น type เดียว — จึงเป็นเหตุผลว่าทำไม argument (ไม่ใช่ return annotation) เป็นตัวตัดสินว่า `T` กลายเป็นอะไร keyword `infer` ที่ใช้ภายใน conditional type แนะนำ variable ที่ TypeScript แก้ให้ด้วยการ pattern-match structure: วาง `infer X` ตรงที่ส่วนที่คุณต้องการอยู่ (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) แล้ว TypeScript ยื่นชิ้นนั้นให้ นี่คือวิธีสร้าง `ReturnType` และเพื่อน ๆ

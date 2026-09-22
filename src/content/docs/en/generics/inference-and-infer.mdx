@@ -22,13 +22,29 @@ const p = pair(1, "hi");
 //    ^? [number, string]   — A from the first arg, B from the second
 ```
 
-When a parameter appears more than once, TypeScript reconciles the candidates:
+When a parameter appears more than once, TypeScript reconciles the candidates — but "reconciles" does not mean "unions them into a best common type." Each argument is checked against the *same* `T`, one candidate at a time:
 
 ```ts
 function both<T>(a: T, b: T): T { return a; }
 
-const x = both(1, 2);        // T = number
-const y = both(1, "two");    // T = number | string (best common type)
+const x = both(1, 2);
+//    ^? 1 | 2   — two literal candidates for the same T, kept as a union
+```
+
+```ts
+// @expect-error TS2345
+function both<T>(a: T, b: T): T { return a; }
+
+const y = both(1, "two"); // the first argument fixes T = 1, so "two" doesn't fit
+```
+
+The first argument becomes the working candidate for `T`; the second is then checked *against that candidate*, not merged into a wider common type — so `1` and `"two"` don't reconcile into `number | string`, they conflict. To actually get a union out of `both`, name it explicitly:
+
+```ts
+function both<T>(a: T, b: T): T { return a; }
+
+const z = both<number | string>(1, "two");
+//    ^? number | string
 ```
 
 Understanding that inference reads *argument positions* explains most "why did it infer that?" moments — and why annotating a return type never changes what the arguments infer.
@@ -40,6 +56,8 @@ Inside a conditional type, the `infer` keyword introduces a **new type variable 
 The canonical example — get a function's return type:
 
 ```ts
+interface User { id: string; name: string }
+
 type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;
 
 type A = MyReturnType<() => number>;      // number
@@ -47,7 +65,7 @@ type B = MyReturnType<(x: string) => User>; // User
 type C = MyReturnType<string>;            // never (not a function)
 ```
 
-Read `infer R` as: "match this type against the pattern `(...args) => R`, and if it fits, bind `R` to whatever was in the return position." This is exactly how the built-in `ReturnType<T>` is defined.
+Read `infer R` as: "match this type against the pattern `(...args) => R`, and if it fits, bind `R` to whatever was in the return position." This is essentially how the built-in `ReturnType<T>` is defined — the real one (`lib.es5.d.ts`) adds a constraint and a different fallback: `type ReturnType<T extends (...args: any) => any> = T extends (...args: any) => infer R ? R : any;`. The constraint guarantees `T` is callable at all, and the false branch is `any`, not `never` — so passing a non-function type doesn't poison whatever consumes the result the way a `never` would (a `never` would silently vanish from unions; `any` at least stays visible and complains loudly at first use).
 
 ## The pattern generalizes: pull out any part
 
@@ -81,12 +99,50 @@ type M = Merge<{ a: string; b: number }>; // string | number (union)
 
 For most day-to-day work, one `infer` per pattern is all you need.
 
-## `NoInfer<T>` and other inference refinements
+## `NoInfer<T>`: blocking an inference site (5.4)
 
-- **`NoInfer<T>` (5.4)** marks an inference site as *non-contributing*: `defaultColor?: NoInfer<C>` is checked against the `C` inferred from the other arguments instead of widening it. It erases to `T` — a hint to the inference engine, not a new type (worked example in the Type Inference lesson of the Foundations module).
-- **Callbacks in object literals (6.0).** Functions that don't use `this` are no longer context-sensitive, so `T` can be inferred from one property's callback and flow into its siblings. Fewer `(x: T)` annotations inside option objects.
-- **Tighter inference in 5.9.** A fix for type variables "leaking" out of inference means some calls that previously accepted a wrong `T` now error. If a call stops compiling after an upgrade, the intended fix is an explicit type argument: `f<Expected>(...)`.
-- **Faster instantiation (5.9).** Intermediate instantiations are cached, which is why heavy generic libraries (Zod, tRPC) hit "excessively deep" errors far less often.
+Every occurrence of a type parameter in a parameter list is an inference site — including ones you don't want contributing to the result. A "default" or "fallback" parameter is the classic case:
+
+```ts
+function createStreetLight<C extends string>(colors: C[], defaultColor?: C) {}
+
+createStreetLight(["red", "yellow", "green"], "blue");
+// ✅ compiles — C is inferred as "red" | "yellow" | "green" | "blue", widened by defaultColor
+```
+
+That's rarely what you want: `"blue"` isn't one of the real colors, but because `defaultColor` is *also* an inference site for `C`, it just widens the union to include it. Wrap the site you don't want to contribute in the built-in `NoInfer<T>`:
+
+```ts
+// @expect-error TS2345
+function createStreetLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>) {}
+
+createStreetLight(["red", "yellow", "green"], "blue");
+```
+
+`NoInfer` erases to `T` at the type level — it changes *where* the compiler looks for candidates, not the resulting type. With it, `defaultColor` is checked against the `C` inferred from `colors` alone, so `"blue"` correctly fails. (The Foundations module's Type Inference lesson introduces this briefly; this is the full picture, now that generics and inference sites are in scope.)
+
+## Callback inference in object literals (6.0)
+
+Contextual typing has a classic weak spot: when an object literal holds several callbacks and `T` must be inferred from one of them, TypeScript used to treat *all* of them as context-sensitive, defer them together, and give up — leaving the un-annotated ones `unknown`. Since 6.0, a function that never mentions `this` is no longer context-sensitive, so inference can pick `T` from one annotated callback and flow it into the others:
+
+```ts
+declare function callIt<T>(obj: {
+  produce: (x: number) => T;
+  consume: (y: T) => void;
+}): void;
+
+callIt({
+  consume(y) { return y.toFixed(); }, // y: number — inferred from produce
+  produce(x: number) { return x * 2; },
+});
+```
+
+Before 6.0, `y` was `unknown` here unless annotated by hand. The rule of thumb is unchanged — annotate a parameter when inference genuinely can't see it — it just needs to fire less often.
+
+## Other 5.9 refinements
+
+- **Tighter inference.** A fix for type variables "leaking" out of inference means some calls that previously accepted a wrong `T` now error. If a call stops compiling after an upgrade, the intended fix is an explicit type argument: `f<Expected>(...)`.
+- **Faster instantiation.** Intermediate instantiations are cached, which is why heavy generic libraries (Zod, tRPC) hit "excessively deep" errors far less often.
 
 <Callout title="The one-line takeaway">
 Generic inference reads **argument positions** (inference sites) and reconciles them into one type — which is why the arguments, not the return annotation, decide what `T` becomes. The `infer` keyword, used inside a conditional type, introduces a variable that TypeScript solves by pattern-matching structure: put `infer X` where the part you want lives (`(...args) => infer R`, `(infer E)[]`, `Promise<infer V>`) and TypeScript hands you that piece. This is how `ReturnType` and friends are built.

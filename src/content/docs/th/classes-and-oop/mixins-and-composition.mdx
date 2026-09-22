@@ -37,7 +37,7 @@ function Activatable<TBase extends Constructor>(Base: TBase) {
 }
 
 class User {
-  constructor(public name: string) {}
+  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
 }
 
 // Compose several behaviors onto User:

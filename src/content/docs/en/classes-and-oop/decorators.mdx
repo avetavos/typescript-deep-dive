@@ -18,17 +18,46 @@ A **decorator** is a function that wraps or observes a class or a class member, 
 
 This lesson covers **stage-3** decorators.
 
+<Callout title="Type-checks, but won't run here">
+Stage-3 decorators compile cleanly under `tsc --strict` and are untouched by `--erasableSyntaxOnly` (5.8) — that flag only rejects syntax that requires the compiler to *emit* something different, and decorators are standard ECMAScript syntax it leaves alone. But V8 itself has not implemented stage-3 decorators yet, so every example below throws `SyntaxError: Invalid or unexpected token` under `node --experimental-strip-types`. These are two independent axes — "does this need the compiler to transform the code" and "does the JavaScript engine understand this syntax" — and decorators pass the first while failing the second.
+</Callout>
+
 ### Stricter parsing since 5.5
 
-TypeScript 5.5 tightened what may follow the `@`: only an identifier, a dotted name, or a call. Anything else — a `super` access, an index expression — must be parenthesized:
+TypeScript 5.5 tightened what may follow the `@`: only an identifier, a dotted name, or a call. Anything else must be parenthesized to parse at all:
 
 ```ts
+// @expect-error TS1497 TS2660
 class C {
-  @super.decorate      // ❌ error since 5.5
-  method1() {}
+  @super.decorate
+  method() {}
+}
+```
 
-  @(super.decorate)    // ✅ parentheses make the expression explicit
-  method2() {}
+Parentheses only fix the *parse* error (`TS1497`). They do not make `super` valid there: a decorator expression is evaluated once, at class-definition time, in the lexical scope *outside* the class body — before any member (and its `super` binding) exists. So on a real subclass, the parenthesized form still fails, now with only the semantic error:
+
+```ts
+// @expect-error TS2660
+class Base {
+  static decorate(originalMethod: any, context: ClassMethodDecoratorContext) {}
+}
+
+class C extends Base {
+  @(super.decorate)
+  method() {}
+}
+```
+
+Parentheses exist for genuinely non-identifier decorator expressions — a ternary choosing between two decorators, a call, an index into a table of decorators:
+
+```ts
+declare function a(originalMethod: any, context: ClassMethodDecoratorContext): any;
+declare function b(originalMethod: any, context: ClassMethodDecoratorContext): any;
+declare const cond: boolean;
+
+class C {
+  @(cond ? a : b)      // ✅ parentheses make a non-identifier expression a valid decorator
+  method() {}
 }
 ```
 

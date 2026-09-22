@@ -72,14 +72,14 @@ Parameter properties are one of the few TypeScript features that *generate* code
 
 ```ts
 // ❌ under --erasableSyntaxOnly / node file.ts
-class User {
+class UserParamProp {
   constructor(public readonly id: string) {}
   //          ~~~~~~~~~~~~~~~~~~~~~~~~~~
   // This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
 }
 
 // ✅ the explicit form — same runtime shape, pure erasable syntax
-class User {
+class UserExplicit {
   readonly id: string;
   constructor(id: string) {
     this.id = id;
@@ -87,7 +87,25 @@ class User {
 }
 ```
 
-Two related notes. Since TypeScript 6.0, `strict` is on by default, so `strictPropertyInitialization` is too: a field declared without an initializer must be definitely assigned in the constructor (or marked `id!: string` if you assign it elsewhere). And the `accessor` keyword (5.0) declares an *auto-accessor* — a getter/setter pair backed by a private slot — which, like stage-3 decorators, is standard ECMAScript syntax and therefore erasable-safe. Since 5.6 the `override` checks also apply to members with computed names such as `[sym]() {}`.
+Two related notes. Since TypeScript 6.0, `strict` is on by default, so `strictPropertyInitialization` is too: a field declared without an initializer must be definitely assigned in the constructor (or marked `id!: string` if you assign it elsewhere). And the `accessor` keyword (5.0) declares an *auto-accessor* — a getter/setter pair backed by a private slot — which, like stage-3 decorators, is standard ECMAScript syntax and therefore erasable-safe.
+
+## `override` and `noImplicitOverride`
+
+Writing `override` on a method tells the compiler — and the next reader — that this member is intentionally replacing one from the base class. That check runs immediately, with no flag required: if the base class doesn't actually have a member by that name (usually a typo), the error points at the typo instead of silently declaring an unrelated new method.
+
+```ts
+// @expect-error TS4117
+class Animal {
+  makeSound() { return "..."; }
+}
+
+class Dog extends Animal {
+  override makeSound() { return "Woof"; } // ✅ genuinely overrides
+  override mkSound() { return "Woof"; } // ❌ typo — no such member on Animal
+}
+```
+
+That's always on. What `noImplicitOverride` adds is the mirror requirement — and it is *not* part of `strict`, so you opt in separately (`"noImplicitOverride": true`). With it enabled, silently overriding a base method without writing `override` becomes an error too: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` Together the two checks mean an `override` you didn't intend is always caught, and (with the flag) one you forgot to label is caught as well. Since 5.6 the `override` checks also apply to members with computed names such as `[sym]() {}`; Phase 3 covers `noImplicitOverride` alongside `private`/`#private` and accessors in depth.
 
 ## `static` members
 
@@ -115,7 +133,7 @@ abstract class Shape {
 // new Shape(); // ❌ Cannot create an instance of an abstract class.
 
 class Square extends Shape {
-  constructor(private side: number) { super(); }
+  constructor(private side: number) { super(); } // parameter property — needs emit, see "erasable syntax"
   area() { return this.side * this.side; } // required
 }
 ```

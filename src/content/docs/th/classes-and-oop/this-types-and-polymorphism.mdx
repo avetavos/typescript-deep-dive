@@ -68,13 +68,27 @@ class Counter {
 
 const c = new Counter();
 const fn = c.increment;
-// fn(); // 💥 at runtime `this` is undefined
+fn(); // 💥 at runtime `this` is undefined — and the type system says nothing
 ```
 
-TypeScript จับอันนี้ได้เมื่อคุณ opt in ตัว `strictBindCallApply` และ (ด้วย `this` parameter) checker จะ flag การเรียก method ที่ไม่ได้ bind วิธีแก้แบบ idiomatic คือใช้ **arrow-function field** (`increment = () => { ... }` ซึ่ง bind `this` แบบ lexical) หรือ bind ที่จุดเรียก (`c.increment.bind(c)`)
+โดย default type system **ไม่จับ** อันนี้เลย: `increment` ไม่เคยประกาศว่า `this` ต้องเป็นอะไร ดังนั้น `fn()` type-check ผ่านโดยไม่มี diagnostic เลยแม้จะพังตอน runtime `strictBindCallApply` ไม่ได้เพิ่มเช็คนี้ให้ — มันแค่ทำให้ `.call`/`.apply`/`.bind` เองตรวจ argument `this` ของมันกับ `this` parameter ที่ method ประกาศไว้แล้ว ถ้าอยากได้ warning ตอน compile ต้องให้ method ประกาศ `this` ที่ต้องการเองตรง ๆ:
+
+```ts
+// @expect-error TS2684
+class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+
+const c = new Counter();
+const fn = c.increment;
+fn();
+```
+
+ตอนนี้ mismatch ถูกจับแล้ว: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` วิธีแก้แบบ idiomatic คือใช้ **arrow-function field** (`increment = () => { ... }` ซึ่ง bind `this` แบบ lexical) หรือ bind ที่จุดเรียก (`c.increment.bind(c)`) แต่ arrow field ก็ไม่ได้ฟรี — มันถูกสร้างใหม่บน **ทุก instance** แทนที่จะอยู่บน prototype ตัวเดียวเหมือน method ปกติ จึงกิน memory ต่อ instance มากกว่า และเพราะมันเป็น field ธรรมดาไม่ใช่ method subclass จึง `override` มันไม่ได้และเรียกผ่าน `super` ไม่ได้ด้วย
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และเป็น **polymorphic** — ใน subclass จะหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit และ bug เสีย `this` ของ JavaScript มี defense ระดับ type — bind ด้วย arrow-function field หรือ `.bind()`
+`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และเป็น **polymorphic** — ใน subclass จะหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit bug เสีย `this` ของ JavaScript type checker มองไม่เห็นเลยเว้นแต่ method จะประกาศ `this` parameter — arrow-function field หรือ `.bind()` แก้ได้ แลกกับ copy ต่อ instance ที่ `override` ไม่ได้
 </Callout>
 
 export const quizThis = [

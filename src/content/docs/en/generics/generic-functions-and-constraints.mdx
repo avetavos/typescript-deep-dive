@@ -31,8 +31,9 @@ You *can* pass it explicitly (`first<number>([1, 2, 3])`), but you rarely need t
 An unconstrained `T` can be *anything*, so you can't assume it has any properties. When your function needs `T` to have some shape, constrain it with `extends`:
 
 ```ts
+// @expect-error TS2339 TS2345
 // ❌ without a constraint, T might not have .length
-function longest<T>(a: T, b: T) {
+function longestLoose<T>(a: T, b: T) {
   return a.length > b.length ? a : b; // Error: Property 'length' does not exist on type 'T'
 }
 
@@ -53,12 +54,13 @@ Read `T extends { length: number }` as "`T` must be assignable to `{ length: num
 A constraint can reference another type parameter. The classic example is a type-safe `get`:
 
 ```ts
+// @expect-error TS2345
 function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
   return obj[key];
 }
 
 const user = { name: "Ada", age: 36 };
-const name = getProp(user, "name");
+const label = getProp(user, "name");
 //    ^? string
 const age = getProp(user, "age");
 //    ^? number
@@ -88,7 +90,7 @@ Generics are a tool, not a goal. A type parameter that appears **only once** in 
 
 ```ts
 // pointless generic: T is used once, links nothing
-function log<T>(x: T): void { console.log(x); }
+function logLoose<T>(x: T): void { console.log(x); }
 // just write:
 function log(x: unknown): void { console.log(x); }
 ```
@@ -105,7 +107,7 @@ function tuple<const T extends readonly unknown[]>(...items: T): T {
 }
 
 const t = tuple("a", 1, true);
-//    ^? readonly ["a", 1, true]   — without const: (string | number | boolean)[]
+//    ^? readonly ["a", 1, true]   — without const: [string, number, boolean], same tuple shape, literals widened
 ```
 
 The constraint usually needs `readonly` (the inferred literal is a readonly tuple or object). Use it for APIs that key off literal values — route tables, enum-like configs, builders — and leave ordinary generics alone.

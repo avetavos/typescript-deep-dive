@@ -71,15 +71,15 @@ class User {
 parameter property เป็นหนึ่งในไม่กี่ feature ของ TypeScript ที่ *generate code*: compiler ต้อง emit บรรทัด `this.id = id` ให้ ซึ่งตอนนี้สำคัญกว่าแต่ก่อน เพราะ Node รันไฟล์ `.ts` ตรง ๆ ด้วยการ **strip** type ทิ้ง (Node 22.6+ หลัง flag และเปิดเป็นค่าเริ่มต้นตั้งแต่ Node 23.6 / 24) และ TypeScript 5.8 เพิ่ม `--erasableSyntaxOnly` เพื่อบังคับว่า code ของคุณใช้แต่ syntax ที่ลบทิ้งได้ — ทั้งสองกรณี parameter property จึงเป็น error เช่นเดียวกับ `enum`, `namespace` ที่มี runtime code และ `import =`
 
 ```ts
-// ❌ ภายใต้ --erasableSyntaxOnly / node file.ts
-class User {
+// ❌ under --erasableSyntaxOnly / node file.ts
+class UserParamProp {
   constructor(public readonly id: string) {}
   //          ~~~~~~~~~~~~~~~~~~~~~~~~~~
   // This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
 }
 
-// ✅ รูปแบบเขียนเต็ม — runtime shape เดิม แต่เป็น erasable syntax ล้วน
-class User {
+// ✅ the explicit form — same runtime shape, pure erasable syntax
+class UserExplicit {
   readonly id: string;
   constructor(id: string) {
     this.id = id;
@@ -87,7 +87,25 @@ class User {
 }
 ```
 
-มีอีกสองเรื่องที่เกี่ยวกัน ตั้งแต่ TypeScript 6.0 `strict` เปิดเป็นค่าเริ่มต้น `strictPropertyInitialization` จึงเปิดด้วย: field ที่ประกาศโดยไม่มี initializer ต้องถูก assign แน่นอนใน constructor (หรือใส่ `id!: string` ถ้าคุณ assign ที่อื่น) และ keyword `accessor` (5.0) ประกาศ *auto-accessor* — คู่ getter/setter ที่มี private slot รองรับ — ซึ่งเหมือน stage-3 decorator คือเป็น syntax ECMAScript มาตรฐาน จึงปลอดภัยกับการ strip type ตั้งแต่ 5.6 การเช็ค `override` ครอบคลุม member ที่ชื่อเป็น computed name อย่าง `[sym]() {}` ด้วย
+มีอีกสองเรื่องที่เกี่ยวกัน ตั้งแต่ TypeScript 6.0 `strict` เปิดเป็นค่าเริ่มต้น `strictPropertyInitialization` จึงเปิดด้วย: field ที่ประกาศโดยไม่มี initializer ต้องถูก assign แน่นอนใน constructor (หรือใส่ `id!: string` ถ้าคุณ assign ที่อื่น) และ keyword `accessor` (5.0) ประกาศ *auto-accessor* — คู่ getter/setter ที่มี private slot รองรับ — ซึ่งเหมือน stage-3 decorator คือเป็น syntax ECMAScript มาตรฐาน จึงปลอดภัยกับการ strip type
+
+## `override` และ `noImplicitOverride`
+
+การเขียน `override` บน method บอก compiler — และคนอ่านโค้ดคนถัดไป — ว่า member นี้ตั้งใจ replace ของ base class จริง ๆ การเช็คนี้ทำงานทันที ไม่ต้องใช้ flag ใด ๆ: ถ้า base class ไม่มี member ชื่อนั้นอยู่จริง (มักเป็น typo) error จะชี้ที่จุด typo แทนที่จะแอบประกาศ method ใหม่ที่ไม่เกี่ยวข้องแบบเงียบ ๆ
+
+```ts
+// @expect-error TS4117
+class Animal {
+  makeSound() { return "..."; }
+}
+
+class Dog extends Animal {
+  override makeSound() { return "Woof"; } // ✅ genuinely overrides
+  override mkSound() { return "Woof"; } // ❌ typo — no such member on Animal
+}
+```
+
+อันนั้นเปิดอยู่เสมอ ส่วนที่ `noImplicitOverride` เพิ่มเข้ามาคือข้อบังคับกลับด้าน — และมัน **ไม่ได้** อยู่ใน `strict` คุณต้องเปิดแยกเอง (`"noImplicitOverride": true`) เมื่อเปิดแล้ว การ override method ของ base แบบเงียบ ๆ โดยไม่เขียน `override` จะกลายเป็น error ด้วย: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` รวมสองเช็คนี้เข้าด้วยกัน: `override` ที่ไม่ได้ตั้งใจถูกจับเสมอ และ (ถ้าเปิด flag) override ที่ลืมติดป้ายก็ถูกจับด้วย ตั้งแต่ 5.6 การเช็ค `override` ครอบคลุม member ที่ชื่อเป็น computed name อย่าง `[sym]() {}` ด้วย ส่วน `noImplicitOverride` แบบเต็ม ๆ พร้อม `private`/`#private` และ accessor จะอยู่ใน Phase 3
 
 ## `static` member
 
@@ -115,7 +133,7 @@ abstract class Shape {
 // new Shape(); // ❌ Cannot create an instance of an abstract class.
 
 class Square extends Shape {
-  constructor(private side: number) { super(); }
+  constructor(private side: number) { super(); } // parameter property — needs emit, see "erasable syntax"
   area() { return this.side * this.side; } // required
 }
 ```

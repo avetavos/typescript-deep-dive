@@ -39,6 +39,7 @@ const r: Result<number> = { ok: true, value: 10 };
 เมื่อ class เป็น generic type parameter ของตัวเองจะถูกเลือก **ตอนที่คุณ construct instance** และทุก method ของ instance นั้นใช้ร่วมกัน:
 
 ```ts
+// @expect-error TS2345
 class Stack<T> {
   private items: T[] = [];
 
@@ -56,11 +57,27 @@ class Stack<T> {
 const numbers = new Stack<number>();
 numbers.push(1);
 numbers.push("two"); // ❌ Argument of type 'string' is not assignable to 'number'
-const top = numbers.pop();
+const last = numbers.pop();
 //    ^? number | undefined
 ```
 
+(`last` ไม่ใช่ `top` — ไฟล์ script-scope แชร์ global กับ DOM lib และ `top` ถูกใช้แล้วในความหมาย `Window.top`; module ที่มี `import`/`export` จะไม่ชน)
+
 พอเขียน `new Stack<number>()` `T` ก็เป็น `number` ตลอดอายุของ object นั้น หลายครั้งคุณไม่ต้องเขียนด้วยซ้ำ — `new Stack()` แล้ว `push(1)` ครั้งแรก infer ไม่ได้ แต่หลาย design ให้ inference เติม `T` จาก argument ของ constructor
+
+เมื่อไม่มีอะไรให้ infer ได้เลย `T` จะไม่กลายเป็น error — มันกลายเป็น `unknown` `new Stack()` เฉย ๆ ให้ `Stack<unknown>` และเพราะ `unknown` ในตำแหน่ง *parameter* ยอมรับทุกอย่าง push ทั้งสองด้านล่างจึง type-check ผ่าน:
+
+```ts
+class Box<T> {
+  private items: T[] = [];
+  push(item: T): void { this.items.push(item); }
+}
+
+const b = new Box();
+//    ^? Box<unknown>
+b.push(1);
+b.push("two"); // ✅ also compiles — unknown accepts any value in parameter position
+```
 
 ## type parameter ต่อ method
 
@@ -98,6 +115,11 @@ class จะ implement generic interface ได้โดย fix parameter หร
 interface Repository<T> {
   getById(id: string): T | undefined;
   save(entity: T): void;
+}
+
+interface User {
+  id: string;
+  name: string;
 }
 
 // fix the parameter to a concrete type

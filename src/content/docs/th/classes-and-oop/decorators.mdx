@@ -13,22 +13,51 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 **decorator** คือ function ที่ wrap หรือสังเกต class หรือ member ของ class ให้คุณเพิ่ม behavior แบบ declarative ด้วย syntax `@name` มีสอง design ที่เข้ากันไม่ได้ และสำคัญว่าคุณหมายถึงอันไหน:
 
-- **legacy decorator** — design เก่าแบบ experimental ที่เปิดด้วย `experimentalDecorators` ใน `tsconfig` ใช้เยอะใน Angular และ NestJS รุ่นเก่า signature ต่างกัน และพึ่ง `reflect-metadata`
+- **legacy decorator** — design เก่าแบบ experimental ที่เปิดด้วย `experimentalDecorators` ใน `tsconfig` ยังใช้เยอะใน NestJS และ Angular จึง flag นี้ยังเป็น opt-in ที่รองรับอยู่ใน TypeScript 7 signature ต่างกัน พึ่ง `reflect-metadata` และพึ่ง emit ของ `tsc` เอง — build ที่แค่ *strip* type ทิ้ง (`--erasableSyntaxOnly`, Node type stripping, fast path ของ bundler ส่วนใหญ่) รันมันไม่ได้
 - **stage-3 decorator** — design ECMAScript ที่เป็นมาตรฐาน รองรับ native ตั้งแต่ **TypeScript 5.0** โดยไม่ต้องใช้ flag พิเศษ และไม่เปลี่ยนเลยจนถึง TypeScript 7 เพราะ syntax เป็น ECMAScript ล้วน ๆ ไม่ใช่ส่วนขยายของ TypeScript อันนี้จึงเป็นตัวที่ควรเรียนสำหรับ code ใหม่
 
 บทเรียนนี้ครอบคลุม decorator แบบ **stage-3**
 
+<Callout title="type-check ผ่าน แต่รันตรงนี้ไม่ได้">
+stage-3 decorator compile ผ่านสะอาดภายใต้ `tsc --strict` และไม่ถูก `--erasableSyntaxOnly` (5.8) แตะเลย — flag นั้นปฏิเสธเฉพาะ syntax ที่ต้องให้ compiler *emit* โค้ดต่างออกไป และ decorator เป็น syntax มาตรฐานของ ECMAScript ที่มันปล่อยผ่าน แต่ V8 เองยังไม่ implement stage-3 decorator ดังนั้นตัวอย่างทุกอันด้านล่างจะ throw `SyntaxError: Invalid or unexpected token` ภายใต้ `node --experimental-strip-types` สองแกนนี้เป็นคนละเรื่องกัน — "code นี้ต้องให้ compiler แปลงไหม" กับ "JavaScript engine เข้าใจ syntax นี้ไหม" — decorator ผ่านแกนแรกแต่ไม่ผ่านแกนที่สอง
+</Callout>
+
 ### parse เข้มขึ้นตั้งแต่ 5.5
 
-TypeScript 5.5 จำกัดสิ่งที่ตามหลัง `@` ได้: มีแค่ identifier, dotted name หรือการเรียก function อย่างอื่น — เช่น การเข้าถึงผ่าน `super` หรือ index expression — ต้องใส่วงเล็บ:
+TypeScript 5.5 จำกัดสิ่งที่ตามหลัง `@` ได้: มีแค่ identifier, dotted name หรือการเรียก function อย่างอื่นต้องใส่วงเล็บถึงจะ parse ผ่าน:
 
 ```ts
+// @expect-error TS1497 TS2660
 class C {
-  @super.decorate      // ❌ error ตั้งแต่ 5.5
-  method1() {}
+  @super.decorate
+  method() {}
+}
+```
 
-  @(super.decorate)    // ✅ วงเล็บทำให้ expression ชัดเจน
-  method2() {}
+วงเล็บแก้ได้แค่ error ตอน *parse* (`TS1497`) มันไม่ได้ทำให้ `super` ใช้ตรงนั้นได้ — decorator expression ถูก evaluate ครั้งเดียวตอน class-definition time ใน lexical scope ที่อยู่ *นอก* class body — ก่อนที่ member ใด ๆ (และ `super` binding ของมัน) จะมีอยู่ด้วยซ้ำ ดังนั้นบน subclass จริง แบบใส่วงเล็บก็ยังพัง เหลือแค่ error เชิง semantic:
+
+```ts
+// @expect-error TS2660
+class Base {
+  static decorate(originalMethod: any, context: ClassMethodDecoratorContext) {}
+}
+
+class C extends Base {
+  @(super.decorate)
+  method() {}
+}
+```
+
+วงเล็บมีไว้สำหรับ decorator expression ที่ไม่ใช่ identifier จริง ๆ — ternary เลือกระหว่าง decorator สองตัว, การเรียก function, หรือ index เข้า table ของ decorator:
+
+```ts
+declare function a(originalMethod: any, context: ClassMethodDecoratorContext): any;
+declare function b(originalMethod: any, context: ClassMethodDecoratorContext): any;
+declare const cond: boolean;
+
+class C {
+  @(cond ? a : b)      // ✅ parentheses make a non-identifier expression a valid decorator
+  method() {}
 }
 ```
 

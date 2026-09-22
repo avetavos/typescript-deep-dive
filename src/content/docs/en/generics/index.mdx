@@ -28,6 +28,7 @@ a.toUpperCase(); // 💥 no error at compile time — any hides the bug
 `any` makes the function reusable but blinds the compiler: the link between the input type and the output type is gone. **Generics** keep that link.
 
 ```ts
+// @expect-error TS2339
 function identity<T>(x: T): T { return x; }
 
 const n = identity(42);      // T inferred as number → n: number

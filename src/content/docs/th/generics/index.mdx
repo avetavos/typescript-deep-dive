@@ -28,6 +28,7 @@ a.toUpperCase(); // 💥 no error at compile time — any hides the bug
 `any` ทำให้ function reuse ได้ก็จริง แต่ทำให้ compiler ตาบอด — ความเชื่อมโยงระหว่าง type ของ input กับ output หายไปหมด **Generics** เก็บความเชื่อมโยงนั้นไว้
 
 ```ts
+// @expect-error TS2339
 function identity<T>(x: T): T { return x; }
 
 const n = identity(42);      // T inferred as number → n: number

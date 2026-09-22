@@ -68,13 +68,27 @@ class Counter {
 
 const c = new Counter();
 const fn = c.increment;
-// fn(); // 💥 at runtime `this` is undefined
+fn(); // 💥 at runtime `this` is undefined — and the type system says nothing
 ```
 
-TypeScript can catch this when you opt in. The `strictBindCallApply` and (with a `this` parameter) the checker will flag an unbound method call. The idiomatic fixes are an **arrow-function field** (`increment = () => { ... }`, which binds `this` lexically) or binding at the call site (`c.increment.bind(c)`).
+By default the type system does **not** catch this: `increment` never declared what `this` must be, so `fn()` type-checks with zero diagnostics even though it crashes at runtime. `strictBindCallApply` does not add that check for you — it only makes `.call`/`.apply`/`.bind` themselves verify their `this` argument against a `this` parameter the method already declares. To get a compile-time warning here, the method has to declare its required `this` explicitly:
+
+```ts
+// @expect-error TS2684
+class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+
+const c = new Counter();
+const fn = c.increment;
+fn();
+```
+
+Now the mismatch is caught: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` The idiomatic fixes are an **arrow-function field** (`increment = () => { ... }`, which binds `this` lexically) or binding at the call site (`c.increment.bind(c)`). The arrow field isn't free, though: it is created fresh on **every instance** instead of living once on the prototype, so it costs more memory per instance, and because it's a plain field rather than a method, a subclass can't `override` it or reach the base version through `super`.
 
 <Callout title="The one-line takeaway">
-`this` is a type meaning "the current instance," and it is **polymorphic** — in a subclass it means the subclass. Return `this` (not the class name) from builder methods so chains keep their real subtype. A `this` **parameter** types the required calling context and is erased on emit. And the JavaScript lost-`this` bug has a type-level defense — bind with an arrow-function field or `.bind()`.
+`this` is a type meaning "the current instance," and it is **polymorphic** — in a subclass it means the subclass. Return `this` (not the class name) from builder methods so chains keep their real subtype. A `this` **parameter** types the required calling context and is erased on emit. The JavaScript lost-`this` bug is invisible to the type checker unless the method declares a `this` parameter — an arrow-function field or `.bind()` fixes it, at the cost of a per-instance copy that can't be `override`n.
 </Callout>
 
 export const quizThis = [

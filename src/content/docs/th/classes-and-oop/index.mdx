@@ -16,10 +16,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ```ts
 class User {
-  constructor(public name: string) {}
+  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
 }
 
-const u: User = new User("Ada"); // `User` เป็น TYPE (annotation) และ VALUE (constructor)
+const u: User = new User("Ada"); // `User` as a TYPE (annotation) and a VALUE (constructor)
 ```
 
 ธรรมชาติสองด้านนี้คือเหตุผลที่ class รู้สึกพิเศษ และเป็นเหตุผลที่ feature ของตัวเองแบ่งเป็นสองกลุ่ม: กลุ่มที่ compiler เช็คแล้ว erase (เช่น `private`) กับกลุ่มที่รอดไปถึง JavaScript ที่ emit ออกมา (เช่น `#private` field)
