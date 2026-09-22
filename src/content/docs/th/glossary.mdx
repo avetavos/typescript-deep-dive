@@ -1,0 +1,93 @@
+---
+title: Glossary
+description: 'คำศัพท์ทั้งหมดของคอร์สนี้ในที่เดียว — type system, construct ที่ใช้สร้าง type, tooling ที่ตรวจและ emit type และการใช้งานจริงกับโค้ดจริง'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+TypeScript ยืมคำภาษาอังกฤษธรรมดามาใช้ในความหมายทางเทคนิคที่เจาะจง — `narrow`, `widen`, `assignable`, `never` — เวลาบทเรียนใช้คำเหล่านี้แล้วไม่แน่ใจความหมาย ให้กลับมาดูที่นี่
+
+## The type system
+
+| Term | Meaning |
+|------|---------|
+| Structural typing | type สองตัวเข้ากันได้ถ้า *shape* ตรงกัน ไม่สนใจชื่อหรือความสัมพันธ์ที่ประกาศไว้ นี่คือ model default ของ TypeScript ดู [Structural Typing](/typescript/th/foundations/structural-typing/) |
+| Nominal typing | model ตรงข้าม (Java, C#): type สองตัวเข้ากันได้ก็ต่อเมื่อตัวหนึ่งถูกประกาศให้ extend หรือ implement อีกตัว TypeScript เลียนแบบ nominal typing ได้ด้วย private field กับ branded type แต่ default ยังเป็น structural ดู [Structural Typing](/typescript/th/foundations/structural-typing/) |
+| Assignable / assignability | ค่าที่เป็น type `A` ใช้แทนที่ type `B` ได้หรือไม่ ตรวจด้วยการเทียบ shape (structural typing) ไม่ใช่เทียบชื่อ มองเป็นความสัมพันธ์แบบ subset ระหว่างเซตของ value ที่แต่ละ type อธิบาย ดู [The Type-System Mindset](/typescript/th/foundations/type-system-mindset/) |
+| Subtype | `A` เป็น subtype ของ `B` เมื่อทุก value ของ `A` เป็น `B` ที่ใช้ได้ด้วย — เป็นความสัมพันธ์เดียวกับที่ assignability ตรวจ type ที่มี property จำเป็นมากกว่าเป็น subtype ของ type ที่มีน้อยกว่า (subset ของ value) |
+| Widening | compiler ขยาย literal type ให้กลายเป็น base type ของมัน — `"GET"` กลายเป็น `string` — ตรงจุดที่ compiler สันนิษฐานว่า value อาจเปลี่ยนได้ในภายหลัง เห็นชัดที่สุดคือ `let` และ property ของ object ที่ไม่ได้ annotate ด้วย `const` ดู [Literals & Widening](/typescript/th/everyday-types/literals-and-widening/) |
+| Narrowing | compiler ปรับ type ที่รู้จักของตัวแปรให้แคบลงภายใน branch หนึ่ง จากการเช็คก่อนหน้า (`typeof`, `in`, equality, custom type guard) ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| Literal type | type ที่มี value ได้ค่าเดียวเป๊ะ — `"GET"`, `42`, `true` — แทนที่จะเป็นเซตทั้งหมดของ string, number หรือ boolean ดู [Literals & Widening](/typescript/th/everyday-types/literals-and-widening/) |
+| Union | `A \| B`: value ที่เป็น *หนึ่งใน* หลาย type เซตของ value ที่ยอมรับคือ union (OR) ของเซตแต่ละตัว union จึง *กว้างกว่า* ส่วนประกอบของมัน ดู [Unions & Intersections](/typescript/th/everyday-types/unions-and-intersections/) |
+| Intersection | `A & B`: value ที่ตรงกับ *ทุก* type พร้อมกัน สำหรับ object type แปลว่ามีทุก property ของทุกตัว intersection จึง *แคบกว่า* ส่วนประกอบของมัน ดู [Unions & Intersections](/typescript/th/everyday-types/unions-and-intersections/) |
+| `never` | เซตว่าง — type ที่ไม่มี value ที่ใช้ได้เลย เป็น return type ของ function ที่ throw เสมอหรือวนไม่รู้จบ และเป็น type ที่เหลือใน branch ที่ถูก narrow จนไม่มีอะไรเหลือ ซึ่งเป็นกลไกที่ทำให้ exhaustiveness check ทำงานได้ ดู [Nullability & never](/typescript/th/practical-mastery/nullability-and-never/) |
+| `unknown` | คู่หูที่ type-safe ของ `any`: รับ value อะไรก็ได้ แต่ compiler บังคับให้ narrow ก่อนจะเอาไปทำอะไรต่อ ดู [The Type-System Mindset](/typescript/th/foundations/type-system-mindset/) |
+| `any` | ทำให้ value หลุดออกจากการตรวจ type ไปเลย assign เข้าหรือออกได้กับทุกอย่างแบบเงียบ ๆ ทั้งสองทิศทาง — เป็น type เดียวที่ทำลาย soundness ของทุกอย่างที่เหลือ ดู [Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/) |
+| Inference site | ตำแหน่ง — argument ของ function, initializer ของตัวแปร, `return` — ที่ compiler มีข้อมูลพอจะกำหนด type parameter ให้เป็น type ที่ชัดเจนได้โดยไม่ต้องเขียนออกมา ดู [Inference & infer](/typescript/th/generics/inference-and-infer/) |
+| Contextual typing | ข้อมูล type ที่ไหล *เข้าไปใน* expression จากบริบทรอบ ๆ แทนที่จะถูกอ่านออกมาจากมัน เช่น parameter ของ callback ที่ inference มาจาก array method ที่ callback นั้นถูกส่งเข้าไป โดยไม่มี annotation เลย ดู [Type Inference](/typescript/th/foundations/type-inference/) |
+| Variance | ความสัมพันธ์แบบ subtyping ของ compound type เทียบกับ type argument ของมัน: `Box<Dog>` เป็น (หรือไม่เป็น) subtype ของ `Box<Animal>` ขึ้นอยู่กับว่า `T` อยู่แค่ใน output position (covariant), แค่ input position (contravariant) หรือทั้งสองแบบ (invariant) คอร์สนี้ยังไม่มีบทเรียนเรื่อง variance โดยตรง จุดที่คำถามนี้เกิดขึ้น — type parameter ที่ถูกกำหนดครั้งเดียวต่อ instance — อยู่ใน [Generic Classes & Interfaces](/typescript/th/generics/generic-classes-and-interfaces/) |
+| Erasure | type ของ TypeScript มีอยู่แค่ตอน compile time เท่านั้น มันถูกลบทิ้งทั้งหมดตอน emit เป็น JavaScript ไม่มีอะไรเกี่ยวกับ type ที่ตรวจสอบหรือสังเกตได้ตอน runtime ดู [Why TypeScript?](/typescript/th/foundations/why-typescript/) |
+
+## Constructs
+
+| Term | Meaning |
+|------|---------|
+| `interface` | object shape ที่มีชื่อ *เปิดเพิ่ม* ทีหลังในสโคปเดียวกันได้ (declaration merging) และเป็นตัวเลือกที่ idiomatic สำหรับ public object contract ดู [Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/) |
+| Type alias (`type`) | ชื่อสำหรับ type อะไรก็ได้ — object shape, union, tuple, mapped type หรือ conditional type เปิดเพิ่มทีหลังไม่ได้เมื่อประกาศแล้ว แต่แสดง shape ที่ `interface` ทำไม่ได้ ดู [Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/) |
+| Generic | type, function หรือ class ที่ parameterize ด้วย type ที่ไม่ได้กำหนดตายตัวล่วงหน้า ทำให้ implementation เดียวใช้ได้กับหลาย type จริง โดยไม่เสีย type information ไปเป็น `any` ดู [Generics](/typescript/th/generics/) |
+| Constraint | `extends` clause บน type parameter (`<T extends { id: string }>`) จำกัดว่า `T` เป็นอะไรได้บ้าง ทำให้ compiler ยอมให้ operation ที่ต้องการ shape นั้นทำได้ ดู [Generic Functions & Constraints](/typescript/th/generics/generic-functions-and-constraints/) |
+| Mapped type | type ที่สร้างจากการวนลูปผ่าน key ของ type อีกตัว (`{ [K in keyof T]: ... }`) แล้วแปลง property แต่ละตัว เป็นกลไกเบื้องหลัง `Partial`, `Readonly` และตัวอื่น ๆ ดู [Mapped Types](/typescript/th/type-level-programming/mapped-types/) |
+| Conditional type | branch ระดับ type แบบ `T extends U ? X : Y` เลือกด้วยการเช็ค assignability ไม่ใช่การรัน code ดู [Conditional Types](/typescript/th/generics/conditional-types/) |
+| Template literal type | string type ที่สร้างจาก template (`` `on${Capitalize<K>}` ``) กระจาย (distribute) ผ่าน union ในตำแหน่งที่ interpolate ดู [Template Literal Types](/typescript/th/type-level-programming/template-literal-types/) |
+| Tuple | array ความยาวคงที่ที่แต่ละตำแหน่งมี type ของตัวเอง ต่างจาก array ที่ทุก element ใช้ type เดียวกันหมด ดู [Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/) |
+| `enum` | construct ที่ให้ชุดของ named constant (และสำหรับ numeric enum มี reverse mapping value→name ด้วย) ต่างจากเกือบทุกอย่างในลิสต์นี้ `enum` ไม่ถูก erase — มันสร้าง runtime code จริง นั่นคือเหตุผลที่มันโดนปฏิเสธภายใต้ `erasableSyntaxOnly` และตอนรันไฟล์ `.ts` ด้วย type-stripping ของ Node ดู [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| Declaration merging | สอง declaration ที่ชื่อเดียวกันในสโคปเดียวกันรวมกันเป็นหนึ่ง ที่พบบ่อยที่สุดคือ `interface` สอง declaration ที่ member รวมกันเป็น interface เดียว type alias ทำแบบนี้ไม่ได้ ดู [Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/) |
+| Module vs. script scope | ไฟล์ที่มี `import` หรือ `export` ระดับบนสุดคือ *module* มีสโคปของตัวเอง ไฟล์ที่ไม่มีทั้งคู่คือ *script* ซึ่ง share global scope กับ globals ของ DOM lib (`name`, `top`, `length` ล้วนเป็น property ของ `Window`) — เป็นเหตุผลหนึ่งที่ `const name = ...` ระดับบนสุดอาจชนกันแบบไม่คาดคิด ดู [Type Inference](/typescript/th/foundations/type-inference/) |
+| Ambient declaration / `declare` | statement ที่อธิบาย type ของ value โดยไม่มี implementation ให้ — `declare const x: number;` — ใช้กับ value ที่มีอยู่จริงตอน runtime ผ่านทางอื่น (global script, ไฟล์ `.d.ts`) ที่ compiler ไม่รู้จักมาก่อน ดู [Declaration Files](/typescript/th/compiler-and-tooling/declaration-files/) |
+| ไฟล์ `.d.ts` | ไฟล์ที่มีแต่ type declaration ไม่มี runtime code — วิธีที่ library แจก type แยกจาก (หรือคู่กับ) JavaScript ของมัน ดู [Declaration Files](/typescript/th/compiler-and-tooling/declaration-files/) |
+
+## Tooling
+
+| Term | Meaning |
+|------|---------|
+| `tsconfig.json` | ไฟล์ config ระดับ project ของ `tsc` — ไฟล์ไหนที่ include, target JavaScript เวอร์ชันไหน และเปิดการเช็คแบบไหน ดู [tsconfig, Deep](/typescript/th/compiler-and-tooling/tsconfig-deep/) |
+| The `strict` family | `strict: true` คือชุดของการเช็คที่เปิด/ปิดได้ทีละตัว (`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, `noImplicitThis` และอื่น ๆ) — สวิตช์ที่ตัดสินว่า compiler ยอม unsoundness ได้แค่ไหน ดู [tsconfig, Deep](/typescript/th/compiler-and-tooling/tsconfig-deep/) |
+| Module resolution | algorithm ที่ `tsc` ใช้แปลง import specifier ให้เป็นไฟล์จริงบนดิสก์ — ลอง extension ไหนบ้าง อ่าน `exports` ใน `package.json` หรือเปล่า และต่างกันยังไงระหว่างโหมด `node18`, `node20`, `nodenext`, `bundler` ดู [Modules & Resolution](/typescript/th/compiler-and-tooling/modules-and-resolution/) |
+| Emit | ไฟล์ JavaScript (และถ้าตั้งไว้ก็ `.d.ts` กับ source map) ที่ `tsc` เขียนลงดิสก์ — เป็นงานคนละส่วนจาก type-checking หลายโปรเจกต์ยกงานนี้ให้ bundler ทำแทน ดู [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| `isolatedModules` | flag ที่บังคับให้ทุกไฟล์ transpile ได้อย่างปลอดภัยด้วยตัวเอง ทีละไฟล์ โดยไม่ต้องมีข้อมูล type ข้ามไฟล์ — เงื่อนไขที่ transpiler แบบไฟล์เดียว (esbuild, SWC, Babel) ต้องการเพื่อให้ทำงานถูกต้อง ดู [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| `erasableSyntaxOnly` | flag (5.8) ที่ปฏิเสธ syntax ไหนก็ตามที่ต้องมี code ถูก emit ออกมาจริง แทนที่จะเป็น annotation ที่ลบทิ้งได้ — `enum`, `namespace` ที่มี runtime code, parameter property, `import x = require()` — สิ่งที่ผ่านการเช็คนี้จึงเป็นสิ่งเดียวกับที่ runtime แบบ type-stripping อย่าง Node รันได้ตรง ๆ ดู [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| Project references | กลไกของ `tsconfig.json` สำหรับแบ่ง codebase ใหญ่เป็นโปรเจกต์ย่อยที่ `tsc` build และ type-check แบบ incremental เช็คใหม่เฉพาะส่วนที่เปลี่ยน ดู [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| `tsgo` (native preview) | compiler ของ TypeScript 7 ที่เขียนใหม่ด้วย Go เพื่อความเร็วที่เพิ่มขึ้นแบบก้าวกระโดดเทียบกับ `tsc` แบบ JavaScript เดิม โดยพยายามให้ diagnostic ตรงกันเป๊ะ ดู [Why TypeScript?](/typescript/th/foundations/why-typescript/) |
+| Checkers | worker ที่ทำ type-checking แบบขนานของ `tsgo` ปรับได้ด้วย `--checkers` (default 4 ลดเหลือ 1 บน CI ที่ CPU จำกัด) — เป็นหนึ่งในเหตุผลที่มันเร็วกว่า `tsc` แบบ single-thread เดิม ดู [Performance & Pitfalls](/typescript/th/practical-mastery/performance-and-pitfalls/) |
+
+## Practice
+
+| Term | Meaning |
+|------|---------|
+| Type guard | expression อะไรก็ตามที่ compiler รู้จักว่า narrow union ได้ — `typeof x === "string"`, `x instanceof Foo`, `"key" in x`, หรือการเรียก custom function ที่มี return type เป็น type predicate ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| Type predicate | return type ของ function ในรูป `x is T` บอก compiler ว่าเมื่อ function คืน `true` แล้ว argument ของมันจะถูก narrow เป็น `T` — เป็นการอ้างที่ compiler เชื่อโดยไม่เช็ค body ของ function ว่าพิสูจน์จริงหรือเปล่า ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| Assertion function | function ที่ return type เป็น `asserts x is T` (หรือแค่ `asserts x`) narrow argument ของมันในทุกบรรทัด *หลังจาก* เรียกแล้ว return แบบปกติ แทนที่จะ narrow แค่ข้างใน branch `if` ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| Branded type | type ธรรมดา (ปกติเป็น `string` หรือ `number`) ที่ intersect กับ marker property เฉพาะที่จริง ๆ ไม่มีอยู่ตอน runtime ทำให้ compiler มองว่ามันแยกจาก value อื่นที่มี underlying type เดียวกัน เป็นเทคนิคมาตรฐานสำหรับ ID แบบ nominal ใน type system แบบ structural ดู [Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/) |
+| Discriminated union | union ของ object type ที่มี property ร่วมกันตัวหนึ่งเป็น literal type (เรียกว่า *discriminant* หรือ *tag*) ที่ value ของมันบอกได้ว่ากำลังถืออันไหนอยู่ ทำให้เช็คแค่ property นั้นตัวเดียวก็ narrow shape ที่เหลือได้ ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| Exhaustiveness | การเช็ค ปกติตอน compile time ว่าทุก member ของ union ถูกจัดการครบแล้ว วิธีทั่วไปคือ assign value ที่ "เป็นไปไม่ได้" ที่เหลือให้ตัวแปรที่ type เป็น `never` ใน branch `default`/`else` ซึ่งจะ compile ไม่ผ่านทันทีที่มี union member ใหม่ที่ยังไม่ถูกจัดการ ดู [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| `satisfies` | operator ที่เช็ค expression กับ type โดยไม่เปลี่ยน inferred type ของ expression เองแบบที่ annotation หรือ `as` จะทำ — ได้ทั้งการ validate *และ* คง type ที่แคบและเป็น literal ไว้ ดู [Literals & Widening](/typescript/th/everyday-types/literals-and-widening/) |
+
+## Reading AI-generated code: smells to look for
+
+โค้ด TypeScript ที่ generate มามักจะ compile ผ่านมากกว่าที่มัน *sound* จริง — นี่คือ pattern ที่มีโอกาสสูงที่สุดที่จะ compile ผ่านสวย ๆ แต่โกหกเงียบ ๆ ว่า value จริง ๆ เป็นอะไร
+
+| Pattern | Why it's a smell | Covered in |
+|---------|-------------------|------------|
+| `any` ตรง boundary ที่ type ควรแม่นที่สุด | จุดที่ codebase ต้องการ type จริงมากที่สุด — จุดที่ untrusted data เข้ามา (`fetch().json()`, `req.body`, `JSON.parse`) — คือจุดที่โค้ดที่ AI generate มักหยิบ `any` มาใช้เพื่อทำให้ error หายไป ซึ่งปิดการเช็คของทุกอย่างที่ต่อจากนั้นไปด้วย | [Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/) |
+| `as` cast ที่กลบความไม่ตรงกันจริง ๆ | `as` บอก compiler ให้เชื่อคุณโดยไม่เช็คตอน runtime เลย — เป็นการอ้างสิทธิ์ ไม่ใช่การตรวจสอบ โค้ด generated มักหยิบมันมาใช้ทันทีที่ type error โผล่ ซึ่งปิดเสียง error ที่ checker พูดถูกอยู่แล้ว | [Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/) |
+| Non-null assertion `!` บน value ที่หายไปได้จริง ๆ | `!` บอก compiler ว่า "เชื่อผมสิ อันนี้ไม่ใช่ `null`/`undefined`" โดยไม่เช็คตอน runtime เลย บน value จาก API response, `Map.get`, หรือ `.find()` ของ array มันเปลี่ยน type error ให้กลายเป็น runtime crash แทนที่จะแก้อะไรจริง ๆ | [Nullability & never](/typescript/th/practical-mastery/nullability-and-never/) |
+| `@ts-ignore` แทนที่จะเป็น `@ts-expect-error` | `@ts-ignore` กลืน error บรรทัดถัดไปแบบเงียบ ๆ ตลอดไป แม้ bug จริงจะถูกแก้ที่อื่นแล้วและมี error *ใหม่* ที่ต่างออกไปโผล่มาแทน `@ts-expect-error` ทำให้ build fail ทันทีที่บรรทัดที่ถูก suppress เลิก error ทำให้ error ที่ถูกแก้หรือเปลี่ยนไปแล้วไม่สามารถซ่อนแบบเงียบ ๆ ได้ | [Migration Strategy](/typescript/th/practical-mastery/migration-strategy/) |
+| `enum` ในโค้ดที่ต้องรันภายใต้ erasable syntax / type-stripping | `enum` เป็นหนึ่งใน construct ไม่กี่ตัวที่ไม่ถูก erase — มันสร้าง runtime code จริง โค้ด generated ที่หยิบ `enum` มาใช้ตามความเคยชินจะพังภายใต้ `erasableSyntaxOnly` หรือตอนรันตรงด้วย type-stripping ของ Node ซึ่ง object แบบ `as const` คือตัวแทนที่ใช้แทนกันได้เลย | [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) |
+| Parameter property (`constructor(public x: number)`) ในจุดเดียวกัน | เป็น shorthand ที่สะดวก แต่มันก็ generate code เหมือนกัน (การ assign `this.x = x`) เลยชนกำแพง erasable-syntax แบบเดียวกับ `enum` | [Classes, Deep](/typescript/th/classes-and-oop/classes-deep/) |
+| `switch` หรือ `if`/`else if` chain บน union ที่ไม่มี exhaustiveness check | จัดการทุก case ที่มีอยู่ *ตอนนี้* ได้ครบ แต่พอเพิ่ม union member ใหม่ทีหลัง chain จะไม่ทำอะไรกับมันแบบเงียบ ๆ — ไม่มี compiler error บอกว่าขาด branch ไหน นอกจากจะมี `default` ที่ type เป็น `never` คอยจับไว้ | [Narrowing](/typescript/th/everyday-types/narrowing/) |
+| `Function` type เปล่า ๆ เป็น parameter หรือ return type | `Function` เข้าได้กับ value ที่เรียกได้ *ทุกแบบ* ไม่ว่า signature อะไร เรียกมันด้วย argument อะไรก็ type-check ผ่าน และ return type ของมันเป็น `any` มันดูเหมือนกำลัง type "a function" แต่จริง ๆ type "ไม่เช็คอะไรเลย" ตรงนั้นควรเป็น function signature จริง (หรือ generic constraint) แทน | [Functions](/typescript/th/everyday-types/functions/) |
+| `object` หรือ `{}` ที่ใช้ในความหมาย "object อะไรก็ได้" | `object` แปลว่า "อะไรก็ได้ที่ไม่ใช่ primitive" — function กับ array ก็ผ่านเงื่อนไขนี้เหมือนกัน และมันไม่มี property ให้อ่านเลย `{}` แคบกว่านั้นอีก: "อะไรก็ได้ยกเว้น `null`/`undefined`" ซึ่งเป็นเหตุผลที่ intersect กับ `{}` คือเทคนิคเบื้องหลัง `NonNullable` ทั้งคู่ไม่ได้แปลว่า "object ที่มี property บางอย่าง" แบบที่โค้ด generated มักสันนิษฐาน shape จริงหรือ index signature ต่างหากที่ควรอยู่ตรงนั้น | [The Utility Types](/typescript/th/type-level-programming/utility-types/) |
+
+<ProgressTracker client:visible id="th/glossary" />

@@ -50,7 +50,7 @@ req(method2); // ❌ string is too wide for "GET" | "POST"
 <Mermaid title="const เก็บ literal; let widen" code={widenDiagram} />
 
 export const widenDiagram = `flowchart LR
-  lit["literal value\nGET"] -->|const: เปลี่ยนไม่ได้| keep["type: GET\n(แคบ)"]
+  lit["literal value\n\"GET\""] -->|const: เปลี่ยนไม่ได้| keep["type: \"GET\"\n(แคบ)"]
   lit -->|let: อาจเปลี่ยนได้| wide["type: string\n(ถูก widen)"]`;
 
 เมื่อคุณอยากได้ literal type จาก `let` หรือจาก property ของ object ให้ใช้ **const assertion** (`as const`) — เป็นหัวข้อเต็ม ๆ ในโมดูลถัดไป

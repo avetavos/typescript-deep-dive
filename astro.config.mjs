@@ -40,6 +40,7 @@ export default defineConfig({
         { label: 'Classes & Advanced OOP', translations: { th: 'Class และ OOP ขั้นสูง' }, items: [{ autogenerate: { directory: 'classes-and-oop' } }] },
         { label: 'The Compiler & Tooling', translations: { th: 'Compiler และ Tooling' }, items: [{ autogenerate: { directory: 'compiler-and-tooling' } }] },
         { label: 'Practical Mastery', translations: { th: 'ใช้งานจริงอย่างเชี่ยวชาญ' }, items: [{ autogenerate: { directory: 'practical-mastery' } }] },
+        { label: 'Glossary', translations: { th: 'อภิธานศัพท์' }, link: 'glossary' },
       ],
       }), preact()],
 });

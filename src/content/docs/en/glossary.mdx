@@ -1,0 +1,93 @@
+---
+title: Glossary
+description: 'Every term this course uses, in one place — the type system, the constructs that build types, the tooling that checks and emits them, and the practice of typing real code.'
+sidebar:
+  order: 99
+---
+
+import ProgressTracker from '../../../components/ProgressTracker.tsx';
+
+TypeScript reuses ordinary English words — `narrow`, `widen`, `assignable`, `never` — for precise technical meanings. When a lesson uses one of these terms in a way you're not sure of, look it up here.
+
+## The type system
+
+| Term | Meaning |
+|------|---------|
+| Structural typing | Two types are compatible if their *shapes* match, regardless of name or declared relationship. TypeScript's default compatibility model. See [Structural Typing](/typescript/en/foundations/structural-typing/). |
+| Nominal typing | The opposite model (Java, C#): types are compatible only if one is declared to extend or implement the other. TypeScript approximates nominal typing with private fields and branded types, but its default is structural. See [Structural Typing](/typescript/en/foundations/structural-typing/). |
+| Assignable / assignability | Whether a value of type `A` can be used where type `B` is expected, checked by comparing shapes (structural typing) rather than names. Modeled as the subset relationship between the sets of values each type describes. See [The Type-System Mindset](/typescript/en/foundations/type-system-mindset/). |
+| Subtype | `A` is a subtype of `B` when every value of `A` is also a valid `B` — the same relationship assignability checks. A type with more required properties is a subtype of one with fewer (a subset of values). |
+| Widening | The compiler generalizing a literal type to its base type — `"GET"` becomes `string` — at the boundaries where it assumes the value might change later, most visibly `let` and non-`const`-annotated object properties. See [Literals & Widening](/typescript/en/everyday-types/literals-and-widening/). |
+| Narrowing | The compiler refining a variable's known type within a branch, based on a preceding check (`typeof`, `in`, equality, a custom type guard). See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| Literal type | A type with exactly one value — `"GET"`, `42`, `true` — rather than the whole set of strings, numbers, or booleans. See [Literals & Widening](/typescript/en/everyday-types/literals-and-widening/). |
+| Union | `A \| B`: a value that is *one of* several types. The set of allowed values is the union (OR) of each member's set, so unions are *wider* than their parts. See [Unions & Intersections](/typescript/en/everyday-types/unions-and-intersections/). |
+| Intersection | `A & B`: a value that satisfies *all* of several types at once. For object types this means having every property of every member, so intersections are *narrower* than their parts. See [Unions & Intersections](/typescript/en/everyday-types/unions-and-intersections/). |
+| `never` | The empty set — a type with no valid values. The return type of a function that always throws or loops forever, and the type left over in a branch that has been narrowed to nothing, which is what makes exhaustiveness checks work. See [Nullability & never](/typescript/en/practical-mastery/nullability-and-never/). |
+| `unknown` | The type-safe counterpart to `any`: it accepts any value, but the compiler forces you to narrow it before you can do anything with it. See [The Type-System Mindset](/typescript/en/foundations/type-system-mindset/). |
+| `any` | Opts a value out of type checking entirely. Assignable to and from anything, silently, in both directions — the one type that breaks the soundness of everything else. See [Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/). |
+| Inference site | A location — a function argument, a variable initializer, a `return` — where the compiler has enough information to assign a type parameter a concrete type without it being written out. See [Inference & infer](/typescript/en/generics/inference-and-infer/). |
+| Contextual typing | Type information flowing *into* an expression from its surroundings, rather than being read out of it — for example a callback parameter inferred from the array method it was passed to, with no annotation written. See [Type Inference](/typescript/en/foundations/type-inference/). |
+| Variance | How a compound type's subtyping relationship relates to its type argument's: `Box<Dog>` being (or not being) a subtype of `Box<Animal>` depending on whether `T` only appears in output positions (covariant), only input positions (contravariant), or both (invariant). This course does not yet have a dedicated variance lesson; the setup where the question arises — a type parameter fixed once per instance — is in [Generic Classes & Interfaces](/typescript/en/generics/generic-classes-and-interfaces/). |
+| Erasure | TypeScript's types exist only at compile time; they are deleted entirely when JavaScript is emitted, and nothing about them is checkable or observable at runtime. See [Why TypeScript?](/typescript/en/foundations/why-typescript/). |
+
+## Constructs
+
+| Term | Meaning |
+|------|---------|
+| `interface` | A named object shape. Can be *re-opened* later in the same scope (declaration merging) and is the idiomatic choice for public object contracts. See [Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/). |
+| Type alias (`type`) | A name for any type — an object shape, a union, a tuple, a mapped or conditional type. Cannot be re-opened once declared, but can express shapes `interface` cannot. See [Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/). |
+| Generic | A type, function, or class parameterized over a type it doesn't fix in advance, so one implementation works across many concrete types without losing type information to `any`. See [Generics](/typescript/en/generics/). |
+| Constraint | An `extends` clause on a type parameter (`<T extends { id: string }>`) limiting which types `T` may be, so the compiler allows operations that require that shape. See [Generic Functions & Constraints](/typescript/en/generics/generic-functions-and-constraints/). |
+| Mapped type | A type built by looping over another type's keys (`{ [K in keyof T]: ... }`) and transforming each property, the mechanism behind `Partial`, `Readonly`, and friends. See [Mapped Types](/typescript/en/type-level-programming/mapped-types/). |
+| Conditional type | A type-level `T extends U ? X : Y` branch, chosen by checking assignability rather than running code. See [Conditional Types](/typescript/en/generics/conditional-types/). |
+| Template literal type | A string type built from a template (`` `on${Capitalize<K>}` ``), distributing over unions in its interpolated positions. See [Template Literal Types](/typescript/en/type-level-programming/template-literal-types/). |
+| Tuple | A fixed-length array where each position has its own known type, distinct from an array where every element shares one type. See [Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/). |
+| `enum` | A construct that gives a set of named constants (and, for numeric enums, a reverse value→name mapping). Unlike almost everything else in this list, `enum` is not erased — it generates real runtime code, which is why it is rejected under `erasableSyntaxOnly` and when running `.ts` files with Node's type-stripping. See [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/). |
+| Declaration merging | Two declarations with the same name in the same scope combining into one — most commonly two `interface` declarations, whose members merge into a single interface. Type aliases cannot do this. See [Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/). |
+| Module vs. script scope | A file with a top-level `import` or `export` is a *module*, with its own scope. A file with neither is a *script*, sharing global scope with the DOM lib's globals (`name`, `top`, `length` are all `Window` properties) — one reason a top-level `const name = ...` can collide unexpectedly. See [Type Inference](/typescript/en/foundations/type-inference/). |
+| Ambient declaration / `declare` | A statement that describes a value's type without providing an implementation — `declare const x: number;` — used for values that exist at runtime through some other means (a global script, a `.d.ts` file) that the compiler wouldn't otherwise know about. See [Declaration Files](/typescript/en/compiler-and-tooling/declaration-files/). |
+| `.d.ts` file | A file containing only type declarations, no runtime code — how a library ships its types separately from (or alongside) its JavaScript. See [Declaration Files](/typescript/en/compiler-and-tooling/declaration-files/). |
+
+## Tooling
+
+| Term | Meaning |
+|------|---------|
+| `tsconfig.json` | The project-wide configuration file for `tsc` — which files to include, which JavaScript version to target, and which checks to turn on. See [tsconfig, Deep](/typescript/en/compiler-and-tooling/tsconfig-deep/). |
+| The `strict` family | `strict: true` is a bundle of individually-toggleable checks (`strictNullChecks`, `noImplicitAny`, `strictFunctionTypes`, `noImplicitThis`, and more) — the on/off switches that decide how much unsoundness the compiler tolerates. See [tsconfig, Deep](/typescript/en/compiler-and-tooling/tsconfig-deep/). |
+| Module resolution | The algorithm `tsc` uses to turn an import specifier into an actual file on disk — which extensions it tries, whether it reads `package.json` `exports`, and how that differs between `node18`, `node20`, `nodenext`, and `bundler` modes. See [Modules & Resolution](/typescript/en/compiler-and-tooling/modules-and-resolution/). |
+| Emit | The JavaScript (and optionally `.d.ts` and source map) files `tsc` writes to disk — a separate job from type-checking, and one many projects hand to a bundler instead. See [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/). |
+| `isolatedModules` | A flag requiring every file to be safely transpilable on its own, one file at a time, with no cross-file type information — the constraint a single-file transpiler (esbuild, SWC, Babel) needs to work correctly. See [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/). |
+| `erasableSyntaxOnly` | A flag (5.8) rejecting any syntax that requires emitted code rather than a deletable annotation — `enum`, `namespace` with runtime code, parameter properties, `import x = require()` — so what passes the check is also what a type-stripping runtime like Node can run directly. See [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/). |
+| Project references | A `tsconfig.json` mechanism for splitting a large codebase into smaller projects that `tsc` builds and type-checks incrementally, only re-checking what changed. See [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/). |
+| `tsgo` (native preview) | The TypeScript 7 compiler, reimplemented in Go for a large constant-factor speedup over the original JavaScript `tsc`, while aiming to match its diagnostics exactly. See [Why TypeScript?](/typescript/en/foundations/why-typescript/). |
+| Checkers | `tsgo`'s parallel type-checking workers, tunable via `--checkers` (default 4; drop to 1 on CPU-constrained CI) — one of the reasons it's faster than the original single-threaded `tsc`. See [Performance & Pitfalls](/typescript/en/practical-mastery/performance-and-pitfalls/). |
+
+## Practice
+
+| Term | Meaning |
+|------|---------|
+| Type guard | Any expression the compiler recognizes as narrowing a union — `typeof x === "string"`, `x instanceof Foo`, `"key" in x`, or a call to a custom function with a type predicate return type. See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| Type predicate | A function return type of the form `x is T`, telling the compiler that when the function returns `true`, its argument is narrowed to `T` — a claim the compiler trusts without checking the function body proves it. See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| Assertion function | A function whose return type is `asserts x is T` (or plain `asserts x`), narrowing its argument in every line *after* the call returns normally, instead of only inside an `if` branch. See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| Branded type | A plain type (usually a `string` or `number`) intersected with a unique marker property it doesn't actually have at runtime, so the compiler treats it as distinct from other values of the same underlying type — the standard trick for nominal-style IDs in a structural type system. See [Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/). |
+| Discriminated union | A union of object types that share one literal-typed property (the *discriminant* or *tag*) whose value uniquely identifies which member you have, letting a single check on that property narrow the rest of the shape. See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| Exhaustiveness | Checking, usually at compile time, that every member of a union has been handled — typically by assigning the supposedly-impossible remaining value to a variable typed `never` in a `default`/`else` branch, which fails to compile the moment a new union member is added and left unhandled. See [Narrowing](/typescript/en/everyday-types/narrowing/). |
+| `satisfies` | An operator that checks an expression against a type without changing the expression's own inferred type the way an annotation or `as` would — so you get validation *and* keep the narrower, literal type. See [Literals & Widening](/typescript/en/everyday-types/literals-and-widening/). |
+
+## Reading AI-generated code: smells to look for
+
+Generated TypeScript type-checks more often than it is *sound* — these are the patterns most likely to compile cleanly while quietly lying about what a value actually is.
+
+| Pattern | Why it's a smell | Covered in |
+|---------|-------------------|------------|
+| `any` at a typed boundary | The one place a codebase most needs a real type — where untrusted data enters (`fetch().json()`, `req.body`, `JSON.parse`) — is exactly where AI-generated code reaches for `any` to make the error disappear, disabling checking for everything downstream too. | [Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/) |
+| An `as` cast papering over a real mismatch | `as` tells the compiler to trust you with no runtime check — a fact asserted, not verified. Generated code often reaches for it the moment a type error appears, which silences the exact error the checker was right to raise. | [Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/) |
+| Non-null assertion `!` on a value that can genuinely be missing | `!` tells the compiler "trust me, this isn't `null`/`undefined`" with zero runtime check. On a value from an API response, a `Map.get`, or an array `.find()`, this converts a type error into a runtime crash instead of fixing anything. | [Nullability & never](/typescript/en/practical-mastery/nullability-and-never/) |
+| `@ts-ignore` instead of `@ts-expect-error` | `@ts-ignore` silently swallows whatever error is on the next line, forever, even after the underlying bug is fixed elsewhere and a *different*, real error appears. `@ts-expect-error` fails the build the moment the suppressed line stops erroring, so a fixed or changed error can't hide silently. | [Migration Strategy](/typescript/en/practical-mastery/migration-strategy/) |
+| `enum` in code meant to run under erasable syntax / type-stripping | `enum` is one of the few constructs that isn't erased — it generates real runtime code. Generated code that reaches for `enum` out of habit will fail under `erasableSyntaxOnly` or when run directly with Node's type-stripping, where `as const` objects are the drop-in replacement. | [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/) |
+| Parameter properties (`constructor(public x: number)`) in the same place | Convenient shorthand, but it also generates code (the `this.x = x` assignment), so it hits the same erasable-syntax wall as `enum`. | [Classes, Deep](/typescript/en/classes-and-oop/classes-deep/) |
+| A `switch` or `if`/`else if` chain over a union with no exhaustiveness check | Handles every case that exists *today*. Add a new union member later and the chain silently does nothing for it — no compiler error tells you a branch is missing, unless a `never`-typed `default` was there to catch it. | [Narrowing](/typescript/en/everyday-types/narrowing/) |
+| A bare `Function` type as a parameter or return type | `Function` matches *any* callable value with any signature — calling it with any arguments type-checks, and its return type is `any`. It looks like it's typing "a function" but actually types "not checked at all"; a real function signature (or a generic constraint) belongs there instead. | [Functions](/typescript/en/everyday-types/functions/) |
+| `object` or `{}` used to mean "any object" | `object` means "anything that isn't a primitive" — functions and arrays satisfy it too, and it has no properties you can read. `{}` is narrower still: "anything except `null`/`undefined`," which is why intersecting with `{}` is the trick behind `NonNullable`. Neither means "an object with some properties" the way generated code often assumes; a real shape or an index signature does. | [The Utility Types](/typescript/en/type-level-programming/utility-types/) |
+
+<ProgressTracker client:visible id="en/glossary" />

@@ -42,7 +42,7 @@ literal `42` พอดีเข้าไปใน `number` ได้เพรา
 <Mermaid title="type ในฐานะเซต: union ทำให้กว้างขึ้น intersection ทำให้แคบลง" code={setDiagram} />
 
 export const setDiagram = `flowchart TB
-  subgraph u["A หรือ B  (union = OR)"]
+  subgraph u["A | B  (union = OR)"]
     ua["string"] --- ub["number"]
     note1["value ที่อยู่ในเซตใดเซตหนึ่ง\nยิ่งมี value เยอะ ยิ่งกว้าง"]
   end

@@ -40,7 +40,7 @@ const n: Named = user; // ✅ user has name (plus extra) — that's fine
 <Mermaid title="structural compatibility ว่าด้วย shape ที่จำเป็นต้องมี" code={structDiagram} />
 
 export const structDiagram = `flowchart LR
-  val["value:\nname, age, email"] -->|มีทุกอย่างที่\nNamed ต้องการ| target["target type:\nNamed มี name"]
+  val["value:\n{ name, age, email }"] -->|มีทุกอย่างที่\nNamed ต้องการ| target["target type:\nNamed { name }"]
   target -->|assign ได้ ✅| ok["ยอมรับ"]`;
 
 ## ข้อยกเว้น: excess property check บน object literal
