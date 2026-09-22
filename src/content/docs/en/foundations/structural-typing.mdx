@@ -48,6 +48,7 @@ export const structDiagram = `flowchart LR
 There's one place TypeScript tightens up. When you assign an **object literal directly**, it flags properties the target doesn't know about — because a literal with unexpected keys is almost always a typo or mistake.
 
 ```ts
+// @expect-error TS2353
 interface Options { width: number; }
 
 const a: Options = { width: 10, height: 20 };

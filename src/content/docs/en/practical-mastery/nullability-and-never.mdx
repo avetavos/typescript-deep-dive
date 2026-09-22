@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 The single most valuable compiler flag is `strictNullChecks` (part of `strict`). Without it, `null` and `undefined` are assignable to *every* type — the billion-dollar mistake, fully armed. With it, they are their own types you must handle explicitly.
 
 ```ts
+// @expect-error TS2345
 // with strictNullChecks on:
 function len(s: string) { return s.length; }
 
@@ -48,11 +49,18 @@ Three checker improvements since 5.5 remove common null-handling boilerplate —
 - **Always-truthy and always-nullish checks (5.6).** An expression that can never be nullish on the left of `??`, or a function or regex literal used as a condition, is an error.
 
 ```ts
+// @expect-error TS2454 TS2869 TS18048
+interface Bird { name: string }
+declare const names: string[];
+declare const registry: Map<string, Bird>;
+
 const birds = names.map(n => registry.get(n)).filter(b => b !== undefined);
 //    ^? Bird[]  — the predicate is inferred, no cast needed
 
-let result: number;
-function print() { console.log(result); } // ❌ used before being assigned (5.7)
+function demo() {
+  let result: number;
+  function print() { console.log(result); } // ❌ used before being assigned (5.7)
+}
 
 function limit(value: number, max?: number) {
   return value < max ?? 100; // ❌ left of ?? is never nullish (5.6)
@@ -76,6 +84,8 @@ It **erases** a real check with zero runtime verification. Sometimes you genuine
 Thrown exceptions are invisible to the type system — a function's signature never says what it might throw. A **Result type** makes failure explicit and type-checked:
 
 ```ts
+declare const input: string;
+
 type Result<T, E> =
   | { ok: true; value: T }
   | { ok: false; error: E };

@@ -26,6 +26,7 @@ greet({ nam: "Ada" }); // typo: `nam` not `name`
 typo นี้จะไม่ถูกเจอจนกว่าบรรทัดนั้นจะรัน — อาจจะบน production, อาจจะเจอกับ user โชคร้ายคนหนึ่ง TypeScript ย้ายการค้นพบนั้นมาที่ **compile time**:
 
 ```ts
+// @expect-error TS2561
 function greet(user: { name: string }) {
   return "Hello, " + user.name.toUpperCase();
 }
@@ -54,6 +55,7 @@ export const phaseDiagram = `flowchart LR
 นี่คือเหตุผลที่คุณทำแบบนี้ไม่ได้:
 
 ```ts
+// @expect-error TS1005
 function isString(x: unknown) {
   return x is string; // ❌ not a thing — types don't exist at runtime
 }
@@ -92,7 +94,7 @@ TypeScript ไม่ได้ฟรี และการแกล้งทำ�
 
 ## TypeScript 7 กับ native compiler
 
-คอร์สนี้เขียนอิง **TypeScript 7** (กรกฎาคม 2026) compiler ถูก port จาก TypeScript ไปเป็น Go: ภาษาเดิม คำสั่ง `tsc` เดิม แต่การ type-check ตอนนี้รันแบบ native และขนานกัน (`--checkers 4` เป็นค่าเริ่มต้น) ทำให้ full build เร็วขึ้นราว 8–12 เท่า และ "เวลาถึง error แรก" ใน editor ลดจากหลายวินาทีเหลือไม่ถึงวินาทีบน codebase ใหญ่ ๆ มีสองเรื่องที่กระทบตอนเรียน:
+คอร์สนี้เขียนอิง **TypeScript 7** (กรกฎาคม 2026) compiler ถูก port จาก TypeScript ไปเป็น Go: ภาษาเดิม คำสั่ง `tsc` เดิม แต่การ type-check ตอนนี้รันแบบ native และขนานกัน (`--checkers 4` เป็นค่าเริ่มต้น) ทำให้ full build เร็วขึ้นราว 8–12 เท่า และ "เวลาถึง error แรก" ใน editor ลดลงราว 10 เท่าบน codebase ใหญ่ ๆ — VS Code จาก 17.5s เหลือ 1.3s, Canva จาก 58s เหลือ 4.8s มีสองเรื่องที่กระทบตอนเรียน:
 
 - **`strict` เปิดเป็นค่าเริ่มต้น** ตั้งแต่ 6.0 `tsconfig.json` เปล่า ๆ ก็หมายถึง `noImplicitAny`, `strictNullChecks` และเพื่อน ๆ เปิดหมดแล้ว — ทุกตัวอย่างในคอร์สนี้ตั้งสมมติฐานแบบนั้น
 - **ทางหนีเก่า ๆ หายไปแล้ว** `target: "es5"`, `moduleResolution: "node"`, `baseUrl` และ `esModuleInterop: false` ถูก deprecate ใน 6.0 และถอดออกใน 7.0 โมดูล Compiler & Tooling อธิบายวิธี migrate

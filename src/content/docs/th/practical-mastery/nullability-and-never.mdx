@@ -15,7 +15,8 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 flag ที่มีค่ามากที่สุดตัวเดียวคือ `strictNullChecks` (เป็นส่วนหนึ่งของ `strict`) ถ้าไม่เปิด `null` และ `undefined` assign เข้า *ทุก* type ได้ — billion-dollar mistake แบบเต็มพิกัด พอเปิด จะกลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างชัดเจน
 
 ```ts
-// เมื่อเปิด strictNullChecks:
+// @expect-error TS2345
+// with strictNullChecks on:
 function len(s: string) { return s.length; }
 
 let maybe: string | undefined;
@@ -48,15 +49,22 @@ function avatar(u: User) {
 - **เช็คที่ truthy หรือ nullish เสมอ (5.6)** expression ที่ไม่มีทาง nullish ทางซ้ายของ `??` หรือ function / regex literal ที่ถูกใช้เป็นเงื่อนไข เป็น error
 
 ```ts
-const birds = names.map(n => registry.get(n)).filter(b => b !== undefined);
-//    ^? Bird[]  — predicate ถูก infer ให้ ไม่ต้อง cast
+// @expect-error TS2454 TS2869 TS18048
+interface Bird { name: string }
+declare const names: string[];
+declare const registry: Map<string, Bird>;
 
-let result: number;
-function print() { console.log(result); } // ❌ used before being assigned (5.7)
+const birds = names.map(n => registry.get(n)).filter(b => b !== undefined);
+//    ^? Bird[]  — the predicate is inferred, no cast needed
+
+function demo() {
+  let result: number;
+  function print() { console.log(result); } // ❌ used before being assigned (5.7)
+}
 
 function limit(value: number, max?: number) {
-  return value < max ?? 100; // ❌ ฝั่งซ้ายของ ?? ไม่มีทาง nullish (5.6)
-  //     value < (max ?? 100) คือสิ่งที่ตั้งใจ
+  return value < max ?? 100; // ❌ left of ?? is never nullish (5.6)
+  //     value < (max ?? 100) is what you meant
 }
 ```
 
@@ -76,6 +84,8 @@ el.innerHTML = "hi"; // ไม่ error — แต่ crash ถ้า #app ไ�
 exception ที่ throw มองไม่เห็นจาก type system — signature ของ function ไม่เคยบอกว่าอาจ throw อะไร **Result type** ทำให้ failure ชัดเจนและ type-checked:
 
 ```ts
+declare const input: string;
+
 type Result<T, E> =
   | { ok: true; value: T }
   | { ok: false; error: E };
@@ -87,8 +97,8 @@ function parsePort(s: string): Result<number, string> {
 }
 
 const r = parsePort(input);
-if (r.ok) r.value; // narrow เป็น number
-else r.error;      // narrow เป็น string
+if (r.ok) r.value; // narrowed to number
+else r.error;      // narrowed to string
 ```
 
 ตอนนี้ caller *ต้อง* จัดการทั้งสอง branch — compiler ไม่ยอมให้ลืม นี่คือ discriminated union (field `ok` เป็น tag) ซึ่งพาเราไปสู่เครื่องมือสุดท้าย

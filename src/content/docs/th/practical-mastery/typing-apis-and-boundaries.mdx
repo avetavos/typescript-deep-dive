@@ -19,8 +19,11 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 ## `any` ปิด checker ส่วน `unknown` เก็บ checker ไว้
 
 ```ts
+// @expect-error TS18046
+declare const input: string;
+
 const a: any = JSON.parse(input);
-a.user.name.toUpperCase(); // compile ผ่าน — และอาจระเบิดตอน runtime
+a.user.name.toUpperCase(); // compiles — and may explode at runtime
 
 const u: unknown = JSON.parse(input);
 u.user.name; // ❌ Error: 'u' is of type 'unknown'.
@@ -37,6 +40,8 @@ u.user.name; // ❌ Error: 'u' is of type 'unknown'.
 การ narrow `unknown` ต้องใช้ runtime check ที่ compiler เข้าใจ สำหรับ shape ง่าย ๆ ใช้ **type guard** ที่เขียนเอง:
 
 ```ts
+declare const input: string;
+
 type User = { id: number; name: string };
 
 function isUser(v: unknown): v is User {
@@ -49,20 +54,21 @@ function isUser(v: unknown): v is User {
 
 const data: unknown = JSON.parse(input);
 if (isUser(data)) {
-  data.name.toUpperCase(); // ✅ data เป็น User ตรงนี้
+  data.name.toUpperCase(); // ✅ data is User here
 }
 ```
 
 พอเป็นของจริง type guard ที่เขียนเองเริ่มน่าเบื่อและ drift ออกจาก type คำตอบมาตรฐานคือ **schema/parser library** (zod, valibot และเพื่อน ๆ) ที่ declaration เดียวเป็น *ทั้ง* runtime validator และ static type:
 
 ```ts
+declare const input: string;
 import { z } from "zod";
 
 const User = z.object({ id: z.number(), name: z.string() });
-type User = z.infer<typeof User>; // static type ที่ derive จาก schema
+type User = z.infer<typeof User>; // static type derived from the schema
 
 const data = User.parse(JSON.parse(input));
-// data ถูก type เป็น User และถูก check ตอน runtime — throw ถ้า invalid
+// data is typed User AND was checked at runtime — throws if invalid
 ```
 
 source of truth เดียว, check ตอน runtime, infer ตอน compile time นี่คือ boundary ที่ทำถูก
@@ -78,9 +84,12 @@ export const validateDiagram = `flowchart LR
 **JSON import** การ import ไฟล์ `.json` ให้ type ที่ได้มาจากเนื้อหาไฟล์โดยตรง — ไม่ต้องมี schema เพราะ compiler อ่านไฟล์ได้ ภายใต้ `--module nodenext` (TypeScript 5.7+) การ import ต้องมี attribute `type: "json"` และใช้ได้แค่ default import เท่านั้น ตรงตามที่ Node บังคับ:
 
 ```ts
+// @skip-verify JSON module import needs resolveJsonModule and a json file
 import config from "./config.json" with { type: "json" };
-config.default.port; // type มาจากไฟล์; named import เป็น error
+config.port; // typed from the file; named imports are an error
 ```
+
+(ตรวจแยกนอก harness นี้: `tsc --module nodenext --resolveJsonModule` กับ `config.json` จริงที่มี `{ "port": 8080 }` compile ผ่านสะอาดเมื่อ access เป็น `config.port` ไม่ใช่ `config.default.port`)
 
 สำหรับ config object ที่เขียนเอง `satisfies` เก็บ literal type ไว้พร้อมกับเช็ค shape:
 
@@ -89,20 +98,31 @@ const routes = { home: "/", user: "/users/:id" } satisfies Record<string, `/${st
 routes.home; // ยังเป็น literal "/" — ไม่ถูกขยายเป็น string
 ```
 
-**วันที่** library `es2025` ของ TypeScript 6.0 มาพร้อม type ของ **Temporal** API เมื่อ boundary ส่ง ISO timestamp มาให้ `Temporal.Instant.from(iso)` ให้ค่าที่ immutable และระบุ timezone ชัดเจน — เป็น type ภายในที่ดีกว่า `Date` ที่ mutable มาก และ Node 26 เปิด Temporal เป็นค่าเริ่มต้นแล้ว
+**วันที่** TypeScript มี type ของ **Temporal** API อยู่ใน library `esnext` (`lib.esnext.temporal.d.ts` — ยังไม่ถูกรวมเข้า `es2025` ตรวจสอบแล้วกับ lib file จริงของเวอร์ชัน 7.0.2 ที่ติดตั้งอยู่) เมื่อ boundary ส่ง ISO timestamp มาให้ `Temporal.Instant.from(iso)` ให้ค่าที่ immutable และระบุ timezone ชัดเจน — เป็น type ภายในที่ดีกว่า `Date` ที่ mutable มาก และคาดว่า Node 26 จะเปิด Temporal เป็นค่าเริ่มต้น
+
+```ts
+// @skip-verify Temporal lives in lib.esnext.temporal — this harness always compiles fences with --lib es2025; type-checked separately with --lib esnext,dom
+const instant = Temporal.Instant.from("2026-09-22T00:00:00Z");
+instant.epochMilliseconds; // type-checks
+```
+
+<Callout title="type compile ผ่านวันนี้ แต่ยังรันไม่ได้บน Node 24">
+type declaration มีอยู่จริง แต่บน Node 24.13 ของคอร์สนี้ runtime ยังไม่มี: `globalThis.Temporal` เป็น `undefined` (ยืนยันด้วย `node -e "console.log(typeof globalThis.Temporal)"` → `undefined`) type ที่มาก่อน runtime ไม่ใช่เรื่องสมมติ — อย่าเชื่อว่า "compile ผ่าน" คือหลักฐานว่า API มีอยู่จริงจนกว่าจะเช็ค
+</Callout>
 
 ## Branded type สำหรับ nominal ID
 
 structural typing หมายความว่า `UserId` กับ `OrderId` ที่เป็น `string` ทั้งคู่ใช้แทนกันได้ — คุณจึงส่งตัวหนึ่งไปที่ที่คาดหวังอีกตัวได้ เมื่อเรื่องนี้สำคัญ ให้ **brand** type เหล่านั้นด้วย marker แบบ phantom:
 
 ```ts
+// @expect-error TS2345
 type UserId = string & { readonly __brand: "UserId" };
 
 function getUser(id: UserId) { /* ... */ }
 
 const raw = "u_123";
-getUser(raw); // ❌ string ธรรมดาไม่ใช่ UserId
-getUser(raw as UserId); // ✅ คุณ assert มันอย่างตั้งใจตรง boundary
+getUser(raw); // ❌ plain string is not a UserId
+getUser(raw as UserId); // ✅ you deliberately asserted it at the boundary
 ```
 
 brand มีอยู่แค่ตอน compile time (ถูก erase ทิ้ง), ไม่มี cost ตอน runtime และบังคับให้ทุก `UserId` ถูก *สร้างอย่างตั้งใจ* — โดยปกติคือทันทีหลัง validate นี่คือวิธีได้ nominal safety ในระบบที่เป็น structural

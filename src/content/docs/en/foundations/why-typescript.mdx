@@ -26,6 +26,7 @@ greet({ nam: "Ada" }); // typo: `nam` not `name`
 The typo isn't found until that line executes — maybe in production, maybe for one unlucky user. TypeScript moves that discovery to **compile time**:
 
 ```ts
+// @expect-error TS2561
 function greet(user: { name: string }) {
   return "Hello, " + user.name.toUpperCase();
 }
@@ -54,6 +55,7 @@ export const phaseDiagram = `flowchart LR
 This is why you cannot do this:
 
 ```ts
+// @expect-error TS1005
 function isString(x: unknown) {
   return x is string; // ❌ not a thing — types don't exist at runtime
 }
@@ -92,7 +94,7 @@ The trade is almost always worth it for anything beyond a throwaway script: you 
 
 ## TypeScript 7 and the native compiler
 
-This course is written against **TypeScript 7** (July 2026). The compiler was ported from TypeScript to Go: same language, same `tsc` command, but type-checking now runs natively and in parallel (`--checkers 4` by default), which makes full builds roughly 8–12× faster and cuts the editor's "time to first error" from seconds to under a second on large codebases. Two consequences matter while you learn:
+This course is written against **TypeScript 7** (July 2026). The compiler was ported from TypeScript to Go: same language, same `tsc` command, but type-checking now runs natively and in parallel (`--checkers 4` by default), which makes full builds roughly 8–12× faster and cuts the editor's "time to first error" by roughly 10× on large codebases — VS Code dropped from 17.5s to 1.3s, Canva from 58s to 4.8s. Two consequences matter while you learn:
 
 - **`strict` is on by default.** Since 6.0 a bare `tsconfig.json` already means `noImplicitAny`, `strictNullChecks` and friends are enabled — every example in this course assumes that.
 - **Old escape hatches are gone.** `target: "es5"`, `moduleResolution: "node"`, `baseUrl` and `esModuleInterop: false` were deprecated in 6.0 and removed in 7.0. The Compiler & Tooling module covers the migration.

@@ -19,6 +19,9 @@ The first decision is which "I don't know this type" you reach for: `any` or `un
 ## `any` disables the checker; `unknown` keeps it
 
 ```ts
+// @expect-error TS18046
+declare const input: string;
+
 const a: any = JSON.parse(input);
 a.user.name.toUpperCase(); // compiles — and may explode at runtime
 
@@ -37,6 +40,8 @@ Note that `JSON.parse` is typed to return `any` — so its result silently poiso
 Narrowing `unknown` requires runtime checks the compiler understands. For simple shapes, a hand-written **type guard**:
 
 ```ts
+declare const input: string;
+
 type User = { id: number; name: string };
 
 function isUser(v: unknown): v is User {
@@ -56,6 +61,7 @@ if (isUser(data)) {
 For anything real, hand-written guards get tedious and drift from the type. The standard answer is a **schema/parser library** (zod, valibot, and friends) where one declaration is *both* the runtime validator and the static type:
 
 ```ts
+declare const input: string;
 import { z } from "zod";
 
 const User = z.object({ id: z.number(), name: z.string() });
@@ -78,9 +84,12 @@ export const validateDiagram = `flowchart LR
 **JSON imports.** Importing a `.json` file gives you a type derived from its contents — no schema needed, because the compiler can read the file. Under `--module nodenext` (TypeScript 5.7+) the import must carry the `type: "json"` attribute, and only the default import is allowed, exactly as Node requires:
 
 ```ts
+// @skip-verify JSON module import needs resolveJsonModule and a json file
 import config from "./config.json" with { type: "json" };
-config.default.port; // typed from the file; named imports are an error
+config.port; // typed from the file; named imports are an error
 ```
+
+(Verified separately, outside this harness: `tsc --module nodenext --resolveJsonModule` against a real `config.json` with `{ "port": 8080 }` compiles clean once the access is `config.port`, not `config.default.port`.)
 
 For hand-written config objects, `satisfies` keeps the literal types while checking the shape:
 
@@ -89,13 +98,24 @@ const routes = { home: "/", user: "/users/:id" } satisfies Record<string, `/${st
 routes.home; // still the literal "/" — not widened to string
 ```
 
-**Dates.** TypeScript 6.0's `es2025` library ships types for the **Temporal** API. When a boundary hands you an ISO timestamp, `Temporal.Instant.from(iso)` gives you an immutable, timezone-explicit value — a far better inner type than a mutable `Date`, and Node 26 enables Temporal by default.
+**Dates.** TypeScript ships types for the **Temporal** API in the `esnext` library (`lib.esnext.temporal.d.ts` — not yet folded into `es2025`, verified against the installed 7.0.2 lib files). When a boundary hands you an ISO timestamp, `Temporal.Instant.from(iso)` gives you an immutable, timezone-explicit value — a far better inner type than a mutable `Date`, and Node 26 is expected to enable Temporal by default.
+
+```ts
+// @skip-verify Temporal lives in lib.esnext.temporal — this harness always compiles fences with --lib es2025; type-checked separately with --lib esnext,dom
+const instant = Temporal.Instant.from("2026-09-22T00:00:00Z");
+instant.epochMilliseconds; // type-checks
+```
+
+<Callout title="Type-checks today, doesn't run yet on Node 24">
+The type declarations exist, but on this course's Node 24.13 the runtime doesn't: `globalThis.Temporal` is `undefined` (confirmed with `node -e "console.log(typeof globalThis.Temporal)"` → `undefined`). Types shipping ahead of the runtime isn't hypothetical here — never treat "it compiles" as proof an API exists until you check.
+</Callout>
 
 ## Branded types for nominal IDs
 
 Structural typing means a `UserId` and an `OrderId` that are both `string` are interchangeable — so you can pass one where the other is expected. When that matters, **brand** them with a phantom marker:
 
 ```ts
+// @expect-error TS2345
 type UserId = string & { readonly __brand: "UserId" };
 
 function getUser(id: UserId) { /* ... */ }

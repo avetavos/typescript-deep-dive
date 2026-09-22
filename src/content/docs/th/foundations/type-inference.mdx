@@ -16,11 +16,15 @@ TypeScript ที่ดีไม่ได้เต็มไปด้วย annot
 
 ```ts
 let count = 5;        // inferred: number
-const name = "Ada";   // inferred: "Ada"  (a literal type!)
+const label = "Ada";   // inferred: "Ada"  (a literal type!)
 const items = [1, 2]; // inferred: number[]
 ```
 
-สังเกตว่า `count` กับ `name` ถูก infer ต่างกัน และความต่างนั้นคือหนึ่งในกฎที่สำคัญที่สุดของภาษา
+สังเกตว่า `count` กับ `label` ถูก infer ต่างกัน และความต่างนั้นคือหนึ่งในกฎที่สำคัญที่สุดของภาษา
+
+<Callout title="ทำไมต้อง `label` ไม่ใช่ `name`">
+สคริปต์ระดับบนสุด (ไม่มี `import`/`export`) แชร์ scope กับ global ของ DOM lib — `name`, `top`, `length` ล้วนเป็น property ของ `Window` การประกาศ `const name = ...` ตรงนั้นจึงชนกับ `Window.name` (`TS2451`) ส่วนไฟล์ที่มี `import`/`export` เป็น module จึงไม่มีปัญหานี้
+</Callout>
 
 ## `let` widen, `const` เก็บ literal
 
@@ -34,6 +38,7 @@ let   b = "hello"; // type: string    (widened — b might become any string)
 นี่คือเหตุผลที่พฤติกรรม "โผล่มาแล้วก็หายไป" ของ literal type สำคัญอยู่ตลอด:
 
 ```ts
+// @expect-error TS2345
 const method = "GET";        // type: "GET"
 let   method2 = "GET";       // type: string
 
@@ -75,6 +80,10 @@ window.addEventListener("click", (e) => {
 เมื่อ value อาจเป็นได้หลาย type — เช่น array ที่มี element ปนกัน — compiler จะคำนวณ **best common type** ที่ครอบคลุมทั้งหมด:
 
 ```ts
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+declare const circle: Circle, square: Square;
+
 const mixed = [1, "two", 3]; // inferred: (string | number)[]
 const shapes = [circle, square]; // inferred: (Circle | Square)[]
 ```
@@ -92,6 +101,8 @@ const shapes = [circle, square]; // inferred: (Circle | Square)[]
 ที่เหลือทั้งหมดให้ใช้ inference annotation ที่ซ้ำซ้อนคือ noise ที่อาจ *เพี้ยน* ไปจากความจริงตอน refactor
 
 ## annotate น้อยลงใน generic callback (TypeScript 6.0)
+
+สองหัวข้อถัดไปใช้ generic (`<T>`) ก่อนที่โมดูล Generics จะสอนอย่างเป็นทางการ เพราะ callback inference กับ `NoInfer` เป็นเรื่องของ inference โดยตรง เนื้อหานี้จะย้ายไปท้าย [`generics/inference-and-infer`](/typescript/th/generics/inference-and-infer/) ในภายหลัง ซึ่ง refer กลับมาที่นี่อยู่แล้ว — ถือเป็นตัวอย่าง preview ไปก่อนถ้ายังไม่คุ้นกับ generic
 
 contextual typing มีจุดอ่อนคลาสสิกอยู่จุดหนึ่ง: เมื่อ object literal มี callback หลายตัวและต้อง infer `T` จากตัวใดตัวหนึ่ง TypeScript เคยมอง *ทุกตัว* เป็น context-sensitive แล้วเลื่อนไปพร้อมกันจนยอมแพ้ ตั้งแต่ 6.0 function ที่ไม่แตะ `this` เลยจะไม่ถูกนับเป็น context-sensitive อีก inference จึงหยิบ `T` จาก callback ที่ annotate ไว้แล้วส่งต่อให้ตัวอื่นได้:
 
@@ -123,10 +134,11 @@ createStreetLight(["red", "yellow", "green"], "blue");
 ห่อตำแหน่งที่คุณ *ไม่* อยากให้มีส่วนร่วมด้วย `NoInfer<T>` ที่มีมาให้:
 
 ```ts
+// @expect-error TS2345
 function createStreetLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>) {}
 
 createStreetLight(["red", "yellow", "green"], "blue");
-// ❌ '"blue"' assign ให้ '"red" | "yellow" | "green" | undefined' ไม่ได้
+// ❌ '"blue"' is not assignable to '"red" | "yellow" | "green" | undefined'
 ```
 
 `NoInfer` erase กลายเป็น `T` — มันเปลี่ยนแค่ *ตำแหน่งที่ compiler มอง* ไม่ได้เปลี่ยน type ผลลัพธ์ หยิบมาใช้เมื่อ parameter แบบ "default" หรือ "fallback" ต้องถูกเช็คกับ type ที่ infer มาจากที่อื่น

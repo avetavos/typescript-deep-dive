@@ -26,6 +26,7 @@ Once types are sets, the operations you already know from math explain the whole
 `a` is assignable to `b` **if and only if** the set `a` is a subset of the set `b`. That's the entire rule.
 
 ```ts
+// @expect-error TS2322
 let x: 42 = 42;
 let y: number = x; // ✅ {42} ⊆ all numbers
 
@@ -62,6 +63,7 @@ Sets have a smallest and largest, and TypeScript names them:
 - **`unknown`** is the **set of all values** — the top type. Everything is assignable *to* `unknown`, but `unknown` is assignable to almost nothing until you narrow it. It's the type-safe version of `any`.
 
 ```ts
+// @expect-error TS2322
 let n: never;
 let u: unknown = "anything goes";
 

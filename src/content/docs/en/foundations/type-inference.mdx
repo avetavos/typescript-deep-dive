@@ -16,11 +16,15 @@ Good TypeScript is not covered in annotations. The compiler *infers* most types,
 
 ```ts
 let count = 5;        // inferred: number
-const name = "Ada";   // inferred: "Ada"  (a literal type!)
+const label = "Ada";   // inferred: "Ada"  (a literal type!)
 const items = [1, 2]; // inferred: number[]
 ```
 
-Note that `count` and `name` are inferred differently, and that difference is one of the most important rules in the language.
+Note that `count` and `label` are inferred differently, and that difference is one of the most important rules in the language.
+
+<Callout title="Why `label`, not `name`">
+A top-level script (no `import`/`export`) shares its scope with the DOM lib's globals — `name`, `top`, and `length` are all properties of `Window`. Declaring `const name = ...` there collides with `Window.name` (`TS2451`). Files with `import`/`export` are modules and don't have this problem.
+</Callout>
 
 ## `let` widens, `const` keeps the literal
 
@@ -34,6 +38,7 @@ let   b = "hello"; // type: string    (widened — b might become any string)
 This is why literal types "appear and disappear." It matters constantly:
 
 ```ts
+// @expect-error TS2345
 const method = "GET";        // type: "GET"
 let   method2 = "GET";       // type: string
 
@@ -75,6 +80,10 @@ This is why callback parameters usually don't need annotations: the function you
 When a value could be several types — like an array with mixed elements — the compiler computes a **best common type** that covers them all:
 
 ```ts
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+declare const circle: Circle, square: Square;
+
 const mixed = [1, "two", 3]; // inferred: (string | number)[]
 const shapes = [circle, square]; // inferred: (Circle | Square)[]
 ```
@@ -92,6 +101,8 @@ Let inference do the work, and annotate deliberately in three places:
 Everywhere else, prefer inference. Redundant annotations are noise that can *drift* from reality during refactors.
 
 ## Fewer annotations in generic callbacks (TypeScript 6.0)
+
+The next two sections lean on generics (`<T>`) before the Generics module formally introduces them, since callback inference and `NoInfer` are inference topics. This content will eventually move to the end of [`generics/inference-and-infer`](/typescript/en/generics/inference-and-infer/), which already links back here — treat it as an optional preview if generics are still new to you.
 
 Contextual typing has one classic weak spot: when an object literal holds several callbacks and `T` must be inferred from one of them, TypeScript used to treat *all* of them as context-sensitive, defer them together, and give up. Since 6.0 a function that never mentions `this` is no longer context-sensitive, so inference can pick `T` from the annotated callback and flow it into the others:
 
@@ -123,6 +134,7 @@ createStreetLight(["red", "yellow", "green"], "blue");
 Wrap the position you *don't* want to contribute in the built-in `NoInfer<T>`:
 
 ```ts
+// @expect-error TS2345
 function createStreetLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>) {}
 
 createStreetLight(["red", "yellow", "green"], "blue");

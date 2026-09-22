@@ -25,7 +25,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ## TypeScript 7 แก้อะไรได้ — และแก้อะไรไม่ได้
 
-native compiler (7.0, กรกฎาคม 2026) ทำให้การ check *ทั้งโปรแกรม* เร็วขึ้น 8–12 เท่า และลดเวลาที่ editor ใช้ก่อนเห็น error แรกจาก 17.5 s เหลือราว 1.3 s บน codebase ของ VS Code มันทำได้ด้วย checker แบบขนาน (`tsc --checkers 4` เป็น default; `--checkers 8` สำหรับเครื่อง CI ใหญ่ ๆ) และ native file watcher คำแนะนำเก่าที่ว่า "เอา `tsc` ออกจาก hot path เพราะมันช้า" จึงหมดอายุแล้ว — รันมันทุกครั้งที่ save ได้เลย
+native compiler (7.0, กรกฎาคม 2026) ทำให้การ check *ทั้งโปรแกรม* เร็วขึ้น 8–12 เท่า และลดเวลาที่ editor ใช้ก่อนเห็น error แรกจาก 17.5 s เหลือราว 1.3 s บน codebase ของ VS Code มันทำได้ด้วย checker แบบขนาน (`tsc --checkers 4` เป็น default; release blog แนะให้ลดเหลือ `--checkers 1` บน CI runner ที่ core น้อย ส่วนเครื่อง local ที่ใหญ่กว่าเพิ่มได้เอง — ไม่มีเลขเพดานเจาะจง) และ native file watcher คำแนะนำเก่าที่ว่า "เอา `tsc` ออกจาก hot path เพราะมันช้า" จึงหมดอายุแล้ว — รันมันทุกครั้งที่ save ได้เลย
 
 สิ่งที่มัน **ไม่ได้** แก้คือ type ที่ผิดธรรมชาติ instantiation แบบ exponential ก็ยัง exponential ใน Go เหมือนกัน recursive conditional type ที่เคยใช้ 30 s ใน TypeScript 6 ใช้ไม่กี่วินาทีใน 7 และยังกินเวลา build ส่วนใหญ่อยู่ดี และ union 5,000 member ก็ยังทวีคูณทุก operation ที่แตะมัน มีสองเรื่องที่เกี่ยวกัน:
 
@@ -46,7 +46,7 @@ native compiler (7.0, กรกฎาคม 2026) ทำให้การ check
 
 การ upgrade compiler บางครั้งเปลี่ยน code ที่เคยเงียบให้กลายเป็น error นี่คือรายการที่คนเจอในปี 2025–2026 และทุกข้อคือ checker ที่ถูกต้อง:
 
-- **`ArrayBuffer` ไม่ใช่ supertype ของ typed array อีกต่อไป (5.9)** `Uint8Array` เป็น generic บน buffer ของมัน ดังนั้น function ที่รับ `ArrayBuffer` จะปฏิเสธ `Uint8Array` (และ `Buffer` ของ Node) ส่ง `data.buffer` แทน หรือ type parameter เป็น `Uint8Array<ArrayBuffer>` / `ArrayBufferLike`
+- **`ArrayBuffer` ไม่ใช่ supertype ของ typed array อีกต่อไป (5.7)** `Uint8Array` เป็น generic บน buffer ของมัน ดังนั้น function ที่รับ `ArrayBuffer` จะปฏิเสธ `Uint8Array` (และ `Buffer` ของ Node) มีสอง remedy ที่ไม่เท่ากัน: type parameter เป็น `Uint8Array<ArrayBuffer>` (หรือกว้างกว่าคือ `ArrayBufferLike`) ถ้าแก้ signature ได้ — หรือส่ง `data.buffer` แทน แต่ใช้ได้เฉพาะเมื่อ `data` เป็น `Uint8Array<ArrayBuffer>` เท่านั้น; `Uint8Array` ธรรมดามี `.buffer` เป็น `ArrayBufferLike` (อาจเป็น `SharedArrayBuffer` ได้) ดังนั้น `.buffer` เฉย ๆ ไม่พอสำหรับ parameter ที่ type เป็น `ArrayBuffer` ตรง ๆ
 - **check ที่ truthy เสมอเป็น error (5.6)** `if (/regex/)` หรือ `if (x => 0)` ถูก flag เช่นเดียวกับ `a < b ?? c` ที่ฝั่งซ้ายไม่มีวัน nullish
 - **แต่ละ branch ของ `return` ถูก check แยกกัน (5.8)** `return cond ? untyped.get(k) : "fallback"` เคยถูก `any` ใน branch หนึ่งบังไว้ ตอนนี้แต่ละ branch ต้องตรงกับ return type ที่ประกาศ
 - **ตัวแปรที่ถูกใช้ก่อน initialise ถูกจับใน nested function (5.7)**

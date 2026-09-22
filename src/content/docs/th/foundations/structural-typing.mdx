@@ -48,6 +48,7 @@ export const structDiagram = `flowchart LR
 มีอยู่จุดหนึ่งที่ TypeScript เข้มขึ้น เมื่อคุณ assign **object literal ตรง ๆ** จะ flag property ที่ target ไม่รู้จัก — เพราะ literal ที่มี key แปลก ๆ เกือบจะเป็น typo หรือความผิดพลาดเสมอ
 
 ```ts
+// @expect-error TS2353
 interface Options { width: number; }
 
 const a: Options = { width: 10, height: 20 };

@@ -26,6 +26,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 `a` assign ให้ `b` ได้ **ก็ต่อเมื่อ** เซต `a` เป็น subset ของเซต `b` นั่นคือกฎทั้งหมด
 
 ```ts
+// @expect-error TS2322
 let x: 42 = 42;
 let y: number = x; // ✅ {42} ⊆ all numbers
 
@@ -62,6 +63,7 @@ export const setDiagram = `flowchart TB
 - **`unknown`** คือ **เซตของ value ทั้งหมด** — top type ทุกอย่าง assign ให้ `unknown` ได้ แต่ `unknown` assign ให้แทบไม่มีอะไรได้จนกว่าคุณจะ narrow ก่อน พูดง่าย ๆ `unknown` คือ `any` เวอร์ชันที่ปลอดภัยเรื่อง type
 
 ```ts
+// @expect-error TS2322
 let n: never;
 let u: unknown = "anything goes";
 
