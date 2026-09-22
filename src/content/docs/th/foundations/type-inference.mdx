@@ -1,6 +1,6 @@
 ---
 title: 'Type Inference'
-description: 'compiler เดา type ที่คุณไม่เคยเขียนออกมาได้อย่างไร — let กับ const widening, contextual typing, best common type เมื่อไรควร annotate, NoInfer และการปรับปรุง callback inference ใน 6.0'
+description: 'compiler เดา type ที่คุณไม่เคยเขียนออกมาได้อย่างไร — let กับ const widening, contextual typing, best common type และเมื่อไรควร annotate (NoInfer กับ callback inference ใน 6.0 อยู่ในโมดูล Generics)'
 sidebar:
   order: 5
 ---
@@ -100,48 +100,10 @@ const shapes = [circle, square]; // inferred: (Circle | Square)[]
 
 ที่เหลือทั้งหมดให้ใช้ inference annotation ที่ซ้ำซ้อนคือ noise ที่อาจ *เพี้ยน* ไปจากความจริงตอน refactor
 
-## annotate น้อยลงใน generic callback (TypeScript 6.0)
+## สองหัวข้อ inference ที่ต้องรู้ generics ก่อน
 
-สองหัวข้อถัดไปใช้ generic (`<T>`) ก่อนที่โมดูล Generics จะสอนอย่างเป็นทางการ เพราะ callback inference กับ `NoInfer` เป็นเรื่องของ inference โดยตรง เนื้อหานี้จะย้ายไปท้าย [`generics/inference-and-infer`](/typescript/th/generics/inference-and-infer/) ในภายหลัง ซึ่ง refer กลับมาที่นี่อยู่แล้ว — ถือเป็นตัวอย่าง preview ไปก่อนถ้ายังไม่คุ้นกับ generic
+callback inference ใน object literal (TypeScript 6.0) และการบล็อก inference site ด้วย `NoInfer<T>` (5.4) เป็นเรื่องของ inference ก็จริง แต่ทั้งคู่ต้องใช้ generics (`<T>`) ถึงจะเข้าใจ จึงย้ายไปอยู่ท้ายบท [`generics/inference-and-infer`](/typescript/th/generics/inference-and-infer/) — กลับมาอ่านหลังจบโมดูล Generics
 
-contextual typing มีจุดอ่อนคลาสสิกอยู่จุดหนึ่ง: เมื่อ object literal มี callback หลายตัวและต้อง infer `T` จากตัวใดตัวหนึ่ง TypeScript เคยมอง *ทุกตัว* เป็น context-sensitive แล้วเลื่อนไปพร้อมกันจนยอมแพ้ ตั้งแต่ 6.0 function ที่ไม่แตะ `this` เลยจะไม่ถูกนับเป็น context-sensitive อีก inference จึงหยิบ `T` จาก callback ที่ annotate ไว้แล้วส่งต่อให้ตัวอื่นได้:
-
-```ts
-declare function callIt<T>(obj: {
-  produce: (x: number) => T;
-  consume: (y: T) => void;
-}): void;
-
-callIt({
-  consume(y) { return y.toFixed(); }, // y: number — infer จาก produce
-  produce(x: number) { return x * 2; },
-});
-```
-
-ก่อน 6.0 ตรงนี้ `y` เป็น `unknown` เว้นแต่คุณจะ annotate เอง กฎเดิมยังใช้ได้ — annotate parameter เมื่อ inference มองไม่เห็น — แค่เจอสถานการณ์นั้นน้อยลง
-
-## บล็อก inference site ด้วย `NoInfer<T>` (TypeScript 5.4)
-
-ทุกที่ที่ `T` โผล่ใน parameter list คือ inference site และบางครั้งตัวใดตัวหนึ่งก็ทำให้ผลลัพธ์กว้างกว่าที่ต้องการ:
-
-```ts
-function createStreetLight<C extends string>(colors: C[], defaultColor?: C) {}
-
-createStreetLight(["red", "yellow", "green"], "blue");
-// ✅ compile ผ่าน — C ถูก infer เป็น "red" | "yellow" | "green" | "blue"
-```
-
-ห่อตำแหน่งที่คุณ *ไม่* อยากให้มีส่วนร่วมด้วย `NoInfer<T>` ที่มีมาให้:
-
-```ts
-// @expect-error TS2345
-function createStreetLight<C extends string>(colors: C[], defaultColor?: NoInfer<C>) {}
-
-createStreetLight(["red", "yellow", "green"], "blue");
-// ❌ '"blue"' is not assignable to '"red" | "yellow" | "green" | undefined'
-```
-
-`NoInfer` erase กลายเป็น `T` — มันเปลี่ยนแค่ *ตำแหน่งที่ compiler มอง* ไม่ได้เปลี่ยน type ผลลัพธ์ หยิบมาใช้เมื่อ parameter แบบ "default" หรือ "fallback" ต้องถูกเช็คกับ type ที่ infer มาจากที่อื่น
 
 <Callout title="สรุปหนึ่งบรรทัด">
 compiler infer type ส่วนใหญ่ให้ ดังนั้นเขียน annotation ให้น้อยลง กฎสำคัญ: **`const` เก็บ literal type ส่วน `let` widen** ไปเป็น type ทั่วไป inference ยังไหลจากบนลงล่างด้วย (contextual typing) นั่นคือเหตุผลที่ parameter ของ callback แทบไม่ต้อง annotate และสร้าง **best common type** (เป็น union) ให้ value ที่ปนกัน annotate parameter กับ return type ของ public API แล้วปล่อยที่เหลือให้ inference จัดการ
