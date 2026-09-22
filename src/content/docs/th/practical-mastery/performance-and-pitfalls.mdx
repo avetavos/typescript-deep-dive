@@ -1,6 +1,6 @@
 ---
 title: 'Performance & Pitfalls'
-description: 'ทำไม type checker ช้าลง, native compiler ของ TypeScript 7 แก้อะไรได้และไม่ได้, footgun ที่กัด codebase จริง, การเปลี่ยนพฤติกรรมล่าสุดที่ทำให้ error ใหม่โผล่ และวิธี diagnose กับ simplify เมื่อ type ฉลาดเกินไป'
+description: 'ทำไม type checker ช้าลง, native compiler ของ TypeScript 7 แก้อะไรได้และไม่ได้, footgun ที่กัด codebase จริง (รวมทัวร์ async bug เต็ม ๆ), การเปลี่ยนพฤติกรรมล่าสุดที่ทำให้ error ใหม่โผล่ และวิธี diagnose กับ simplify เมื่อ type ฉลาดเกินไป'
 sidebar:
   order: 4
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type มี cost ตอน compile
 
@@ -23,6 +25,34 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 คุณมักไม่สังเกตจนกว่าไฟล์หนึ่งใช้เวลา check เป็นวินาที หรือ red squiggle ใน editor ตามการพิมพ์ไม่ทัน นั่นคือสัญญาณให้มองที่ type ไม่ใช่แค่ code
 
+### เพดานจริงสองแบบ กับ diagnostic ที่ได้จริง
+
+ตัวการสองอย่างข้างบนชน guard ของ compiler ที่*ต่างกัน* และคุ้มค่าที่จะเห็นทั้งคู่ทำงานจริงแทนที่จะเชื่อลอย ๆ recursion ที่ลึกและไร้เดียงสาชน limit แบบ **instantiation-depth**:
+
+```ts
+// @expect-error TS2589
+type Flags = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t";
+
+type PowerSet<T extends string> = T extends unknown
+  ? T | `${T}-${PowerSet<Exclude<Flags, T>>}`
+  : never;
+
+type All = PowerSet<Flags>;
+declare const x: All;
+```
+
+นั่นคือ `TS2589: Type instantiation is excessively deep and possibly infinite.` บน TypeScript 7.0.2 — recursion แบบ combinatorial (แต่ละ flag ใน 20 ตัว recurse เข้า flag ที่เหลืออีก 19 ตัว แล้ว 18 ตัว...) ทะลุ depth guard ไปก่อนที่จะจบเสียอีก union ที่**ไม่ recursive**แต่ใหญ่มากเฉย ๆ ชน guard อีกแบบที่อิงจากขนาดแทน:
+
+```ts
+// @expect-error TS2590
+type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+type ThreeDigits = `${Digit}${Digit}${Digit}`; // 1,000 combinations, written compactly
+type Cross = `${ThreeDigits}-${ThreeDigits}`;  // 1,000,000 combinations -- too many to represent
+declare const x: Cross;
+```
+
+นั่นคือ `TS2590: Expression produces a union type that is too complex to represent.` บน 7.0.2 ใช้เวลาราว 100 ms — ไม่มี recursion เลย แค่ template-literal type ที่ combinatorics มันโตเกิน limit ภายในทันทีที่ checker พยายาม expand มัน สอง error นี้ปนกันง่ายแต่อธิบายความล้มเหลวคนละแบบ: **TS2589** คือ compiler ปฏิเสธที่จะ *recurse* ต่อ (depth) **TS2590** คือ compiler ปฏิเสธที่จะ *enumerate* ต่อ (size) — ลด recursion depth สำหรับตัวแรก ลด cardinality ของ union (หรือเลิกสร้าง cross product แบบ eager) สำหรับตัวที่สอง
+
 ## TypeScript 7 แก้อะไรได้ — และแก้อะไรไม่ได้
 
 native compiler (7.0, กรกฎาคม 2026) ทำให้การ check *ทั้งโปรแกรม* เร็วขึ้น 8–12 เท่า และลดเวลาที่ editor ใช้ก่อนเห็น error แรกจาก 17.5 s เหลือราว 1.3 s บน codebase ของ VS Code มันทำได้ด้วย checker แบบขนาน (`tsc --checkers 4` เป็น default; release blog แนะให้ลดเหลือ `--checkers 1` บน CI runner ที่ core น้อย ส่วนเครื่อง local ที่ใหญ่กว่าเพิ่มได้เอง — ไม่มีเลขเพดานเจาะจง) และ native file watcher คำแนะนำเก่าที่ว่า "เอา `tsc` ออกจาก hot path เพราะมันช้า" จึงหมดอายุแล้ว — รันมันทุกครั้งที่ save ได้เลย
@@ -34,13 +64,153 @@ native compiler (7.0, กรกฎาคม 2026) ทำให้การ check
 
 ## footgun ที่พบบ่อย
 
-นอกจาก performance เหล่านี้กัดทีมจริง:
+นอกจาก performance โดยตรง เหล่านี้กัดทีมจริง:
 
 - **type ฉลาดเกินจนไม่มีใครอ่านออก** conditional type 40 บรรทัดที่ประหยัด duplicate ไปสามบรรทัด มักขาดทุนสุทธิ ความฉลาดคือ cost ที่ผู้อ่านในอนาคตทุกคนต้องจ่าย
 - **`any` leak** `any` ตัวเดียวลาม: `any.foo` เป็น `any` จึงปิดการ check เงียบ ๆ ทุกที่ที่แตะ แบนด้วย `noImplicitAny` และ lint rule
 - **cast ที่โกหก** `x as Foo` บอก compiler ให้เลิก check — ถ้า `x` ไม่ใช่ `Foo` จริง คุณเพิ่งซ่อน bug ไว้ double cast (`x as unknown as Foo`) คือธงแดงขนาดยักษ์
 - **เรื่องเซอร์ไพรส์ของ enum** numeric `enum` ยอมให้ number อะไรก็ได้เป็น value และ emit runtime code; `const` object กับ `as const` หรือ string-literal union มักชัดกว่าและถูกกว่า
 - **ใช้ `as` เกินจำเป็น** การคว้า `as` มา silence error มักหมายความว่าคุณเลิก model ปัญหาแล้วเริ่มเถียงกับ compiler
+
+## footgun ของ async: จุดบอดที่ใหญ่ที่สุดของ type system
+
+`Promise` คือจุดที่การการันตีแบบ static ของ TypeScript หมดฤทธิ์เร็วที่สุด เพราะ timing bug อยู่ที่ *เมื่อไร* code รัน ไม่ใช่ value มี type อะไร มีหกรูปแบบที่ครอบคลุม async bug เกือบทั้งหมดที่คุณจะเจอใน code จริง (และ code ที่ AI generate)
+
+**ลืม `await` — บางครั้งจับได้ บ่อยครั้งจับไม่ได้** เทสตรง ๆ บน promise เอง:
+
+```ts
+// @expect-error TS2801
+async function isValid(id: string): Promise<boolean> {
+  return id.length > 0;
+}
+
+async function handle(id: string) {
+  if (isValid(id)) { // forgot await -- a Promise object, not the boolean
+    console.log("valid"); // always runs -- a Promise is always truthy
+  } else {
+    console.log("invalid"); // dead code -- never runs
+  }
+}
+
+handle("");
+```
+
+TypeScript 5.9+ จับ shape นี้จริง ๆ — `TS2801: This condition will always return true since this 'Promise<boolean>' is always defined` — แม้ผ่านตัวแปรกลาง (`const ok = isValid(id); if (ok) { ... }` ก็ได้ error เดียวกัน) แต่ `await` ที่ลืมแบบเดียวกันข้างใน `Array.prototype.forEach` มองไม่เห็นจาก compiler เลย เพราะไม่มีอะไรตรงนั้นเป็น boolean condition:
+
+```ts
+async function save(id: string): Promise<void> {
+  await new Promise((r) => setTimeout(r, 10));
+  console.log("saved", id);
+}
+
+function saveAll(ids: string[]) {
+  ids.forEach(async (id) => {
+    await save(id); // floating promise -- forEach ignores the returned promise, errors are swallowed
+  });
+  console.log("saveAll returned"); // runs before any save() actually finishes
+}
+
+saveAll(["a", "b"]);
+```
+
+<TSPlayground code={floatingPromiseCode} id="practical-perf-floating-promise" title="A floating promise that tsc does not flag" />
+
+export const floatingPromiseCode = `async function save(id: string): Promise<void> {
+  await new Promise((r) => setTimeout(r, 10));
+  console.log("saved", id);
+}
+
+function saveAll(ids: string[]) {
+  ids.forEach(async (id) => {
+    await save(id); // floating promise -- forEach ignores the returned promise, errors are swallowed
+  });
+  console.log("saveAll returned"); // runs before any save() actually finishes
+}
+
+saveAll(["a", "b"]);`;
+
+รันดูแล้ว `saveAll returned` จะพิมพ์**ก่อน**ทั้งสองบรรทัด `saved` — ตรงข้ามกับที่ code แลดูจะบอกเป๊ะ และ `tsc --strict` ไม่บ่นอะไรเลย callback type ของ `forEach` คือ `(value: T) => void` และ return type ของ `async` function คือ `Promise<void>` ซึ่ง assign เข้า `void` ได้ (ตั้งใจแบบนี้ เพื่อไม่ให้ API ที่ type เป็น callback ปฏิเสธ async handler) — ดังนั้น promise ถูกทิ้งเงียบ ๆ ไม่มี error ไม่มี `.catch` `tsc` เพียวไม่มีทางเห็น bug class นี้เลย มีแต่ typed lint rule (`no-floating-promises` ของ `typescript-eslint` ที่โมดูล compiler-and-tooling ครอบคลุม) เท่านั้นที่ flag promise expression statement ที่ไม่ถูกจัดการ วิธีแก้คือ `for...of` กับ `await` หรือ `Promise.all(ids.map(save))` ทั้งสองแบบ return promise ที่ `saveAll` เองก็ `await` ได้
+
+**`void` vs `Promise<void>` ใน callback parameter** คือกลไกเบื้องหลัง bug ก่อนหน้า คุ้มค่าที่จะเห็นเดี่ยว ๆ:
+
+```ts
+function onClick(handler: () => void) {
+  handler();
+}
+
+async function save(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 10));
+}
+
+onClick(save); // ✅ compiles -- () => Promise<void> is assignable to () => void
+              // TypeScript deliberately allows this so callback-typed APIs don't reject async handlers
+              // but it also means a caller expecting void gets a floating, unawaited promise
+```
+
+**return type ของ `async` function ต้องเป็น `Promise<T>`** ไม่ใช่ `T` ตรง ๆ — ตัวนี้ compiler จับได้เสมอ:
+
+```ts
+// @expect-error TS1064
+async function getCount(): number {
+  return 5;
+}
+```
+
+**`Promise.all` เก็บ shape ของ tuple ไว้** ไม่ใช่ union — แต่ละ element เก็บ resolved type ของตัวเองตามตำแหน่ง:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+async function getUser(): Promise<{ id: number }> { return { id: 1 }; }
+async function getOrders(): Promise<string[]> { return ["a"]; }
+
+async function run() {
+  const [user, orders] = await Promise.all([getUser(), getOrders()]);
+  const check1: Equal<typeof user, { id: number }> = true;
+  const check2: Equal<typeof orders, string[]> = true;
+}
+```
+
+และ `Awaited<T>` (ที่ `await` กับ typing ของ `Promise.all` ใช้ภายใน) unwrap promise ที่ซ้อนกันจนสุด ไม่ใช่แค่ระดับเดียว:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+type A = Awaited<Promise<Promise<number>>>;
+const check1: Equal<A, number> = true;
+```
+
+**`await` แบบ sequential ใน loop เทียบกับ `Promise.all`** เป็น timing bug ไม่ใช่ type error จึงต้องพิสูจน์ด้วย runtime demo ไม่ใช่ diagnostic:
+
+```ts
+function delay(ms: number): Promise<number> {
+  return new Promise((resolve) => setTimeout(() => resolve(ms), ms));
+}
+
+async function sequential() {
+  const start = Date.now();
+  for (const ms of [50, 50, 50]) {
+    await delay(ms); // each iteration waits for the previous one -- roughly 150ms total
+  }
+  return Date.now() - start;
+}
+
+async function parallel() {
+  const start = Date.now();
+  await Promise.all([50, 50, 50].map((ms) => delay(ms))); // all three run at once -- roughly 50ms total
+  return Date.now() - start;
+}
+
+async function main() {
+  const seqMs = await sequential();
+  const parMs = await parallel();
+  console.log(`sequential: ~${Math.round(seqMs / 10) * 10}ms, parallel: ~${Math.round(parMs / 10) * 10}ms`);
+}
+
+main();
+```
+
+รันแล้วผลลัพธ์ทั่วไปคือ `sequential: ~160ms, parallel: ~50ms` (ตัวเลขจริงต่างไปตาม load ของเครื่อง แต่ช่องว่างประมาณ 3 เท่ายังคงที่) — ทั้งสองเวอร์ชัน type-check เหมือนกันเป๊ะ เพราะ *timing* ไม่ใช่ส่วนหนึ่งของ type system เลย `await` ข้างใน loop `for` ถูกต้องเมื่อแต่ละ iteration ต้องพึ่งผลลัพธ์ของ iteration ก่อนหน้าจริง ๆ เมื่อแต่ละ iteration เป็นอิสระจากกัน มันคือตัวคูณเวลา wall-clock ที่ไม่จำเป็น ซึ่งไม่มี flag ของ compiler ตัวไหนจะจับให้คุณได้เลย
 
 ## การเปลี่ยนล่าสุดที่ทำให้ error ใหม่โผล่
 
@@ -64,7 +234,7 @@ export const anyDiagram = `flowchart LR
 
 เมื่อการ check รู้สึกช้า ให้วัดแทนการเดา:
 
-- `tsc --extendedDiagnostics` พิมพ์ว่าเวลาและ memory ไปไหน (check time, instantiation count, memory)
+- `tsc --extendedDiagnostics` พิมพ์ว่าเวลาและ memory ไปไหน (check time, instantiation count, memory) — เครื่องมือตัวนี้แหละที่จะโชว์ให้เห็นว่า `PowerSet` ข้างบนเผา instantiation ไปเท่าไรก่อนจะชน guard `TS2589`
 - `tsc --generateTrace traceDir` สร้าง trace ที่เปิดใน profiler เพื่อหา type ที่แพงได้ รันพร้อม `--singleThreaded` เพื่อให้ตัวเลขไม่ถูกกระจายไปตาม checker worker
 - `tsc --noCheck` บอกคุณว่า build ส่วนไหนเป็น emit และส่วนไหนเป็น check ถ้า `noCheck` ก็ยังช้า ปัญหาคือ I/O หรือ glob ใน `include` ไม่ใช่ type ของคุณ
 - `skipLibCheck: true` ยังเป็นชัยชนะที่ถูกที่สุด: มันหยุดการ check ซ้ำทุก `.d.ts` ใน `node_modules`
@@ -72,8 +242,70 @@ export const anyDiagram = `flowchart LR
 
 การแก้เกือบทุกครั้งคือ **simplify**: แทน conditional type ที่วีรบุรุษด้วย union ธรรมดา, แตก type ยักษ์เป็นชิ้นเล็กที่มีชื่อ หรือยอมรับ type ที่หลวมกว่านิดหน่อยแต่ถูกกว่า 10 เท่าและปลอดภัยพอ ๆ กันในทางปฏิบัติ
 
+## กัน `any` ไม่ให้ไต่ขึ้นใน CI
+
+`any` ไม่ต้องมีบทเรียนใหม่ทุกครั้งที่มัน leak — มันแค่ต้องการตัวเลขที่ห้ามโตขึ้น step ของ CI ที่นับ `: any` แล้ว fail build ถ้าตัวเลขเพิ่มขึ้น จับ `any` ใหม่ทุกตัวได้ทันที ไม่ว่า PR ไหนเป็นคนเพิ่มเข้ามา โดยไม่ต้องบังคับให้แก้ backlog ทั้งหมดตั้งแต่วันแรก:
+
+```bash
+#!/usr/bin/env bash
+# Count explicit `: any` annotations and fail CI if the count increased since the baseline.
+current=$(grep -rn ': any\b' src --include='*.ts' --include='*.tsx' | wc -l | tr -d ' ')
+baseline=$(cat .any-count 2>/dev/null || echo 0)
+if [ "$current" -gt "$baseline" ]; then
+  echo "any count increased: $baseline -> $current"
+  exit 1
+fi
+echo "$current" > .any-count
+```
+
+(ตรวจแล้วว่าเป็น shell logic จริง ไม่ใช่ pseudocode: รันกับ scratch project สองไฟล์ที่มี baseline เก็บไว้เป็น `0` script นี้ตรวจจับ `any` ใหม่ได้ถูกต้อง แล้ว exit `1` พร้อม `any count increased: 0 -> 2`) แนวคิด ratchet เดียวกันนี้ใช้กับกลิ่นอื่นที่ grep เจอที่โมดูลนี้พูดถึงได้: จำนวน branch "exhaustive" ที่มีแค่ `throw` เปล่า ๆ ที่เพิ่มขึ้น หรือ call ที่ไม่ `await` ข้างใน `forEach`
+
+อีกสองเครื่องมือที่ควรรู้จักชื่อไว้แม้จะยังไม่ได้รันวันนี้: **`@arethetypeswrong/cli`** (`attw`) ตรวจ setup `.d.ts`/`exports` ของ package ที่ publish แล้ว หา dual-package และ moduleresolution hazard ที่โมดูล compiler-and-tooling ครอบคลุม ก่อนที่ user ของคุณจะเจอเอง; และ **`ts-morph`** คือ standard library สำหรับเขียน codemod — refactor แบบ scripted ที่ type-aware (rename type ที่ใช้แพร่หลาย, ส่ง parameter ใหม่ที่ required เข้าไปทุก call site) ที่จะพลาดง่ายมากถ้าทำด้วย search-and-replace บน codebase ใหญ่
+
+## Mental Model
+
+guard ทุกตัวในบทนี้มีอยู่เพราะ type checker คือโปรแกรมจริงที่ทำงานจริง และงานจริงถูกจำกัด, ถูกใช้อย่างสิ้นเปลือง, หรือมองไม่เห็นได้ `TS2589`/`TS2590` คือ compiler ที่ปกป้อง*ตัวเอง* — ปฏิเสธที่จะ recurse หรือ enumerate ต่อเมื่อผ่านจุดที่คำตอบไม่มีประโยชน์แล้ว `any` ที่ leak และ cast ที่โกหกคือ type system ที่ถูกสั่งให้หยุดทำงานนั้นไปเลย เงียบ ๆ สำหรับทุกอย่างที่อยู่ downstream ของบรรทัดเดียว และ footgun ของ async คือเวอร์ชันที่คมที่สุดของธีมจากก่อนหน้าในโมดูลนี้: type อาจแม่นยำสมบูรณ์ (`Promise<void>`, `Promise<boolean>`) ในขณะที่ยังอธิบาย value ที่ *timing* ของมัน — ไม่ใช่ shape — คือ bug จริง และ timing ไม่เคยเป็นส่วนหนึ่งของสิ่งที่ type checker ตรวจเลย
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ข้อดี | ต้นทุน |
+|---|---|---|
+| recursive/conditional type แบบวีรบุรุษ | เข้ารหัส rule ได้แม่นยำ ครั้งเดียว ในระดับ type | อาจชน `TS2589` ทำให้ build ทั้งหมดช้า และคนต่อไปอ่านไม่ออก |
+| union ธรรมดา หรือ type alias ที่มีชื่อไม่กี่ตัว | check เร็ว อ่านง่าย | บางครั้งแสดง rule ได้ไม่แม่นยำเท่า computed type |
+| `for...of` + `await` ใน loop | ง่าย และถูกต้องเมื่อแต่ละ step พึ่งพา step ก่อนหน้าจริง | serialize งานที่เป็นอิสระต่อกันโดยไม่จำเป็น — 3 task ที่เป็นอิสระ 50ms ใช้เวลา ~150ms แทนที่จะเป็น ~50ms |
+| `Promise.all` | รัน async work ที่เป็นอิสระพร้อมกัน เก็บ type ต่อ element ผ่าน tuple inference | เลือกผิดถ้า step ไม่ได้เป็นอิสระต่อกัน — ไม่มีประโยชน์ แถมอาจสลับลำดับ side effect |
+| CI `any`-count ratchet | หยุด debt ใหม่ทันที ไม่ต้อง cleanup ทีเดียวทั้งหมด | ไม่ลด debt เดิมเองอัตโนมัติ — ต้องมีความพยายามจ่ายคืนแยกต่างหาก |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **ความเร็วที่เพิ่มขึ้นของ TypeScript 7 แปลว่า type ที่แพงไม่ใช่ปัญหาอีกต่อไป** มันทำให้ *ทั้งโปรแกรม* check เร็วขึ้น มันไม่ได้เปลี่ยน algorithmic cost ของ type ที่ผิดธรรมชาติตัวเดียวเลย ซึ่งยัง exponential ใน 7 เหมือนที่เคยเป็นใน 6 เป๊ะ
+- **`TS2589` กับ `TS2590` คือ error เดียวกันแค่คนละชื่อ** มันคือ guard คนละตัวสำหรับความล้มเหลวคนละแบบ — depth (recursion ลึกเกิน) เทียบกับ size (union หรือ combination ใหญ่เกินจะแทนได้) — และวิธีแก้ของตัวหนึ่ง (ลด recursion) ไม่ได้แก้อีกตัว (ลด cardinality)
+- **ถ้า `tsc --strict` รายงาน error เป็นศูนย์บน async code แปลว่า async logic ถูกต้อง** `await` ที่ลืมข้างใน `forEach` หรือ `await` แบบ sequential ที่ไม่จำเป็นใน loop ทั้งคู่ type-check ผ่านสมบูรณ์ ไม่มีอันไหนเป็น type error เลย เพราะไม่มีอันไหนเปลี่ยน type ของ value ใด ๆ เลย เปลี่ยนแค่ตอนที่ code รัน
+- **async callback ที่ถูกส่งไปที่ที่คาดหวัง `() => void` คือ type error ที่รอเกิด** มันถูกอนุญาตโดยการออกแบบอย่างชัดเจน (`Promise<void>` assign เข้า `void` ได้) เพื่อไม่ให้ async handler ถูกปฏิเสธโดย API ที่ type เป็น callback แบบ void-returning — ซึ่งเป็นเหตุผลเป๊ะ ๆ ว่าทำไม floating promise ที่เกิดขึ้นถึงมองไม่เห็นจาก `tsc` และต้องใช้ lint rule แทน
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ generated code ไม่ว่าจะเรื่อง performance หรือความถูกต้องของ async ตรวจสอบ:
+
+- recursive conditional หรือ mapped type ที่ไม่มี base case หรือ depth bound ชัดเจน — ถามว่าเกิดอะไรขึ้นที่ input ใหญ่สุดที่เป็นไปได้จริง ไม่ใช่แค่ตัวอย่างใน PR description
+- `array.forEach(async (item) => { await ... })` — นี่คือหนึ่งใน async bug ที่ AI generate บ่อยที่สุด เพราะมันอ่านดูถูกต้องและ `tsc` ไม่มีอะไรจะพูดเลย
+- `await` ที่ใช้ข้างใน loop `for`/`for...of` ที่แต่ละ iteration ไม่ได้พึ่งผลลัพธ์ของ iteration ก่อนหน้าจริง ๆ — candidate ที่แข็งแรงสำหรับ `Promise.all`
+- callback parameter ที่ type เป็น `() => void` ที่รับ `async` function — ถามว่า caller ต้องรู้ไหมว่า async work เสร็จเมื่อไร ถ้าต้องรู้ มันถูก await จริงที่ไหนสักที่หรือเปล่า
+- union ที่ generate มาขนาดใหญ่ (string literal แบบ enum, permutation, route table) ที่ใช้ข้างใน conditional หรือ template-literal type แทนที่จะเป็น mapped type ธรรมดา — candidate ของ `TS2590`/build ช้า ตั้งแต่ก่อน ship
+
+<SpotTheBug code={`function fetchAll(ids: string[]) {
+  const results: string[] = [];
+  ids.forEach(async (id) => {
+    const data = await fetch(\`/api/items/\${id}\`).then((r) => r.text());
+    results.push(data);
+  });
+  return results;
+}`}>
+โค้ดนี้ compile ผ่าน**ไม่มี error เลย**ภายใต้ `--strict` และ return `[]` เสมอ callback type ของ `forEach` คือ `(value: string) => void` และ return type จริงของ `async` callback คือ `Promise<void>` ซึ่ง assign เข้า `void` ได้ — TypeScript จึงยอมรับโดยไม่บ่น และ `forEach` เองไม่เคยดู (หรือ await) สิ่งที่ callback return เลย `fetchAll` ไปถึงบรรทัด `return results;` แบบ synchronous ทันทีหลังจากยิง fetch ทุกตัวออกไป นานก่อนที่ `await fetch(...)` ตัวไหนจะ resolve — ดังนั้น `results` ยังว่างอยู่ ณ จุดนั้น และทุก `results.push(data)` เกิดขึ้นทีหลัง ใส่เข้า array ที่ไม่มีใครมองอีกแล้ว วิธีแก้คือเลิกใช้ `forEach` กับ async work ไปเลย: `const results = await Promise.all(ids.map((id) => fetch(...).then((r) => r.text())));` ข้างใน `async function fetchAll` ซึ่งทั้งรัน request พร้อมกันและรอจริงก่อน return
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-การ type check คือการคำนวณ union ใหญ่, recursion ลึก และ distributive conditional จึงทำให้ `tsc` และ editor ช้าได้ — และ native compiler แบบขนานของ TypeScript 7 ทำให้ *โปรแกรม* เร็วขึ้นสิบเท่าโดยไม่ได้ทำให้ *type* ที่ผิดธรรมชาติถูกลง footgun ประจำวัน — `any` ที่ leak, cast ที่โกหก, type ฉลาดจนอ่านไม่ออก และ numeric enum — ทำให้เสียทั้งความถูกต้องและความชัดเจน และ release ล่าสุดเปลี่ยนความผิดพลาดที่เคยเงียบหลายอย่าง (check ที่ truthy เสมอ, `ArrayBuffer` เทียบ typed array, branch ของ return ที่ไม่ถูก check) ให้เป็น error เมื่ออะไรช้า ให้วัดด้วย `--extendedDiagnostics` / `--generateTrace --singleThreaded` แล้ว **simplify**: type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ไม่มีใคร maintain ได้
+การ type check คือการคำนวณ union ใหญ่ (`TS2590`), recursion ลึก (`TS2589`) และ distributive conditional จึงทำให้ `tsc` และ editor ช้าได้ — และ native compiler แบบขนานของ TypeScript 7 ทำให้ *โปรแกรม* เร็วขึ้นสิบเท่าโดยไม่ได้ทำให้ *type* ที่ผิดธรรมชาติถูกลง async code คือจุดบอดที่ใหญ่ที่สุดของ type system: `tsc` จับ `await` ที่ลืมได้ถ้าใช้ตรง ๆ เป็น condition (`TS2801`) แต่จับไม่ได้ถ้าซ่อนอยู่ใน `forEach` และ `await` แบบ sequential เทียบกับ parallel คือ timing bug ที่ type annotation ไม่มีวันจับได้ footgun ประจำวัน — `any` ที่ leak, cast ที่โกหก, type ฉลาดจนอ่านไม่ออก และ numeric enum — ทำให้เสียทั้งความถูกต้องและความชัดเจน; กัน `any` ด้วยการนับใน CI ไม่ใช่การ cleanup ครั้งเดียว เมื่ออะไรช้า ให้วัดด้วย `--extendedDiagnostics` / `--generateTrace --singleThreaded` แล้ว **simplify**: type ที่อ่านออกและหลวมกว่านิดหน่อยมักชนะ type อัจฉริยะที่ไม่มีใคร maintain ได้
 </Callout>
 
 export const quizPerf = [
@@ -86,6 +318,7 @@ export const quizPerf = [
       'ตั้งชื่อตัวแปรให้ชัดเจน',
     ],
     answer: 1,
+    explain: 'สิ่งเหล่านี้บังคับให้ checker enumerate หรือ instantiate type combination มากกว่าที่ code ดูเหมือนจะบอกไว้เยอะมาก — ตรงกับ guard สองตัว (TS2589 สำหรับ depth, TS2590 สำหรับ size) ที่บทนี้พูดถึง ที่มีไว้เพื่อหยุดไม่ให้มันรันไม่มีที่สิ้นสุด',
   },
   {
     q: 'ทำไม `any` ตัวเดียวถึงอันตราย?',
@@ -96,6 +329,7 @@ export const quizPerf = [
       'assign ไม่ได้',
     ],
     answer: 1,
+    explain: 'any.อะไรก็ตาม ยังเป็น any ดังนั้น value ที่ไม่มี type ตัวเดียวสามารถปิดการ check เงียบ ๆ ทั่วทุก function ที่มันไหลผ่านได้ — นี่คือเหตุผลที่การ ratchet จำนวน any ใน CI ได้ผลกว่าการ cleanup ครั้งเดียว',
   },
   {
     q: '`x as Foo` ทำอะไรจริง ๆ?',
@@ -106,16 +340,29 @@ export const quizPerf = [
       'สร้าง copy ของ x',
     ],
     answer: 1,
+    explain: 'as ไม่ทำ runtime check หรือแปลงอะไรเลย มันแค่บอก checker ให้เลิก verify ซึ่งซ่อนความไม่ตรงกันจริงไว้ ถ้า cast นั้นผิด',
   },
   {
-    q: 'build ของคุณลดจาก 60 s เหลือ 6 s บน TypeScript 7 แต่ไฟล์เดียวที่มี recursive conditional type ยังใช้ 4 s เพราะอะไร?',
+    q: '```ts\ntype Flags = "a" | "b" | /* ...18 more */ "t";\ntype PowerSet<T extends string> = T extends unknown\n  ? T | `${T}-${PowerSet<Exclude<Flags, T>>}`\n  : never;\ntype All = PowerSet<Flags>;\n```\nTypeScript 7.0.2 รายงานอะไรสำหรับโค้ดนี้ และทำไม?',
     options: [
-      'native compiler ไม่รองรับ conditional type',
-      'การ check แบบขนานเร่งทั้งโปรแกรม แต่ type แบบ exponential ก็ยัง exponential — ต้อง simplify type',
-      'ต้องตั้ง `--checkers` เป็น 1 สำหรับ recursive type',
-      'ไฟล์นั้นต้องการ `skipLibCheck`',
+      '`TS2590` เพราะ union ซับซ้อนเกินจะแทนได้',
+      '`TS2589` เพราะ recursion แบบ combinatorial เกิน instantiation-depth limit',
+      'ไม่มีอะไรเลย — compile ผ่านแค่ช้า',
+      '`TS2345` argument type ไม่ตรงกัน',
     ],
     answer: 1,
+    explain: 'นี่เป็น recursive ไม่ใช่แค่ใหญ่ — แต่ละ flag ใน 20 ตัว recurse เข้า flag ที่เหลือ จึงชน depth guard (TS2589) แทนที่จะเป็น size guard (TS2590) ที่แยกกัน ซึ่ง union ใหญ่แบบไม่ recursive จะชนแทน',
+  },
+  {
+    q: '```ts\nfunction saveAll(ids: string[]) {\n  ids.forEach(async (id) => {\n    await save(id);\n  });\n  console.log("saveAll returned");\n}\n```\n`tsc --strict` flag อะไรตรงนี้ไหม แล้วตอนรันจริงเกิดอะไรขึ้น?',
+    options: [
+      'tsc รายงาน floating-promise error และ code รอทุก save เสร็จก่อน',
+      'tsc ไม่รายงาน error เลย และ "saveAll returned" log ก่อน save() ตัวไหนจะเสร็จ',
+      'tsc ไม่รายงาน error เลย และ code throw ตอน runtime',
+      'tsc ต้องมี return type ชัดเจนก่อนถึงจะ compile ผ่าน',
+    ],
+    answer: 1,
+    explain: 'forEach คาดหวัง callback ที่ return void และ Promise<void> ของ async callback assign เข้า void ได้โดยการออกแบบ ดังนั้น promise ที่ return มาถูกทิ้งเงียบ ๆ tsc เพียวมองไม่เห็น bug นี้ — มีแค่ typed lint rule อย่าง no-floating-promises เท่านั้นที่จับได้ — และตอน runtime saveAll return ทันทีขณะที่ save ยังค้างอยู่',
   },
   {
     q: 'เมื่อ type ทั้งฉลาดและช้า move ที่ถูกต้องมักคืออะไร?',
@@ -126,6 +373,7 @@ export const quizPerf = [
       'cast ทุกอย่างเป็น any',
     ],
     answer: 1,
+    explain: 'ทั้งตัวอย่าง TS2589 และ TS2590 ในบทนี้คือกรณีที่เวอร์ชัน "ฉลาด" ล้มเหลวไปเลย — วิธีแก้คือ type ที่ง่ายกว่าและถูกกว่าเสมอ ไม่ใช่ type ที่ใหญ่กว่า',
   },
 ];
 

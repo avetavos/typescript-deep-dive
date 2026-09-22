@@ -1,6 +1,6 @@
 ---
 title: 'Nullability & never'
-description: 'strictNullChecks, optional chaining and nullish coalescing in the type system, the danger of the non-null assertion, Result types, and exhaustiveness with never.'
+description: 'strictNullChecks, optional chaining and nullish coalescing in the type system, the danger of the non-null assertion, Result types, and exhaustiveness with never — including outside a switch.'
 sidebar:
   order: 3
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## strictNullChecks: the setting that matters most
 
@@ -39,6 +41,66 @@ function avatar(u: User) {
 ```
 
 `?.` short-circuits to `undefined` if the left side is nullish, and the *type* reflects that (the result includes `undefined`). `??` supplies a fallback only for `null`/`undefined` (unlike `||`, which also triggers on `0` and `""`), and narrows the type by removing the nullish part.
+
+## `||` vs `??`: 0, "", and false are valid values too
+
+That parenthetical is worth its own section, because it's one of the most common real bugs in codebases that predate `??` (added in TypeScript 3.7 / ES2020). `||` falls back on *any* falsy value — `0`, `""`, `false`, `NaN`, `null`, `undefined` — not just the two "genuinely absent" ones:
+
+```ts
+interface ServerConfig { timeout?: number; label?: string; verbose?: boolean }
+
+function withDefaults(cfg: ServerConfig) {
+  const timeout = cfg.timeout || 30;      // bug: 0 is a valid timeout, but falls back to 30
+  const label = cfg.label || "server";    // bug: "" is a valid label, but falls back
+  const verbose = cfg.verbose || true;    // bug: false is a valid choice, always becomes true
+  return { timeout, label, verbose };
+}
+
+console.log(withDefaults({ timeout: 0, label: "", verbose: false }));
+```
+
+<TSPlayground code={ororBugCode} id="practical-nullability-oror" title="|| silently overrides every falsy-but-valid value" />
+
+export const ororBugCode = `interface ServerConfig { timeout?: number; label?: string; verbose?: boolean }
+
+function withDefaults(cfg: ServerConfig) {
+  const timeout = cfg.timeout || 30;      // bug: 0 is a valid timeout, but falls back to 30
+  const label = cfg.label || "server";    // bug: "" is a valid label, but falls back
+  const verbose = cfg.verbose || true;    // bug: false is a valid choice, always becomes true
+  return { timeout, label, verbose };
+}
+
+console.log(withDefaults({ timeout: 0, label: "", verbose: false }));`;
+
+Run it and every explicitly-chosen falsy value is silently discarded — `{ timeout: 30, label: 'server', verbose: true }`, none of which is what the caller asked for. `??` checks only for `null`/`undefined`, so it leaves `0`, `""`, and `false` alone:
+
+```ts
+interface ServerConfig { timeout?: number; label?: string; verbose?: boolean }
+
+function withDefaults(cfg: ServerConfig) {
+  const timeout = cfg.timeout ?? 30;      // only null/undefined fall back -- 0 survives
+  const label = cfg.label ?? "server";    // "" survives
+  const verbose = cfg.verbose ?? true;    // false survives
+  return { timeout, label, verbose };
+}
+
+console.log(withDefaults({ timeout: 0, label: "", verbose: false }));
+// { timeout: 0, label: '', verbose: false }
+```
+
+The same distinction applies to the assignment forms added alongside `??`: `||=` assigns only when the current value is falsy, `??=` only when it's nullish.
+
+```ts
+let retries = 0;
+retries ||= 5;  // 0 is falsy -- ||= treats it as "unset" and overwrites it
+console.log(retries); // 5
+
+let attempts = 0;
+attempts ??= 5; // 0 is not nullish -- ??= leaves it alone
+console.log(attempts); // 0
+```
+
+`||`/`||=` are still the right tool when you genuinely want "any falsy value counts as absent" (a common, deliberate case). The bug is reaching for them out of habit when the type actually admits `0`, `""`, or `false` as valid data — which `?.`/`??`'s own nullability focus is a hint to check for.
 
 ## The compiler narrows more than it used to
 
@@ -135,8 +197,121 @@ export const neverDiagram = `flowchart TB
   d --> ok["compiles = all cases covered"]
   d --> err["new variant unhandled = compile error"]`;
 
+## Exhaustiveness outside a `switch`
+
+The `never`-assignment trick is specific to a `switch`'s `default` branch. Real code is full of discriminated unions handled with `if`/`else if` chains instead — a validation pipeline, a reducer, a router — and the equivalent-looking "just throw in the fallback" pattern gives you **no compile-time exhaustiveness at all**, even though it reads as if it does:
+
+```ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  throw new Error("unhandled shape"); // "exhaustive" only by convention -- nothing checks it
+}
+```
+
+That compiles today, with two variants fully handled. Now add a `triangle` variant to `Shape` and change nothing else:
+
+```ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  throw new Error("unhandled shape"); // triangle silently falls through to here at runtime
+}
+```
+
+**This still compiles with zero errors.** Nothing about `throw` forces the compiler to check that every case was handled first — it's exhaustiveness by convention, not by proof, and the whole point of the `never` trick is that convention isn't enough. Two idioms give an `if`/`else if` chain the same real guarantee a `switch`'s `never` default has:
+
+```ts
+// @expect-error TS2345
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function assertNever(x: never): never {
+  throw new Error(`unhandled variant: ${JSON.stringify(x)}`);
+}
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  return assertNever(s); // s is { kind: "triangle"; ... } here -- not never
+}
+```
+
+`assertNever` only accepts `never`, so passing the unhandled `s` is a compile error the moment a variant is missed — the exact same failure mode the `switch` version catches, now available for any control-flow shape. If you don't want a runtime helper at all, `satisfies never` does the same check with zero function calls, purely at compile time:
+
+```ts
+// @expect-error TS1360
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  s satisfies never; // ❌ TS1360: { kind: "triangle"; ... } does not satisfy never
+  throw new Error("unhandled shape");
+}
+```
+
+Both forms turn "did I update every `if` chain?" back into the same build error the `switch` trick gives you — the earlier two-variant version of each check compiles with zero errors, and only the unhandled `triangle` addition breaks the build, exactly where it should.
+
+## Mental Model
+
+`never` exhaustiveness is not a language feature the compiler runs for you — it's a small proof you construct by hand, once, and the compiler happens to be very good at checking proofs. A `switch`'s `default: const x: never = s` and an `if` chain's `assertNever(s)` / `s satisfies never` are the same proof in different syntactic clothes: *"after every named branch, what's left over must be nothing."* `throw` alone proves nothing — it's just code that runs, with no relationship to the type checker at all, which is exactly why it silently tolerates a missed variant. The `??` vs `||` distinction is a smaller version of the same discipline: know precisely which set of values a check is actually excluding (`null`/`undefined` vs "everything falsy"), and pick the operator whose exclusion set matches your data's real valid range.
+
+## Trade-offs
+
+| Technique | Benefit | Cost |
+|---|---|---|
+| `??` / `??=` | Only treats `null`/`undefined` as absent — `0`, `""`, `false` survive | Doesn't help when you *do* want "any falsy value" treated as absent |
+| `||` / `||=` | Correct, idiomatic tool when any falsy value really should count as unset | Silently discards `0`/`""`/`false` when those are valid data — the most common real-world regression |
+| `switch` + `never` default | One line, reads naturally, matches the shape of the data | Only applies to a literal `switch` statement |
+| `assertNever(x: never)` helper | Works for any control-flow shape (`if` chains, early returns), also throws a useful message at runtime if it's ever reached | One shared helper function to introduce and reuse everywhere |
+| `s satisfies never` | Zero runtime cost, no helper function needed | Doesn't throw on its own — still needs a real `throw`/`return` after it for the runtime fallback path |
+
+## Common Misconceptions
+
+- **`throw` in the final `else`/`default` branch is exhaustive, the same as a `never`-typed default.** It isn't — `throw` is ordinary code with no relationship to the type checker. Adding a new union variant and forgetting to handle it compiles cleanly either way; only an actual `never` assignment, `assertNever`, or `satisfies never` turns the gap into a compile error.
+- **`??` and `||` are interchangeable "give me a default" operators.** They exclude different sets of values: `??` excludes only `null`/`undefined`; `||` excludes every falsy value. Swapping one for the other silently changes behavior for `0`, `""`, and `false`.
+- **`strictNullChecks` alone prevents null-related bugs.** It forces you to *handle* the `null`/`undefined` case in the types — it says nothing about whether an `||` fallback, a `!`, or a `throw`-only "exhaustive" branch handles that case *correctly*.
+- **A non-null assertion `!` is roughly as safe as a real null check, just shorter.** A real check (`if (x == null) throw ...`) is verified against the actual runtime value every time; `!` verifies nothing and simply deletes the type error, which is a very different risk profile.
+
+## Reading AI-generated code
+
+Before trusting generated null-handling or exhaustiveness logic, check for:
+
+- `||` used to supply a default for a field whose type includes `0`, `""`, or `false` as a legitimate value — this is one of the single most common AI-generated bugs, because `||` and `??` look interchangeable at a glance.
+- An `if`/`else if` chain over a discriminated union ending in `throw new Error(...)` with no `assertNever`/`never`-typed variable/`satisfies never` — it reads as exhaustive but proves nothing, and a new variant added later fails silently at the type level.
+- A non-null assertion `!` on a value that came from a boundary (a DOM query, a `Map.get`, a fetch response) rather than from a local invariant you can actually prove.
+- A function whose return type promises a `Result`/discriminated union but that also `throw`s in some paths — mixing both error-handling styles usually means the type signature is lying about what the function can actually do.
+
+<SpotTheBug code={`type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  throw new Error("unhandled shape");
+}`}>
+This compiles with **zero errors**, even though `triangle` is never handled. The `if`/`else if` chain looks exhaustive — every named case returns, and the fallback throws — but nothing about a `throw` statement is checked against the union's members. If `Shape` started with only `circle` and `square` and `triangle` was added later (a very common real-world edit), `area` would silently compile and then throw `"unhandled shape"` at runtime for every triangle, with no warning anywhere in the build. The fix is to replace the bare `throw` with `return assertNever(s)` (a small helper typed `(x: never) => never`) or add `s satisfies never;` immediately before the `throw` — either one turns the missing `triangle` case into a compile error the moment it's introduced, instead of a runtime surprise discovered later.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Keep `strictNullChecks` on (the default since TypeScript 6.0) so `null` and `undefined` must be handled, not ignored; since 5.5 the checker also infers type predicates, so `.filter(x => x != null)` narrows on its own. Use `?.` and `??` (which the types understand) for ergonomic null handling, and treat every non-null `!` as an overridden safety check. Model failure with **Result** discriminated unions instead of invisible throws, and use the `never` **exhaustiveness** trick so adding a new union variant becomes a compile error, not a silent gap.
+Keep `strictNullChecks` on (the default since TypeScript 6.0) so `null` and `undefined` must be handled, not ignored; since 5.5 the checker also infers type predicates, so `.filter(x => x != null)` narrows on its own. Use `??`/`??=`, not `||`/`||=`, whenever `0`, `""`, or `false` are valid data — `||` silently treats them as absent. Treat every non-null `!` as an overridden safety check, model failure with **Result** discriminated unions instead of invisible throws, and make exhaustiveness a real compile-time proof everywhere — a `never`-typed `switch` default, or `assertNever`/`satisfies never` for `if` chains — because a bare `throw` in a fallback branch checks nothing at all.
 </Callout>
 
 export const quizNull = [
@@ -149,6 +324,7 @@ export const quizNull = [
       'It only affects arrays',
     ],
     answer: 1,
+    explain: 'Without strictNullChecks, null and undefined are assignable to every type, so nothing forces you to handle them. With it on, they become real types you must narrow before use.',
   },
   {
     q: 'How does `??` differ from `||` for supplying a fallback?',
@@ -159,6 +335,7 @@ export const quizNull = [
       '?? works only on strings',
     ],
     answer: 1,
+    explain: '?? checks specifically for nullish values, so 0, "", and false pass through untouched; || checks general truthiness and discards all of them, which is the source of a very common real-world bug.',
   },
   {
     q: 'What is the risk of the non-null assertion `!`?',
@@ -169,6 +346,7 @@ export const quizNull = [
       'It changes the runtime value',
     ],
     answer: 1,
+    explain: '! tells the compiler to stop checking for null/undefined without adding any actual runtime verification -- if the value really is null, the crash just happens somewhere else instead.',
   },
   {
     q: 'How does the `never` exhaustiveness trick help when a new union variant is added?',
@@ -179,6 +357,29 @@ export const quizNull = [
       'It has no effect',
     ],
     answer: 1,
+    explain: 'Once every named case is handled, whatever is left over is never. Adding a variant without a matching case means that leftover value is no longer never, so the assignment to a never-typed variable fails to compile.',
+  },
+  {
+    q: '```ts\ninterface ServerConfig { timeout?: number }\nfunction withDefaults(cfg: ServerConfig) {\n  const timeout = cfg.timeout || 30;\n  return timeout;\n}\nconsole.log(withDefaults({ timeout: 0 }));\n```\nWhat does this print, and why?',
+    options: [
+      '0 -- || only replaces null and undefined',
+      '30 -- 0 is falsy, so || treats it as absent and substitutes the default',
+      'undefined -- timeout was never read correctly',
+      'A compile error -- 0 is not assignable to ServerConfig',
+    ],
+    answer: 1,
+    explain: '|| falls back on any falsy value, and 0 is falsy in JavaScript, so an explicitly-passed, perfectly valid timeout of 0 gets silently replaced by the default. ?? would have left it as 0.',
+  },
+  {
+    q: '```ts\ntype Shape =\n  | { kind: "circle"; r: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(s: Shape): number {\n  if (s.kind === "circle") return Math.PI * s.r ** 2;\n  if (s.kind === "square") return s.side ** 2;\n  throw new Error("unhandled shape");\n}\n```\nDoes this compile, given that `triangle` is never handled?',
+    options: [
+      'No -- the compiler requires every kind to have an explicit branch',
+      'Yes, with zero errors -- a bare throw is not checked against the union at all, so the missing triangle case is a silent gap',
+      'No -- throw can only appear in a switch default',
+      'Yes, but only with `noImplicitReturns` turned off',
+    ],
+    answer: 1,
+    explain: 'A throw statement has no relationship to the type checker, so this compiles cleanly even though triangle falls straight through to the runtime error. Only assigning the leftover value to never (via a helper like assertNever, or satisfies never) would turn this into a compile-time failure.',
   },
 ];
 

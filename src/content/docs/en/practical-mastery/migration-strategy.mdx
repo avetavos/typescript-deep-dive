@@ -1,6 +1,6 @@
 ---
 title: 'Migration Strategy'
-description: 'Moving a JavaScript codebase to TypeScript without a big-bang rewrite — allowJs, ratcheting strictness, taming any, authoring libraries, and upgrading an existing project to TypeScript 6 and 7.'
+description: 'Moving a JavaScript codebase to TypeScript without a big-bang rewrite — allowJs + checkJs + JSDoc as step zero, the strictness ladder in order, taming any, import type and barrel cycles, authoring libraries, and upgrading an existing project to TypeScript 6 and 7.'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Migrate gradually, never all at once
 
@@ -26,9 +28,76 @@ export const migrateDiagram = `flowchart LR
 1. **Turn on `allowJs`.** Now TypeScript compiles a mixed project — your `.js` files build unchanged, and you can start adding `.ts` files next to them.
 2. **Add `checkJs` (and `// @ts-check`).** TypeScript type-checks your *JavaScript* using inference and JSDoc. You get real errors before converting a single file — a free first pass.
 3. **Convert file by file.** Rename `.js` to `.ts`, fix the errors that surface, commit. Start at the leaves (utilities with few dependencies) and work toward the core.
-4. **Ratchet strictness.** `strict` is the default since TypeScript 6.0, so a migrating project starts with `"strict": false` *explicitly* and removes it in stages: turn on flags one at a time — `noImplicitAny`, then `strictNullChecks`, then the rest — fixing each wave before enabling the next. When the last flag is on, delete the `strict: false` line and you are on the defaults.
+4. **Ratchet strictness.** `strict` is the default since TypeScript 6.0, so a migrating project starts with `"strict": false` *explicitly* and removes it in stages — the exact order matters, and gets its own section below.
 
 Each step is shippable. You are never in a broken half-migrated state for long.
+
+## Step zero: `allowJs` + `checkJs` + JSDoc, before any renaming
+
+The first real type-checking a migrating codebase gets doesn't require converting a single file. `checkJs` reads standard JSDoc comments as type annotations on plain `.js` files:
+
+```js
+// @ts-check
+
+/**
+ * @param {number} a
+ * @param {number} b
+ * @returns {number}
+ */
+function add(a, b) {
+  return a + b;
+}
+
+add(1, "two"); // should be flagged under checkJs
+```
+
+Run exactly that file with `tsc --allowJs --checkJs --noEmit math.js` and it reports a real error on the last line: `TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.` (verified in scratch — this is the same diagnostic code you'd get from a `.ts` file, on unmodified `.js`). This is the free first pass step 2 above refers to: you add JSDoc to the functions your team touches most, turn on `checkJs`, and get real compile errors — including on code nobody has looked at in years — before committing to renaming anything. It's also a natural place to start for files you aren't ready to fully convert: JSDoc is more verbose than native TypeScript syntax, but it's zero-runtime-cost and works in a plain `.js` file forever, if that's where a given file needs to stay.
+
+## The strictness ladder, in order
+
+Once files are converting to `.ts`, `strict` is one flag that turns on a dozen others at once — too much for most real codebases in a single step. Migrating projects set `"strict": false` explicitly and layer the individual flags back on, and the *order* matters, because each flag's error count and fix difficulty differ enormously:
+
+1. **`noImplicitAny` first.** This is almost always the biggest wave of errors, but also the most mechanical to fix — most are a missing parameter or return type, not a design problem. Getting this one done first means every flag after it is reasoning about *real* types, not silent `any`s hiding the actual shape.
+2. **`strictNullChecks` second.** This is usually the *hardest* wave — every place `null`/`undefined` was implicitly ignored now needs a real decision (a guard, a default, an assertion you can justify). It comes second, after `noImplicitAny`, specifically so you're narrowing real types by this point, not `any`s that would hide the null errors anyway.
+3. **`strictFunctionTypes` and `strictBindCallApply` next.** These catch unsound function-type assignments and mistyped `.call`/`.apply`/`.bind` usage — narrower in scope than the first two, and rarely require a design change, just a signature fix.
+4. **`strictPropertyInitialization` for classes.** This one is deliberately later because it often surfaces real architectural questions (should this field be optional? assigned in the constructor? given a default?) rather than a one-line fix — better to answer those once the easier waves are already behind you.
+5. **The rest (`noImplicitThis`, `alwaysStrict`, `useUnknownInCatchVariables`, …) last.** These are typically low-error-count flags that clean up remaining edges once the big structural waves are done.
+
+When the last flag is on, delete the `strict: false` line entirely and the project is on the real defaults — not a manually-assembled approximation of them.
+
+## `@ts-nocheck` per file: the ratchet's escape hatch, used sparingly
+
+Some files resist conversion — generated code, a genuinely dynamic module, something scheduled for deletion. `// @ts-nocheck` as the first line suppresses every error in that one file, letting the rest of the project ratchet forward without waiting on it:
+
+```ts
+// @ts-nocheck
+const total: number = "not a number"; // would be TS2322 -- suppressed for this whole file
+export function broken(x: string): number {
+  return x; // would also error -- also suppressed
+}
+```
+
+<TSPlayground code={tsNocheckCode} id="practical-migration-ts-nocheck" title="@ts-nocheck hides every error in the file, real or not" />
+
+export const tsNocheckCode = `// @ts-nocheck
+const total: number = "not a number"; // would be TS2322 -- suppressed for this whole file
+export function broken(x: string): number {
+  return x; // would also error -- also suppressed
+}`;
+
+Both real type errors above vanish — `tsc --strict` reports zero problems for this file, which is exactly the danger: `@ts-nocheck` is a much bigger hammer than `@ts-expect-error`, since it silences the *entire file*, including bugs nobody has looked at yet, not just the one line you intended to skip. Treat it as a tracked, named exception — a comment linking a ticket, a file explicitly listed in a migration tracker — never a quiet default for "this file gave me trouble."
+
+## Measuring progress
+
+A migration needs a number that goes in one direction, or it's easy to lose track of whether you're actually converging. Two real, greppable metrics work well together: the count of files still on `@ts-nocheck` (files with zero real checking), and the ratio of `.ts`/`.tsx` files to the total:
+
+```bash
+total=$(find src -name '*.ts' -o -name '*.tsx' | wc -l | tr -d ' ')
+nocheck=$(grep -rl '^// @ts-nocheck' src --include='*.ts' --include='*.tsx' | wc -l | tr -d ' ')
+echo "$((total - nocheck)) / $total files fully type-checked"
+```
+
+(Verified as real shell logic against a three-file scratch project — one with a leading `// @ts-nocheck`, two without — it correctly prints `2 / 3 files fully type-checked`.) Track this number (or the `any` count from the performance-and-pitfalls lesson) in CI, or just in a recurring team check-in — a migration with no visible metric tends to stall quietly once the initial enthusiasm wears off, because there's nothing showing that the remaining work is shrinking.
 
 ## `any` is a tool, then a debt
 
@@ -46,7 +115,29 @@ When you must suppress an error, use `@ts-expect-error`, not `@ts-ignore`:
 legacyCall(weirdValue);
 ```
 
-Both silence the error on the next line, but `@ts-expect-error` **also errors if the line stops having an error**. So when you later fix the underlying type, the now-unnecessary suppression fails the build and tells you to remove it. `@ts-ignore` just rots silently.
+Both silence the error on the next line, but `@ts-expect-error` **also errors if the line stops having an error**. So when you later fix the underlying type, the now-unnecessary suppression fails the build and tells you to remove it. `@ts-ignore` just rots silently. `@ts-expect-error` is the right-sized tool for *one line*; `@ts-nocheck` (above) is the much blunter tool for an entire file, and the two should not be reached for interchangeably.
+
+## `import type` and barrel-file cycles
+
+Under `verbatimModuleSyntax` (the modern replacement for `isolatedModules`'s import-related checks), an import that's only ever used as a type must say so explicitly:
+
+```ts
+// @skip-verify multi-file example -- ./types.ts exports `interface User` and `function makeUser`; this is ./main.ts
+import { User, makeUser } from "./types"; // mixes a type and a value in one import
+const u: User = makeUser(1, "Ada");
+```
+
+That fails under `verbatimModuleSyntax` with `TS1484: 'User' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.` (verified in a real two-file scratch project — `tsc --verbatimModuleSyntax --strict main.ts` against that exact `./types.ts`). Splitting the import fixes it and documents intent for free:
+
+```ts
+// @skip-verify multi-file example -- ./types.ts exports `interface User` and `function makeUser`
+import { makeUser } from "./types";
+import type { User } from "./types"; // type-only import survives verbatimModuleSyntax
+
+const u: User = makeUser(1, "Ada");
+```
+
+The value of `import type` (and the matching `export type`) isn't just satisfying a flag — a type-only import is guaranteed to be erased at emit, so it can never accidentally create a runtime dependency between modules that only need to share a *shape*. That matters most for **barrel-file cycles**: module `a` re-exports from module `b`'s barrel `index.ts`, which re-exports from module `a`'s barrel, and if either side pulled in the other for a type it only needed for annotations, a real runtime circular-import (undefined-at-import-time values, order-dependent breakage) can appear where only a compile-time type relationship was ever intended. Migrating a codebase to `import type` for anything that's genuinely type-only removes that entire class of accidental runtime coupling — the compiler enforces, module by module, that a "just a type" import can never smuggle in a real dependency.
 
 ## Migrating to TypeScript 6 and 7
 
@@ -69,8 +160,50 @@ If you publish a package, a few extra rules apply:
 - **Don't leak internal types.** Only your public API's types are a contract; keep implementation types un-exported so you can change them freely.
 - **Treat types as semver.** A change that breaks consumers' *type checking* is a breaking change, even if the runtime behavior is identical. Widening a parameter is usually safe; narrowing it, or changing a return type, can break builds downstream.
 
+## Mental Model
+
+Every technique in this lesson exists to answer one question honestly at every point in a long migration: **is this specific piece of code checked right now, or not — and can I tell?** `allowJs`/`checkJs` extends "checked" as far as possible before any renaming happens. The strictness ladder is ordered so each wave of newly-checked code is real types, not `any`s that would hide the next wave's errors. `@ts-nocheck` and `@ts-expect-error` are both honest opt-outs — deliberately visible, greppable, and in `@ts-expect-error`'s case, self-destructing once no longer needed — which is the opposite of an implicit `any` or a silently-stale `@ts-ignore` quietly widening the "not checked" set without anyone noticing. A migration doesn't fail because `any` exists; it fails when nobody can tell anymore how much of the codebase `any` has quietly spread to.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| JSDoc + `checkJs` on a `.js` file | Zero-runtime-cost typing, works without renaming or a build step change | More verbose than native TS syntax; some advanced type features are awkward or impossible to express |
+| Converting to `.ts` immediately | Full native syntax, no JSDoc verbosity | Requires a rename + build step change per file; riskier for files you're not ready to fully commit to |
+| `strict` all at once | Fastest path to full safety, no ladder to maintain | Usually an unmanageable wall of errors on any real codebase — the reason this lesson recommends a ladder at all |
+| `@ts-expect-error` | Self-removes when the underlying type is fixed — can't silently rot | Only suppresses one line; doesn't scale to "this whole file isn't ready" |
+| `@ts-nocheck` | Unblocks an entire stubborn file immediately | Hides every error in that file, including new ones introduced later — the bluntest tool in this lesson |
+
+## Common Misconceptions
+
+- **`checkJs` requires converting files to `.ts` first.** It doesn't — it type-checks plain `.js` files using inference and JSDoc, with no renaming at all, which is exactly why it belongs at step zero.
+- **The order you turn on `strict`'s sub-flags doesn't matter, as long as you get to `strict: true` eventually.** It matters a great deal for how manageable each wave of errors is — `noImplicitAny` before `strictNullChecks` means you're narrowing real types, not `any`s, by the time the harder null-safety wave hits.
+- **`@ts-nocheck` and `@ts-ignore`/`@ts-expect-error` are roughly the same tool at different scopes.** `@ts-expect-error` is self-correcting (it errors when no longer needed); `@ts-ignore` and `@ts-nocheck` are not — both can rot silently, and `@ts-nocheck` does it across an entire file at once.
+- **`import type` is just a style preference for cleaner code.** Under `verbatimModuleSyntax` it's enforced by the compiler, and more importantly, it's a real guarantee against accidentally creating a runtime circular-import out of what was only ever meant to be a compile-time type relationship — especially across barrel files.
+
+## Reading AI-generated code
+
+Before trusting a generated migration step or a "quick fix" for a type error, check for:
+
+- `@ts-nocheck` added to make a stubborn file's errors disappear, with no ticket reference or explanation — verify what real errors it's actually suppressing before accepting it.
+- `strict` sub-flags enabled all at once in a single generated diff on a large existing codebase — ask whether each wave of resulting errors was actually reviewed, or just bulk-suppressed to make the build pass.
+- A generated `import { Foo, useFoo }` where `Foo` is only ever used as a type — under `verbatimModuleSyntax` this should be split, and if it isn't, it's a sign the generation didn't actually run the type checker against the real config.
+- Any suggestion to "just use `@ts-ignore`" for an error that's actually a real, fixable type mismatch rather than a genuine limitation of the type system.
+- A `.d.ts`-shipping library change described as "non-breaking" that actually narrows a parameter type or widens a return type — verify against the semver rule in this lesson, not the runtime behavior alone.
+
+<SpotTheBug code={`// @ts-nocheck
+export function parseConfig(raw) {
+  const data = JSON.parse(raw);
+  return {
+    port: data.port,
+    host: data.host.toLowerCase(),
+  };
+}`}>
+This file compiles with **zero errors**, and it will keep compiling with zero errors no matter what is broken inside it — that's the entire point (and entire danger) of `@ts-nocheck` on the first line. `data.host.toLowerCase()` will throw at runtime if `host` is ever missing from the parsed config, `data.port` is completely untyped (it's whatever `JSON.parse` produced, `any`), and if someone later adds a genuine typo (`dat.port` instead of `data.port`), the compiler will say nothing about that either — this file is entirely outside its protection, forever, until someone removes the directive. In a PR, a lone `@ts-nocheck` on a file with real, active logic like this (not generated code or a deletion candidate) should be treated as a request to justify why the file can't be type-checked at all, not a routine way to silence an inconvenient error.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Migrate gradually: `allowJs` to coexist, `checkJs` to type-check JS for free, then convert file by file from the leaves inward, ratcheting `strict` flags one at a time. Treat `any` as tracked debt (make it explicit, enable `noImplicitAny`), prefer `@ts-expect-error` (which self-removes when fixed) over `@ts-ignore`, and if you publish a library, ship `.d.ts`, hide internal types, and version your types under semver. For the TypeScript 6 → 7 upgrade, hop through 6.0 with `ignoreDeprecations`, set `types` and `rootDir`, replace the removed options, then move to 7 — keeping `@typescript/typescript6` for tools that still need the API.
+Migrate gradually: `allowJs` + `checkJs` + JSDoc gives you real type errors on plain `.js` before renaming a single file, then convert leaf-first and ratchet `strict`'s sub-flags in order — `noImplicitAny`, then `strictNullChecks`, then the narrower flags — so each wave reasons about real types, not `any`s. Treat `any` as tracked, greppable debt; prefer self-correcting `@ts-expect-error` over `@ts-ignore` for one line, and reserve the much blunter `@ts-nocheck` for a whole file you can name and justify, tracked against a real progress metric. Use `import type`/`export type` under `verbatimModuleSyntax` to guarantee a type-only relationship can never smuggle in a real runtime circular-import, especially across barrel files. For the TypeScript 6 → 7 upgrade, hop through 6.0 with `ignoreDeprecations`, set `types` and `rootDir`, replace the removed options, then move to 7 — keeping `@typescript/typescript6` for tools that still need the API. And if you publish a library, ship `.d.ts`, hide internal types, and version your types under semver.
 </Callout>
 
 export const quizMigrate = [
@@ -83,6 +216,7 @@ export const quizMigrate = [
       'Enable full strict mode on day one',
     ],
     answer: 1,
+    explain: 'Big-bang rewrites of real codebases tend to stall or die; TypeScript is designed as a gradual type system specifically so JS and TS can coexist file by file while you keep shipping.',
   },
   {
     q: 'What does `checkJs` (with @ts-check) give you before converting files?',
@@ -93,6 +227,18 @@ export const quizMigrate = [
       'It disables the build',
     ],
     answer: 1,
+    explain: 'checkJs reads JSDoc comments as type annotations on plain .js files, giving you real tsc diagnostics -- verified in this lesson with a JSDoc-typed add(a, b) function that correctly flags add(1, "two") -- with no renaming required.',
+  },
+  {
+    q: 'Why does the strictness ladder put `noImplicitAny` before `strictNullChecks`?',
+    options: [
+      'They must be enabled in alphabetical order',
+      'So the null-safety wave is reasoning about real types, not any values that would hide the null errors anyway',
+      'strictNullChecks does not work unless noImplicitAny is on',
+      'It does not matter which comes first',
+    ],
+    answer: 1,
+    explain: 'If implicit anys are still present when you turn on strictNullChecks, many real null/undefined issues stay hidden behind those anys -- clearing noImplicitAny first means the harder null-safety wave is working with real, honest types.',
   },
   {
     q: 'Why prefer `@ts-expect-error` over `@ts-ignore`?',
@@ -103,26 +249,29 @@ export const quizMigrate = [
       'It works at runtime',
     ],
     answer: 1,
+    explain: '@ts-expect-error is self-correcting: once the underlying type is fixed, the now-unnecessary suppression itself becomes a build error, forcing its removal. @ts-ignore has no such check and can rot silently forever.',
   },
   {
-    q: 'What is the recommended first step when upgrading an old project to TypeScript 6/7?',
+    q: '```ts\n// @ts-nocheck\nexport function parseConfig(raw) {\n  const data = JSON.parse(raw);\n  return { port: data.port, host: data.host.toLowerCase() };\n}\n```\nWhat does `@ts-nocheck` do here, and what is the risk?',
     options: [
-      'Delete tsconfig.json and start over',
-      'Upgrade to 6.0 with `"ignoreDeprecations": "6.0"`, fix the moved defaults (`types`, `rootDir`) and each deprecated option, then move to 7.0',
-      'Jump straight to 7.0 and fix everything at once',
-      'Stay on 5.x forever',
+      'It only suppresses the JSON.parse line -- the rest is still checked',
+      'It suppresses every error in the entire file, including any real bugs introduced later, until the directive is removed',
+      'It is equivalent to @ts-expect-error but file-scoped',
+      'It has no effect on plain .js-style function bodies',
     ],
     answer: 1,
+    explain: '@ts-nocheck disables checking for the whole file, not just one line, and unlike @ts-expect-error it never self-corrects -- a real bug (like host being undefined) can sit there indefinitely with zero compiler warning.',
   },
   {
-    q: 'For a published library, why treat types as part of semver?',
+    q: '```ts\nimport { User, makeUser } from "./types";\nconst u: User = makeUser(1, "Ada");\n```\nUnder `verbatimModuleSyntax`, what happens, and why does `import type` matter beyond satisfying that flag?',
     options: [
-      'Types have no versioning implications',
-      'A change that breaks consumers\' type checking is a breaking change, even if runtime behavior is unchanged',
-      'Because the runtime always changes with types',
-      'To make the package larger',
+      'Nothing changes -- verbatimModuleSyntax only affects export statements',
+      'TS1484 -- User must be a type-only import; splitting it also guarantees the type can never accidentally create a real runtime circular-import (a common barrel-file hazard)',
+      'It is a runtime error, not a compile-time one',
+      'verbatimModuleSyntax removes the need for any type annotations at all',
     ],
     answer: 1,
+    explain: 'Mixing a type and a value in one import fails as TS1484 under verbatimModuleSyntax. Splitting User into `import type` does more than satisfy the flag -- it guarantees erasure at emit, so a type-only relationship between barrel files can never accidentally become a real runtime dependency cycle.',
   },
 ];
 

@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## จุดที่ความรู้กลายเป็น judgment
 
@@ -39,6 +41,184 @@ export const boundaryDiagram = `flowchart LR
 เลิกมองว่า compiler สีเขียว = ถูกต้อง compiler พิสูจน์แค่ว่า code ของคุณ *internally consistent* กับ type ที่คุณเขียน — ไม่มากกว่านั้น ถ้า type เหล่านั้นไม่ตรงกับความจริงตอน runtime (input ที่ไม่ได้ validate, `as` ที่ผิด, `any` ที่หลุดมา) compiler ก็จะผิดอย่างมั่นใจ หน้าที่ของมือโปรคือทำให้ type *สมควรได้รับความเชื่อใจ* ตรง edge
 </Callout>
 
+## `Object.keys` กับ `Object.entries` รู้น้อยกว่าที่คุณคิด
+
+ก่อนจะเข้าเรื่อง boundary, nullability, และ migration ลองมาดู boundary ที่คุณข้ามวันละหลายสิบครั้งโดยไม่รู้ตัวก่อน: การอ่าน object ของ**ตัวเอง**กลับมาด้วย `Object.keys` กับ `Object.entries` ทั้งคู่ถูก type แบบระมัดระวังกว่าที่คนส่วนใหญ่คิด และเหตุผลก็คือ structural typing ตัวเดียวกับที่คุณเจอมาตลอดทั้งคอร์ส
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+interface Point { x: number; y: number }
+declare const p: Point;
+
+const keys = Object.keys(p);
+const check1: Equal<typeof keys, string[]> = true; // not ("x" | "y")[]
+
+const entries = Object.entries(p);
+const check2: Equal<typeof entries, [string, any][]> = true; // not [string, number][] !
+```
+
+`Object.keys(p)` เป็น `string[]` ไม่ใช่ `("x" | "y")[]` — และนี่ไม่ใช่ TypeScript พลาดโอกาส แต่ถูกต้องตาม structural typing เพราะ binding ที่ type เป็น `Point` สามารถมี object ที่มี property **เพิ่ม** อยู่จริงตอน runtime ได้:
+
+```ts
+interface Point { x: number; y: number }
+const wide = { x: 1, y: 2, z: 3 };
+const p: Point = wide; // ✅ wide has every Point property, plus more — structural subtyping allows this
+for (const key of Object.keys(p)) {
+  // key: string — at runtime p (really wide) can have a "z" key the Point type never mentioned
+}
+```
+
+ถ้า `Object.keys` สัญญาว่าจะได้ `("x" | "y")[]` สัญญานั้นจะเท็จทันทีที่ส่ง `wide` เข้าไป `string[]` คือ type เดียวที่เป็นจริงเสมอ
+
+`Object.entries` คือความประหลาดใจที่คมกว่า: บน plain object type ที่ไม่มี index signature lib type จะ fallback เป็น `[string, any][]` ไม่ใช่ `[string, number][]` แม้ว่าทุก property จะเป็น `number` จริง ๆ `any` ตัวนั้นเงียบและแพร่กระจาย ตรงกับรูปแบบ "compile ผ่านสะอาด แต่โกหกตอน runtime" ที่คอร์สนี้ย้ำอยู่ตลอด
+
+<TSPlayground code={entriesAnyCode} id="practical-index-entries-any" title="Object.entries degrades to any on a plain interface" />
+
+export const entriesAnyCode = `interface Prices { apple: number; banana: number; currency: string }
+
+function totalPrice(prices: Prices): number {
+  let total = 0;
+  for (const [item, price] of Object.entries(prices)) {
+    total += price; // price is \`any\` — Object.entries degrades value types on a plain interface
+  }
+  return total;
+}
+
+console.log(totalPrice({ apple: 3, banana: 2, currency: "USD" }));`;
+
+มีสอง pattern ที่ดึงความแม่นยำที่ `Object.keys` ให้ไม่ได้กลับคืนมา:
+
+- **`keyof typeof` บน object ที่เป็น `const`** — เมื่อ*คุณ*เป็นเจ้าของ object และรู้ว่าไม่มี key แอบแฝงเพิ่ม `as const` บวก `keyof typeof` จะให้ literal union กลับมา
+- **generic helper พร้อม cast ชัดเจน** — `Object.keys(obj) as (keyof T)[]` เมื่อคุณยืนยันได้เอง (ปกติเพราะคุณสร้าง `obj` เอง) ว่าไม่มี key เพิ่ม
+
+```ts
+const Direction = { Up: "UP", Down: "DOWN", Left: "LEFT", Right: "RIGHT" } as const;
+type Direction = (typeof Direction)[keyof typeof Direction];
+declare const d: Direction; // "UP" | "DOWN" | "LEFT" | "RIGHT"
+
+function keysOf<T extends object>(obj: T): (keyof T)[] {
+  return Object.keys(obj) as (keyof T)[]; // you are asserting: obj has no extra own keys
+}
+
+const dirKeys = keysOf(Direction); // ("Up" | "Down" | "Left" | "Right")[]
+```
+
+ทั้งสอง pattern คือคุณเองที่ personally ยืนยันการันตีที่ compiler หาเองไม่ได้ — ซึ่งเป็นธีมของทั้งโมดูลนี้ในเวอร์ชันย่อ
+
+## `Record<string, T>` vs `Map<K, V>` สำหรับ key ที่ dynamic
+
+เมื่อชุด key ไม่รู้ล่วงหน้าจนกว่าจะ runtime — cache, ตัวนับ, lookup table ที่สร้างจาก input ของ user — คุณจะเลือกระหว่าง `Record<string, T>` (plain object) กับ `Map<K, V>` มันดูเหมือนใช้แทนกันได้ แต่ไม่ใช่
+
+`Record<string, T>` คือ plain JavaScript object แปลว่า string **ทุกตัว** เป็น key ที่ valid ในสายตา type system — รวมถึง `"__proto__"`, `"constructor"`, และ `"toString"` ชื่อที่ชนกับ prototype chain ของ object เอง type system ไม่มีแนวคิดเรื่อง "key อันตราย" เลย ดังนั้น code ที่ดูธรรมดามาก อาจเป็นช่องโหว่ prototype-pollution จริงได้ ถ้า key มาจาก input ที่ไม่น่าเชื่อถือ:
+
+```ts
+function merge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  for (const key in source) {
+    const value = source[key];
+    if (typeof value === "object" && value !== null) {
+      const existing = target[key];
+      if (typeof existing !== "object" || existing === null) target[key] = {};
+      merge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted); // every plain object now has this
+```
+
+<TSPlayground code={protoPollutionCode} id="practical-index-proto-pollution" title="A type-checked recursive merge with real prototype pollution" />
+
+export const protoPollutionCode = `function merge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  for (const key in source) {
+    const value = source[key];
+    if (typeof value === "object" && value !== null) {
+      const existing = target[key];
+      if (typeof existing !== "object" || existing === null) target[key] = {};
+      merge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted); // every plain object now has this`;
+
+โค้ดนี้ผ่าน `--strict` สะอาด — ไม่มี diagnostic เลยสักตัว — และมันรั่ว `"yes"` ไปยัง `{}` literal ทุกตัวที่เหลือใน process จริง ๆ เพราะ recursive merge เดินเข้าไปที่ `target["__proto__"]` ซึ่ง JavaScript resolve ผ่าน prototype accessor ไปยัง `Object.prototype` ตัวจริงที่ใช้ร่วมกันทั้งหมด `Map<K, V>` ไม่มี bug class นี้เลย: key ของ `Map` เก็บอยู่ใน internal slot ไม่ใช่ property ของ object ดังนั้น `map.set("__proto__", x)` ก็แค่ entry ธรรมดา ๆ ไม่มีความหมายพิเศษอะไร
+
+อีกช่องว่างคือ `noUncheckedIndexedAccess` โดย default การอ่าน index ของ `Record` จะให้ value type ตรง ๆ โดยไม่มี `undefined` — แม้แต่ key ที่คุณไม่เคยตั้งเลย:
+
+```ts
+const counts: Record<string, number> = { apples: 3 };
+function double(n: number): number { return n * 2; }
+const result = double(counts["bananas"]); // "bananas" was never set — compiles anyway
+```
+
+โค้ดนี้ compile ผ่านสะอาดภายใต้ default flags ของคอร์สนี้ และคืน `NaN` ตอน runtime (ตรวจแล้วจริง: `node --experimental-strip-types` บนไฟล์นี้พิมพ์ `NaN`) การเปิด `noUncheckedIndexedAccess` ปิดช่องว่างนี้พอดี — การอ่านเดียวกันกลายเป็น `number | undefined` ดังนั้นการส่งเข้า `double` จะเป็น compile error:
+
+```ts
+// @skip-verify requires --noUncheckedIndexedAccess, not part of this course's default flags
+const counts: Record<string, number> = { apples: 3 };
+function double(n: number): number { return n * 2; }
+const result = double(counts["bananas"]); // "bananas" was never set
+```
+
+ตรวจแยกต่างหากแล้ว: `node_modules/typescript/bin/tsc --ignoreConfig --strict --noUncheckedIndexedAccess --target es2025 --lib es2025 counts.ts` รายงาน `TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.` ตรงบรรทัดนี้เป๊ะ — โค้ดเดิม `--strict` เดิม เพิ่มแค่ flag เดียว แล้ว bug จริงก็กลายเป็น compile error แทนที่จะเป็น `NaN` `Map<string, number>` ให้ความซื่อสัตย์แบบเดียวกันฟรี ๆ: `.get()` ถูก type เป็น `V | undefined` เสมอ ไม่ว่าจะเปิด flag หรือไม่ เพราะ `Map` ไม่เคยแกล้งทำเป็นว่าทุก key มีอยู่จริง
+
+## Mental Model
+
+ทุกเครื่องมือใน section นี้กำลังตอบคำถามเดียวกัน: **compiler รู้จริง ๆ ว่า key บน value นี้มีอะไรบ้างแค่ไหน?** `Object.keys`/`Object.entries` รู้แค่ว่า value เป็น *อย่างน้อย* type ที่ประกาศไว้ จึงตอบแบบซื่อสัตย์ที่สุดที่กว้างที่สุด (`string[]`, `[string, any][]`) `Record<string, T>` ไม่รู้เลยว่า string ไหนปลอดภัย จึงรับ `"__proto__"` เท่ากับ `"apples"` `noUncheckedIndexedAccess` คือ compiler ยอมรับว่าพิสูจน์ไม่ได้ว่า key เคยถูกตั้งค่า จึงไม่แกล้งทำเป็นรู้ ทั้งหมดนี้ไม่ใช่ compiler กวนใจ — มันคือ compiler ที่แน่ใจเท่าที่ type ที่คุณให้มาจริง ๆ สนับสนุนได้เท่านั้น ซึ่งคือธีมทั้งโมดูลในระดับที่ลึกลงไปอีกขั้นก่อนที่บทอื่นจะเอาไปใช้
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ข้อดี | ต้นทุน |
+|---|---|---|
+| `Record<string, T>` | plain object: JSON-serializable, destructure/spread ได้เป็นธรรมชาติ, ใช้ได้กับทุก API ที่ต้องการ object | string ทุกตัว type-check ผ่านในฐานะ key รวมถึง `"__proto__"`/`"constructor"`; `Object.keys`/`Object.entries` เสียความแม่นยำของ key/value |
+| `Map<K, V>` | key เป็น type อะไรก็ได้ (ไม่ใช่แค่ string), iterate ตามลำดับ insertion จริง, `.get()` ซื่อสัตย์เป็น `V \| undefined`, ไม่ชนกับ prototype chain | ไม่ JSON-serializable โดยตรง ต้องแปลงเอง, ไม่มี object-literal syntax, API จำนวนมากยังคาดหวัง plain object |
+| `interface`/`type` ที่มีชื่อและ key รู้ล่วงหน้า | แม่นยำครบทุก key, `keyof T` ใช้ได้, excess-property check จับ typo บน literal ได้ | ใช้ได้เฉพาะเมื่อชุด key คงที่ตอน compile — ไม่รองรับ key แบบ dynamic/มาจาก user |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`Object.keys(obj)` ควรถูก type เป็น `(keyof T)[]` และ TypeScript แค่ทำงานหยาบไป** ไม่ใช่ความหยาบ — `string[]` คือ type เดียวที่ยังจริงอยู่เสมอ เมื่อ value จริงตอน runtime ของ `obj` อาจมี property เพิ่มที่ type ที่ structurally-compatible กันไม่ได้พูดถึง ซึ่งเป็นไปได้เสมอ
+- **`Object.entries` บน object ที่มี type ให้ value ที่มี type ตามด้วย** จริงเฉพาะเมื่อ object มี index signature เท่านั้น `interface`/`type` แบบ property คงที่ทำให้ value type กลายเป็น `any` แบบเงียบ ๆ
+- **`Record<string, T>` กับ `Map<string, T>` ใช้แทนกันได้สำหรับ lookup ที่ key เป็น string** ทั้งสองต่างกันตรงจุดที่สำคัญที่สุด: key ที่ไม่น่าเชื่อถือ `Record` สืบทอดอันตรายทุกอย่างของการเป็น JavaScript object จริง (prototype chain) ส่วน `Map` ไม่มี
+- **การเปิด `noUncheckedIndexedAccess` ส่วนใหญ่เป็นแค่ noise สำหรับ `Record` ที่คุณควบคุมอยู่แล้ว** มันจะ fire เฉพาะจุดที่ key อาจไม่มีอยู่จริง ๆ เท่านั้น — ซึ่งสำหรับอะไรก็ตามที่สร้างจาก user input, config, หรือ partial data คือการอ่าน `Record` ส่วนใหญ่ในทางปฏิบัติ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ code ที่ generate มาแล้วใช้ plain object เป็น lookup table ตรวจสอบ:
+
+- ผลลัพธ์จาก `Object.keys(obj)` หรือ `Object.entries(obj)` ถูกใช้ราวกับว่า value type แม่นยำ — ตรวจว่า type ของ `obj` มี index signature จริงหรือเป็นแค่ `interface` แบบ property คงที่ที่ value กลายเป็น `any` แบบเงียบ ๆ
+- `Record<string, T>` (หรือ plain object) ที่สร้างจาก **key ที่ user ควบคุมได้** — request body, query param, config ที่ upload มา — โดยไม่มีการเช็ค `__proto__`, `constructor`, หรือ `prototype` โดยเฉพาะใน merge/clone/defaults helper แบบเขียนมือ
+- จุดที่ `Map` จะกำจัด bug class ทั้งชุดได้ฟรี (key แบบ dynamic ที่อาจไม่น่าเชื่อถือ) แต่กลับใช้ plain object เพียงเพราะความเคยชิน
+- การอ่าน `Record` โดยไม่มี `noUncheckedIndexedAccess` และไม่มี fallback (`?? default`) สำหรับ key ที่พิสูจน์ไม่ได้ว่ามีอยู่จริง
+
+<SpotTheBug code={`interface Prices { apple: number; banana: number; currency: string }
+
+function totalPrice(prices: Prices): number {
+  let total = 0;
+  for (const [item, price] of Object.entries(prices)) {
+    total += price;
+  }
+  return total;
+}
+
+console.log(totalPrice({ apple: 3, banana: 2, currency: "USD" }));`}>
+โค้ดนี้ compile ผ่าน**ไม่มี error เลย**ภายใต้ `--strict` และคืนค่า `"5USD"` ตอน runtime จาก function ที่ประกาศ return type เป็น `number` `Object.entries` บน `Prices` (plain interface ไม่มี index signature) type `price` เป็น `any` ดังนั้น `total += price` type-check ผ่านไม่ว่า `price` จะเป็นอะไรจริง ๆ ตอน runtime `total` เริ่มที่ `0` บวก `3` กับ `2` (เป็น number ทั้งคู่ ไม่มีปัญหา) แล้วบวก string `"USD"` — `+` ของ JavaScript ระหว่าง number กับ string จะ concatenate กัน ได้ string `"5USD"` ซึ่ง function คืนค่านี้ออกไปทั้งที่ประกาศ return type เป็น `number` วิธีแก้คือ iterate เฉพาะ key ที่เป็นตัวเลขอย่างชัดเจน (`(["apple", "banana"] as const).reduce((sum, k) => sum + prices[k], 0)`) หรือแยก prices กับ metadata ไว้คนละ object เพื่อไม่ให้ `Object.entries` ถูกใช้กับ shape ที่ type ปนกัน
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`Object.keys` กับ `Object.entries` ถูก type แบบระมัดระวังเท่าที่ structural typing ต้องการ — `string[]` และ (บน plain interface) `[string, any][]` — เพราะ compiler ไม่มีทางตัด property เพิ่มบน value ที่ structurally-compatible ออกไปได้เลย ใช้ `keyof typeof` บน object ที่เป็น `const` เมื่อคุณเป็นเจ้าของ shape ทั้งหมด และเลือก `Map<K, V>` มากกว่า `Record<string, T>` เมื่อ key เป็น dynamic หรือไม่น่าเชื่อถือ: `Record` สืบทอดอันตรายทุกอย่างของการเป็น JavaScript object รวมถึง prototype pollution ที่ `Map` ไม่มีเลย
+</Callout>
+
 export const quizIndex = [
   {
     q: 'ความจริงหลักของโมดูลนี้คืออะไร?',
@@ -49,6 +229,7 @@ export const quizIndex = [
       'ไม่จำเป็นต้อง validate ถ้าใช้ strict mode',
     ],
     answer: 1,
+    explain: 'ทุกบทในโมดูลนี้คือรูปแบบหนึ่งของความจริงนี้: any, cast ที่ผิด, หรือข้อมูลจากภายนอกที่ไม่ได้ validate ทำให้ model ของ type ต่างจากสิ่งที่เกิดขึ้นจริงตอน runtime ได้ และ compiler ไม่มีทางรู้เองเลย',
   },
   {
     q: 'กลยุทธ์ที่วนกลับมาเสมอสำหรับจัดการโลกที่ไม่มี type คืออะไร?',
@@ -59,6 +240,7 @@ export const quizIndex = [
       'ปิด strict mode ตรง boundary',
     ],
     answer: 1,
+    explain: 'ผลักความไม่แน่นอนไปที่ boundary จุดเดียว เปลี่ยนให้เป็น type จริงที่ตรวจแล้วตรงนั้น (guard หรือ schema) แล้วปล่อยให้ส่วนที่เหลือของโปรแกรมได้รับการการันตีโดยไม่ต้องเช็คซ้ำ',
   },
   {
     q: 'project compile ผ่านโดยไม่มี error เลย การันตีอะไร?',
@@ -69,6 +251,40 @@ export const quizIndex = [
       'ข้อมูลจากภายนอกทั้งหมด valid',
     ],
     answer: 1,
+    explain: 'compiler สีเขียวพิสูจน์แค่ internal consistency กับ type ที่คุณให้ ไม่ใช่ความถูกต้องเทียบกับความจริงตอน runtime — ช่องว่างนั้นแหละที่ any, as ที่ผิด, หรือ input ที่ไม่ได้ validate ซ่อนไว้ได้',
+  },
+  {
+    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const p: Point;\nconst keys = Object.keys(p);\n```\n`keys` มี type อะไร?',
+    options: [
+      '`("x" | "y")[]`',
+      '`string[]` — value ที่ structurally-compatible กันอาจมี property เพิ่มที่ `Point` ไม่ได้พูดถึง',
+      '`(keyof Point)[]`',
+      '`any[]`',
+    ],
+    answer: 1,
+    explain: 'Object.keys คืน string[] เสมอ เพราะ structural typing แปลว่า binding ที่ type เป็น Point อาจมี key เพิ่มตอน runtime จริง ๆ — ("x" | "y")[] จะเป็นสัญญาที่ compiler รับประกันไม่ได้',
+  },
+  {
+    q: '```ts\nfunction merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }\nconst payload: Record<string, unknown> = JSON.parse(\'{"__proto__":{"polluted":"yes"}}\');\nmerge({}, payload);\nconsole.log(({} as Record<string, unknown>).polluted);\n```\nโค้ดนี้ compile ผ่านภายใต้ `--strict` ไหม แล้วพิมพ์อะไร?',
+    options: [
+      'compile error — `__proto__` ไม่ใช่ key ที่ valid ของ Record',
+      'compile ผ่านไม่มี error เลย และพิมพ์ `"yes"` — recursive merge รั่วเข้า Object.prototype ที่ใช้ร่วมกัน',
+      'compile ผ่านแต่พิมพ์ `undefined` — Record บล็อก key อันตรายตอน runtime',
+      'compile ผ่านแต่ throw runtime TypeError',
+    ],
+    answer: 1,
+    explain: 'Record<string, T> ไม่มีแนวคิดเรื่อง key อันตรายเลย จึง type-check ผ่านสะอาด ตอน runtime การเดินเข้า target["__proto__"] resolve ผ่าน prototype accessor ไปยัง Object.prototype ตัวจริงที่ใช้ร่วมกัน ทำให้ object literal ทุกตัวหลังจากนี้มี .polluted === "yes"',
+  },
+  {
+    q: 'ข้อไหนถูกต้องเกี่ยวกับ `Record<string, T>` กับ `Map<K, V>` สำหรับ key แบบ dynamic ที่อาจไม่น่าเชื่อถือ?',
+    options: [
+      'ใช้แทนกันได้เต็มที่',
+      'Map หลีกเลี่ยง bug class prototype-pollution ได้ทั้งหมด เพราะ key อยู่ใน internal slot ไม่ใช่ property ของ object',
+      'Record ปลอดภัยกว่าเสมอเพราะเป็น native language feature',
+      'Map ใช้ string เป็น key ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'Map เก็บ entry ไว้ใน data structure ภายในที่ไม่มีปฏิสัมพันธ์กับ prototype chain เลย ดังนั้น key อย่าง "__proto__" ก็แค่ entry ธรรมดา — bug class ทั้งชุดที่ Record สืบทอดมาจากการเป็น JS object จริงไม่มีผลกับ Map',
   },
 ];
 

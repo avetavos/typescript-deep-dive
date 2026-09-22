@@ -1,6 +1,6 @@
 ---
 title: 'Typing APIs & Boundaries'
-description: 'unknown vs any at the edges, validating external data into trusted types, and branded types for nominal IDs.'
+description: 'unknown vs any at the edges, validating external data into trusted types, every boundary beyond JSON.parse, immutability, and branded types for nominal IDs.'
 sidebar:
   order: 2
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Every bug enters at a boundary
 
@@ -61,6 +63,7 @@ if (isUser(data)) {
 For anything real, hand-written guards get tedious and drift from the type. The standard answer is a **schema/parser library** (zod, valibot, and friends) where one declaration is *both* the runtime validator and the static type:
 
 ```ts
+// @skip-verify zod is not a dependency of this course — shape shown for reference only
 declare const input: string;
 import { z } from "zod";
 
@@ -78,6 +81,114 @@ One source of truth, checked at runtime, inferred at compile time. This is the b
 export const validateDiagram = `flowchart LR
   raw["unknown\n(JSON, network, storage)"] -->|schema.parse / type guard| typed["trusted type\n(User)"]
   typed --> use["use freely\nno more checks needed"]`;
+
+## Boundaries beyond `JSON.parse`
+
+`JSON.parse` gets all the attention, but it's one of many places typed code touches something the compiler didn't check. Four more that come up in nearly every real codebase — each one typed *honestly*, but easy to skip past:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+const port = process.env.PORT;
+const check1: Equal<typeof port, string | undefined> = true; // env vars might not be set
+
+const saved = localStorage.getItem("theme");
+const check2: Equal<typeof saved, string | null> = true; // missing key -> null, not undefined
+
+const params = new URLSearchParams("?page=2");
+const page = params.get("page");
+const check3: Equal<typeof page, string | null> = true; // missing param -> null too
+
+// A minimal shape mirroring @types/express's Request<...> generic (ReqBody defaults to `any`)
+// named ExpressRequest -- plain "Request" would merge with the DOM lib's global Request interface
+interface ExpressRequest<ReqBody = any> { body: ReqBody }
+declare const req: ExpressRequest;
+req.body.user.name.toUpperCase(); // compiles -- Express's req.body is `any` by default, same disease as JSON.parse
+```
+
+`process.env.X` is `string | undefined` — Node has no way to know which environment variables actually exist at runtime. `localStorage.getItem` and `URLSearchParams.get` both return `T | null` (not `undefined`) for a missing key — a real, easy-to-miss difference if you write `=== undefined` instead of `== null`. And `req.body` in the widely-used `@types/express` typings defaults its `ReqBody` type parameter to `any`, so it inherits every problem `JSON.parse` has unless a route handler narrows or validates it explicitly.
+
+The classic bug this produces: reading `process.env.PORT` and using it as a number without checking that it parsed:
+
+```ts
+const port = Number(process.env.PORT); // process.env.PORT is string | undefined
+console.log(`listening on port ${port}`); // compiles clean -- port might be NaN
+```
+
+<TSPlayground code={envNanCode} id="practical-boundaries-env-nan" title="A type-checked env var read that quietly becomes NaN" />
+
+export const envNanCode = `const port = Number(process.env.PORT); // process.env.PORT is string | undefined
+console.log(\`listening on port \${port}\`); // compiles clean -- port might be NaN`;
+
+Run it with `PORT` unset and it prints `listening on port NaN` — zero compile errors, one very real production bug. The fix is the same validate-at-the-edge shape as every other boundary in this lesson: a small hand-written guard that turns "maybe a string" into "definitely a valid port, or a thrown error":
+
+```ts
+function requirePort(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`invalid PORT: ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
+const port = requirePort(process.env.PORT, 3000);
+console.log(`listening on port ${port}`); // port is a validated number, never NaN
+```
+
+For a real request body, the same shape scales up to a schema. The zod sketch from the section above is the general answer — a single schema is both the `requirePort`-style guard *and* the static type, for a shape far more complex than one number.
+
+### Reviewing a boundary in an AI-generated PR
+
+Since a boundary bug is invisible to `tsc` — the types can be perfectly honest (`string | undefined`, `any`) while the *code* still forgets to check — reviewing generated code for boundary safety is a grep exercise, not a compiler one. Four searches catch most of it:
+
+```bash
+# 1. Every place raw external data enters
+grep -rn "JSON.parse\|\.json()" src/
+
+# 2. Every place a cast overrides the checker
+grep -rn " as \| as any\b" src/
+
+# 3. Every non-null assertion — is it actually provable?
+grep -rn "!;\|!\." src/
+
+# 4. Every any — did it leak from somewhere upstream?
+grep -rn ": any\b" src/
+```
+
+Each hit has to *prove* something before you approve it: a `JSON.parse`/`.json()` call must be immediately followed by a guard or schema, not used raw; an ` as ` cast must be justified by something the compiler genuinely can't infer (not just "the error was annoying"); a `!` must be provably non-null at that exact line, not merely "usually" non-null; and an `any` must be a deliberate, temporary boundary marker, not a value quietly flowing three functions deep. Generated code is often *typed* correctly and still fails every one of these — remember that a green `tsc` only proves internal consistency with the types written, not that any of these hits were handled safely.
+
+## `unknown` in `catch`: the instanceof/String recipe
+
+Since `useUnknownInCatchVariables` is on by default under `strict`, reaching into a caught value without narrowing it first is a compile error, not just a style nit:
+
+```ts
+// @expect-error TS18046
+async function loadConfig() {
+  try {
+    JSON.parse("{ invalid");
+  } catch (e) {
+    console.error("config load failed: " + e.message); // e is unknown, not Error
+  }
+}
+```
+
+JavaScript lets you `throw` anything — a string, a plain object, `undefined` — so the compiler is right not to assume `e` has a `.message`. The standard recipe handles both the common case (a real `Error`) and the fallback (anything else), and is worth memorizing exactly as written:
+
+```ts
+async function loadConfig() {
+  try {
+    JSON.parse("{ invalid");
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.error("config load failed: " + message);
+  }
+}
+
+loadConfig();
+```
+
+Running it prints a real, useful `SyntaxError` message — `config load failed: Expected property name or '}' in JSON at position 2 (line 1 column 3)` — for the common case, and `String(e)` still produces *something* readable for the rare case where whatever was thrown isn't an `Error` at all.
 
 ## Two more edges: JSON files and dates
 
@@ -109,6 +220,75 @@ instant.epochMilliseconds; // type-checks
 The type declarations exist, but on this course's Node 24.13 the runtime doesn't: `globalThis.Temporal` is `undefined` (confirmed with `node -e "console.log(typeof globalThis.Temporal)"` → `undefined`). Types shipping ahead of the runtime isn't hypothetical here — never treat "it compiles" as proof an API exists until you check.
 </Callout>
 
+## Immutability at the boundary
+
+Data you got from a boundary — a parsed response, a config object — is a natural place to want a guarantee: "nothing downstream can mutate this." TypeScript gives you several tools here, and every one of them is **shallower** than it looks at first glance.
+
+`readonly` on a property only protects that one binding, not whatever it points to:
+
+```ts
+interface Config {
+  readonly name: string;
+  limits: { max: number };
+}
+
+function tweak(cfg: Config) {
+  cfg.limits.max = 999; // ✅ compiles -- readonly only protects the "limits" binding itself, not what it points to
+}
+```
+
+`Readonly<T>` has exactly the same shallowness, because it's defined as `{ readonly [K in keyof T]: T[K] }` — one level of mapping, no recursion into nested objects:
+
+```ts
+interface Config { limits: { max: number } }
+function tweak(cfg: Readonly<Config>) {
+  cfg.limits.max = 999; // ✅ compiles -- Readonly<T> only makes top-level props readonly
+}
+```
+
+`Object.freeze` is shallow at **both** levels — the runtime freeze only locks the object's own top-level properties, and its return type (`Readonly<T>`) matches that exactly:
+
+```ts
+const cfg = Object.freeze({ name: "prod", limits: { max: 10 } });
+cfg.limits.max = 999; // type system allows it -- freeze's return type is only shallowly Readonly<T>
+console.log(cfg.limits.max); // 999 -- the runtime freeze didn't stop this either
+```
+
+`as const` is the one that actually reaches every nesting level, because it's a literal-inference instruction, not a mapped type — the compiler marks every property `readonly` as it infers the literal type, recursively:
+
+```ts
+// @expect-error TS2540
+const cfg = { name: "prod", limits: { max: 10 } } as const;
+cfg.limits.max = 999; // ❌ as const's readonly does reach nested objects, unlike Readonly<T> or Object.freeze's type
+```
+
+And a plain mutable array is never assignable *from* a `readonly` one — this is the one place immutability is enforced structurally, both ways:
+
+```ts
+// @expect-error TS4104
+function sortInPlace(arr: number[]): number[] {
+  return arr.sort();
+}
+
+const frozen: readonly number[] = [3, 1, 2];
+sortInPlace(frozen); // ❌ readonly number[] is not assignable to the mutable type number[]
+```
+
+For real deep immutability, you write (or import) a recursive mapped type — a preview of the type-level-programming module:
+
+```ts
+// @expect-error TS2540
+type DeepReadonly<T> = T extends object
+  ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+  : T;
+
+interface Config { name: string; limits: { max: number } }
+
+function tweak(cfg: DeepReadonly<Config>) {
+  cfg.limits.max = 999; // ❌ DeepReadonly reaches every nesting level, unlike Readonly<T>
+}
+```
+
 ## Branded types for nominal IDs
 
 Structural typing means a `UserId` and an `OrderId` that are both `string` are interchangeable — so you can pass one where the other is expected. When that matters, **brand** them with a phantom marker:
@@ -126,8 +306,50 @@ getUser(raw as UserId); // ✅ you deliberately asserted it at the boundary
 
 The brand exists only at compile time (it's erased), costs nothing at runtime, and forces every `UserId` to be *created deliberately* — usually right after validation. It's how you get nominal safety in a structural system.
 
+## Mental Model
+
+Every technique in this lesson is answering one question with varying honesty: **"how sure is the compiler that this value is what it claims?"** `unknown` is the compiler admitting total uncertainty and refusing to let you proceed without proof. `process.env`/`localStorage`/`URLSearchParams` are the compiler being honestly, precisely uncertain (`| undefined`, `| null`) rather than optimistic. `any` — on `JSON.parse`, on `req.body` — is the compiler being *told* to stop being uncertain, which is not the same as the uncertainty going away. And `readonly`/`Readonly<T>`/`Object.freeze` are a mirror image of the same idea: each one is honest about exactly how much of the shape it actually protects (one binding, one level, one level at runtime), and only `as const` or a hand-written `DeepReadonly` earn the stronger claim, because they're the only ones that actually walk every level.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Hand-written type guard (`x is T`) | No dependency, full control over the check | Tedious for real shapes, drifts from the type as the shape evolves, easy to write a guard that's weaker than it claims |
+| Schema library (zod-style) | One declaration is both validator and type — cannot drift | An added dependency; runtime cost of validation on every parse |
+| `readonly` / `Readonly<T>` | Zero runtime cost, catches top-level reassignment at compile time | Shallow — nested objects/arrays remain fully mutable |
+| `Object.freeze` | Real runtime enforcement, not just a compile-time promise | Shallow at runtime too, and throws only in strict-mode JS (silently no-ops otherwise) |
+| `as const` / hand-written `DeepReadonly` | Actually reaches every nesting level | `as const` only works on a literal you're writing right now, not an existing typed value; `DeepReadonly` needs type-level programming to write well |
+
+## Common Misconceptions
+
+- **A `readonly` property or `Readonly<T>` makes the whole object immutable.** Both are shallow — they protect the property binding one level down, not anything nested inside it.
+- **`Object.freeze` fixes what `Readonly<T>`'s type doesn't.** It doesn't go any deeper at runtime than `Readonly<T>` goes at compile time — freezing an object still lets you mutate its nested objects freely.
+- **`req.body`, `process.env`, and `localStorage.getItem` are "probably fine" because TypeScript would have flagged a real problem.** Their types are honest (`any`, `string | undefined`, `string | null`) — the compiler already told you exactly how much it doesn't know; the bug is in code that doesn't act on that honesty.
+- **A green `tsc` on generated code means the boundary was handled.** Boundary bugs are runtime-only by nature (a missing check, not a type error), so a passing compile proves nothing about whether `JSON.parse`, `req.body`, or a caught exception was actually validated.
+
+## Reading AI-generated code
+
+Before trusting generated code that touches a boundary, check for:
+
+- `process.env.X` used directly in arithmetic or passed to a function expecting a non-`undefined` value, with no check or default.
+- `localStorage.getItem(...)` or `params.get(...)` compared with `=== undefined` instead of `== null` (or a real `!== null` check) — both APIs return `null` for a missing value, not `undefined`.
+- A caught exception's `.message` (or any property) accessed without `instanceof Error` first, or `@ts-ignore`/`as any` used to silence the resulting `TS18046` instead of adding the real check.
+- Any of the four grep patterns above (`JSON.parse`/`.json()`, ` as `, `!`, `: any`) with no accompanying validation, guard, or clear justification in the same diff.
+- A "deep clone" or "deep freeze" helper that claims full immutability but is actually only one level deep — verify against a nested property, not just the top-level one.
+
+<SpotTheBug code={`async function loadUserSettings() {
+  try {
+    return JSON.parse(localStorage.getItem("settings"));
+  } catch (e) {
+    console.error("failed to load settings: " + e.message);
+    return {};
+  }
+}`}>
+Two boundary bugs stacked in four lines. First, `localStorage.getItem("settings")` returns `string | null`, and `JSON.parse` requires a `string` — if the key was never set, this throws `TypeError: Cannot read properties of null` (or, worse, if it were `any`-typed loosely enough to skip the check, `JSON.parse(null)` actually parses the *string* `"null"` into the value `null`, silently). Second, inside the `catch`, `e` is `unknown` under `useUnknownInCatchVariables`, so `e.message` doesn't even compile without a cast — and if this snippet is inside a file with looser settings (or the cast was added to make it compile), a non-`Error` throw (which `JSON.parse` itself doesn't produce, but a lot of other code paths do) would print `undefined` instead of a useful message. The fix is `localStorage.getItem("settings") ?? "{}"` before parsing, and `e instanceof Error ? e.message : String(e)` in the `catch`.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Every bug enters where typed code meets untyped data. Reach for `unknown`, never `any`, at those edges, and convert it to a trusted type with a type guard or (better) a schema library like zod, where one declaration is both the validator and the type. For IDs that must not mix, use **branded types**. The rule is always: validate at the edge, trust inside.
+Every bug enters where typed code meets untyped data — and that includes `process.env`, `localStorage`, `req.body`, and a caught exception, not just `JSON.parse`. Reach for `unknown`, never `any`, at those edges, and convert it to a trusted type with a type guard, `instanceof Error`, or (better, for real shapes) a schema library like zod, where one declaration is both the validator and the type. Immutability tools are boundaries too: `readonly`/`Readonly<T>`/`Object.freeze` are all shallow, so only `as const` or a hand-written `DeepReadonly` actually protect nested data. For IDs that must not mix, use **branded types**. The rule is always: validate at the edge, trust inside.
 </Callout>
 
 export const quizBoundaries = [
@@ -140,6 +362,7 @@ export const quizBoundaries = [
       'any cannot hold objects',
     ],
     answer: 1,
+    explain: 'unknown is the honest top type -- it accepts any value but blocks every operation until you narrow it, while any simply turns checking off for everything it touches.',
   },
   {
     q: 'What is the advantage of a schema library like zod at a boundary?',
@@ -150,6 +373,7 @@ export const quizBoundaries = [
       'It disables strict mode',
     ],
     answer: 1,
+    explain: 'A hand-written type guard can drift from the type it claims to check; a schema derives both the runtime check and the static type from one declaration, so they cannot disagree.',
   },
   {
     q: 'What problem do branded types solve?',
@@ -160,6 +384,7 @@ export const quizBoundaries = [
       'They replace interfaces',
     ],
     answer: 1,
+    explain: 'Structural typing would otherwise let any string (including an OrderId) flow into a UserId parameter; a phantom brand property makes only deliberately-created UserId values assignable.',
   },
   {
     q: 'A type guard function has the return type `v is User`. What does that do?',
@@ -170,6 +395,29 @@ export const quizBoundaries = [
       'Converts v to a User at runtime',
     ],
     answer: 1,
+    explain: 'A type predicate is a compile-time signal to the narrower, not a runtime conversion -- it tells TypeScript how to narrow the checked value when the function returns true.',
+  },
+  {
+    q: '```ts\nconst port = Number(process.env.PORT);\nconsole.log(`listening on port ${port}`);\n```\nWith `PORT` unset, does this compile, and what does it print?',
+    options: [
+      'Compile error — process.env.PORT is not a number',
+      'Compiles with zero errors and prints "listening on port NaN"',
+      'Compiles and prints "listening on port undefined"',
+      'Throws a runtime TypeError',
+    ],
+    answer: 1,
+    explain: 'process.env.PORT is string | undefined, and Number(undefined) is NaN — a value the type number happily includes. Nothing here is a type error; the bug is entirely in the missing validation.',
+  },
+  {
+    q: '```ts\ninterface Config { readonly name: string; limits: { max: number } }\nfunction tweak(cfg: Config) {\n  cfg.limits.max = 999;\n}\n```\nDoes this compile?',
+    options: [
+      'No — readonly should protect the whole object',
+      'Yes — readonly only protects the "limits" binding itself, not the object it points to',
+      'No — limits cannot be reassigned',
+      'Yes, but only under noImplicitAny',
+    ],
+    answer: 1,
+    explain: 'readonly (and Readonly<T>) is shallow: it stops cfg.limits = someOtherObject, but does nothing to prevent mutating properties inside the object that limits already points to.',
   },
 ];
 

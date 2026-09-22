@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Where knowledge becomes judgment
 
@@ -39,6 +41,184 @@ Everything here is a variation on **validate at the edge, trust inside**. Push t
 Stop treating a green compiler as proof of correctness. It proves your code is *internally consistent* with the types you wrote — nothing more. If those types don't match runtime reality (unvalidated input, a wrong `as`, a stray `any`), the compiler is confidently wrong. The practitioner's job is to make the types *earn* their trust at the edges.
 </Callout>
 
+## `Object.keys` and `Object.entries` know less than you think
+
+Before the module gets into boundaries, nullability, and migration, it's worth looking at a boundary you cross dozens of times a day without noticing: reading your **own** object back out with `Object.keys` and `Object.entries`. Both are typed more conservatively than most people expect, and the reason is the same structural typing you already know from everywhere else in this course.
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+interface Point { x: number; y: number }
+declare const p: Point;
+
+const keys = Object.keys(p);
+const check1: Equal<typeof keys, string[]> = true; // not ("x" | "y")[]
+
+const entries = Object.entries(p);
+const check2: Equal<typeof entries, [string, any][]> = true; // not [string, number][] !
+```
+
+`Object.keys(p)` is `string[]`, not `("x" | "y")[]` — and it's not a missed opportunity, it's structurally correct. Because TypeScript is structural, a `Point`-typed binding can hold an object with *extra* properties at runtime:
+
+```ts
+interface Point { x: number; y: number }
+const wide = { x: 1, y: 2, z: 3 };
+const p: Point = wide; // ✅ wide has every Point property, plus more — structural subtyping allows this
+for (const key of Object.keys(p)) {
+  // key: string — at runtime p (really wide) can have a "z" key the Point type never mentioned
+}
+```
+
+If `Object.keys` promised `("x" | "y")[]`, that promise would be false the moment you passed in `wide`. `string[]` is the only type that's always true.
+
+`Object.entries` is the sharper surprise: on a plain object type with no index signature, the lib types fall back to `[string, any][]` — not `[string, number][]` even when every property really is a `number`. That `any` is silent and it propagates, which is exactly the kind of "compiles clean, lies at runtime" gap this course keeps returning to.
+
+<TSPlayground code={entriesAnyCode} id="practical-index-entries-any" title="Object.entries degrades to any on a plain interface" />
+
+export const entriesAnyCode = `interface Prices { apple: number; banana: number; currency: string }
+
+function totalPrice(prices: Prices): number {
+  let total = 0;
+  for (const [item, price] of Object.entries(prices)) {
+    total += price; // price is \`any\` — Object.entries degrades value types on a plain interface
+  }
+  return total;
+}
+
+console.log(totalPrice({ apple: 3, banana: 2, currency: "USD" }));`;
+
+Two patterns recover the precision `Object.keys` can't give you:
+
+- **`keyof typeof` on a `const` object** — when *you* own the object and know it has no hidden extra keys, `as const` plus `keyof typeof` gets you the literal union back.
+- **A generic helper with an explicit cast** — `Object.keys(obj) as (keyof T)[]` when you can locally justify (usually because you constructed `obj` yourself) that no extra keys exist.
+
+```ts
+const Direction = { Up: "UP", Down: "DOWN", Left: "LEFT", Right: "RIGHT" } as const;
+type Direction = (typeof Direction)[keyof typeof Direction];
+declare const d: Direction; // "UP" | "DOWN" | "LEFT" | "RIGHT"
+
+function keysOf<T extends object>(obj: T): (keyof T)[] {
+  return Object.keys(obj) as (keyof T)[]; // you are asserting: obj has no extra own keys
+}
+
+const dirKeys = keysOf(Direction); // ("Up" | "Down" | "Left" | "Right")[]
+```
+
+Both patterns are you personally vouching for a guarantee the compiler can't derive on its own — which is the whole theme of this module in miniature.
+
+## `Record<string, T>` vs `Map<K, V>` for dynamic keys
+
+When the set of keys isn't known until runtime — a cache, a tally, a lookup table built from user input — you reach for either `Record<string, T>` (a plain object) or `Map<K, V>`. They look interchangeable; they are not.
+
+`Record<string, T>` is a plain JavaScript object, which means **every** string is a valid key to the type system — including `"__proto__"`, `"constructor"`, and `"toString"`, names that collide with the object's own prototype chain. The type system has no concept of "dangerous key," so code that looks completely ordinary can be a real prototype-pollution vulnerability if the keys ever come from untrusted input:
+
+```ts
+function merge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  for (const key in source) {
+    const value = source[key];
+    if (typeof value === "object" && value !== null) {
+      const existing = target[key];
+      if (typeof existing !== "object" || existing === null) target[key] = {};
+      merge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted); // every plain object now has this
+```
+
+<TSPlayground code={protoPollutionCode} id="practical-index-proto-pollution" title="A type-checked recursive merge with real prototype pollution" />
+
+export const protoPollutionCode = `function merge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  for (const key in source) {
+    const value = source[key];
+    if (typeof value === "object" && value !== null) {
+      const existing = target[key];
+      if (typeof existing !== "object" || existing === null) target[key] = {};
+      merge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      target[key] = value;
+    }
+  }
+  return target;
+}
+
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted); // every plain object now has this`;
+
+This is `--strict` clean — zero diagnostics — and it really does leak `"yes"` onto every `{}` literal for the rest of the process, because the recursive merge walks into `target["__proto__"]`, which JavaScript resolves through the prototype-accessor to the real, shared `Object.prototype`. `Map<K, V>` doesn't have this bug class at all: a `Map`'s keys are stored in an internal slot, never as an object property, so `map.set("__proto__", x)` is just an ordinary entry with no special meaning.
+
+The other gap is `noUncheckedIndexedAccess`. By default, reading a `Record` index gives you the value type straight, with no `undefined` — even for a key you never set:
+
+```ts
+const counts: Record<string, number> = { apples: 3 };
+function double(n: number): number { return n * 2; }
+const result = double(counts["bananas"]); // "bananas" was never set — compiles anyway
+```
+
+That compiles clean under this course's default flags and returns `NaN` at runtime (verified: `node --experimental-strip-types` on this file prints `NaN`). Turning on `noUncheckedIndexedAccess` closes exactly this gap — the same read becomes `number | undefined`, so passing it to `double` is a compile error:
+
+```ts
+// @skip-verify requires --noUncheckedIndexedAccess, not part of this course's default flags
+const counts: Record<string, number> = { apples: 3 };
+function double(n: number): number { return n * 2; }
+const result = double(counts["bananas"]); // "bananas" was never set
+```
+
+Verified separately: `node_modules/typescript/bin/tsc --ignoreConfig --strict --noUncheckedIndexedAccess --target es2025 --lib es2025 counts.ts` reports `TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.` on that exact line — the same code, the same `--strict`, one extra flag, and a real bug turns into a compile error instead of `NaN`. A `Map<string, number>` gets you the same honesty for free: `.get()` is always typed `V | undefined`, flag or no flag, because a `Map` never pretends every key exists.
+
+## Mental Model
+
+Every tool in this section is answering the same question: **how much does the compiler actually know about the keys on this value?** `Object.keys`/`Object.entries` know only that the value is *at least* the declared type, so they hand back the widest honest answer (`string[]`, `[string, any][]`). `Record<string, T>` knows nothing about which strings are safe, so it accepts `"__proto__"` exactly as happily as `"apples"`. `noUncheckedIndexedAccess` is the compiler admitting it can't prove a key was ever set, and refusing to pretend otherwise. None of this is the compiler being unhelpful — it's the compiler being exactly as certain as the type you gave it actually justifies, which is the module's whole thesis one level down from where the other lessons apply it.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| `Record<string, T>` | Plain object: JSON-serializable, destructures and spreads naturally, works with every API that expects an object | Any string type-checks as a key, including `"__proto__"`/`"constructor"`; `Object.keys`/`Object.entries` lose key/value precision |
+| `Map<K, V>` | Any key type (not just strings), real insertion-order iteration, `.get()` is honestly `V \| undefined`, immune to prototype-chain collisions | Not JSON-serializable without a manual step, no object-literal syntax, many APIs still expect a plain object |
+| A named `interface`/`type` with known keys | Full per-key precision, `keyof T` works, excess-property checks catch typos on literals | Only works when the key set is fixed at compile time — no dynamic/user-supplied keys |
+
+## Common Misconceptions
+
+- **`Object.keys(obj)` should be typed `(keyof T)[]` and TypeScript is just being sloppy.** It isn't sloppy — `string[]` is the only type that stays true when `obj`'s runtime value has extra properties a structurally-compatible type doesn't mention, which is always possible.
+- **`Object.entries` on a typed object gives you typed values.** Only when the object has an index signature. A plain `interface`/`type` with fixed properties degrades the value type to `any`, silently.
+- **`Record<string, T>` and `Map<string, T>` are interchangeable for a string-keyed lookup.** They differ exactly where it matters most: untrusted keys. `Record` inherits every hazard of being a real JavaScript object (the prototype chain); `Map` does not.
+- **Turning on `noUncheckedIndexedAccess` is mostly noise for `Record`s you already control.** It only ever fires where a key genuinely might not exist — which, for anything built from user input, config, or partial data, is most `Record` reads in practice.
+
+## Reading AI-generated code
+
+Before trusting generated code that reaches for a plain object as a lookup table, check for:
+
+- `Object.keys(obj)` or `Object.entries(obj)` results used as if the value type were precise — verify whether `obj`'s type actually has an index signature, or is a plain `interface` where the values quietly became `any`.
+- A `Record<string, T>` (or a plain object) built from **user-controlled keys** — request bodies, query params, uploaded config — with no check against `__proto__`, `constructor`, or `prototype`, especially inside a hand-rolled recursive merge/clone/defaults helper.
+- Any place a `Map` would remove a whole bug class for free (dynamic, possibly-untrusted keys) but a plain object was used instead, purely out of habit.
+- A `Record` read with no `noUncheckedIndexedAccess` and no fallback (`?? default`) for a key that isn't provably present.
+
+<SpotTheBug code={`interface Prices { apple: number; banana: number; currency: string }
+
+function totalPrice(prices: Prices): number {
+  let total = 0;
+  for (const [item, price] of Object.entries(prices)) {
+    total += price;
+  }
+  return total;
+}
+
+console.log(totalPrice({ apple: 3, banana: 2, currency: "USD" }));`}>
+This compiles with **zero errors** under `--strict` and returns `"5USD"` at runtime from a function whose return type is declared `number`. `Object.entries` on `Prices` (a plain interface, no index signature) types `price` as `any`, so `total += price` type-checks no matter what `price` actually is. At runtime, `total` starts as `0`, adds `3` and `2` (both numbers, fine), then adds the string `"USD"` — JavaScript's `+` on a number and a string concatenates, producing the string `"5USD"`, which the function then returns despite its `number` return type. The fix is to iterate only the numeric keys explicitly (`(["apple", "banana"] as const).reduce((sum, k) => sum + prices[k], 0)`) or keep prices and metadata in separate objects so `Object.entries` is never applied to a mixed-type shape.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`Object.keys` and `Object.entries` are typed as conservatively as structural typing requires — `string[]` and (on a plain interface) `[string, any][]` — because the compiler can never rule out extra properties on a structurally-compatible value. Reach for `keyof typeof` on a `const` object when you own the shape completely, and prefer `Map<K, V>` over `Record<string, T>` whenever keys are dynamic or untrusted: a `Record` inherits every JavaScript-object hazard, including prototype pollution, that a `Map` simply doesn't have.
+</Callout>
+
 export const quizIndex = [
   {
     q: 'What is the central truth of this module?',
@@ -49,6 +229,7 @@ export const quizIndex = [
       'Validation is unnecessary with strict mode',
     ],
     answer: 1,
+    explain: 'Every lesson in this module is a variation on this: an any, a bad cast, or unvalidated external data can make the type model diverge from what actually happens at runtime, and the compiler has no way to detect that on its own.',
   },
   {
     q: 'What is the recurring strategy for handling the untyped world?',
@@ -59,6 +240,7 @@ export const quizIndex = [
       'Disable strict mode at boundaries',
     ],
     answer: 1,
+    explain: 'Push uncertainty to one boundary, turn it into a real, checked type there (a guard or a schema), and let the rest of the program enjoy the guarantee without re-checking.',
   },
   {
     q: 'A project compiles with zero errors. What does that guarantee?',
@@ -69,6 +251,40 @@ export const quizIndex = [
       'All external data is valid',
     ],
     answer: 1,
+    explain: 'A green compiler proves internal consistency with the types you supplied, not correctness against runtime reality — that gap is exactly what an any, a wrong as, or unvalidated input can hide.',
+  },
+  {
+    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const p: Point;\nconst keys = Object.keys(p);\n```\nWhat is the type of `keys`?',
+    options: [
+      '`("x" | "y")[]`',
+      '`string[]` — a structurally-compatible value could have extra properties `Point` never mentions',
+      '`(keyof Point)[]`',
+      '`any[]`',
+    ],
+    answer: 1,
+    explain: 'Object.keys always returns string[] because structural typing means a Point-typed binding might actually hold an object with extra keys at runtime — ("x" | "y")[] would be a promise the compiler cannot back up.',
+  },
+  {
+    q: '```ts\nfunction merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }\nconst payload: Record<string, unknown> = JSON.parse(\'{"__proto__":{"polluted":"yes"}}\');\nmerge({}, payload);\nconsole.log(({} as Record<string, unknown>).polluted);\n```\nDoes this compile under `--strict`, and what does it print?',
+    options: [
+      'Compile error — `__proto__` is not a valid Record key',
+      'Compiles with zero errors and prints `"yes"` — the recursive merge pollutes the shared Object.prototype',
+      'Compiles but prints `undefined` — Record blocks dangerous keys at runtime',
+      'Compiles but throws a runtime TypeError',
+    ],
+    answer: 1,
+    explain: 'Record<string, T> has no concept of a dangerous key, so this type-checks cleanly. At runtime, walking into target["__proto__"] resolves through the prototype accessor to the real, shared Object.prototype, so every plain object literal afterward has .polluted === "yes".',
+  },
+  {
+    q: 'Which of these is true about `Record<string, T>` vs `Map<K, V>` for dynamic, possibly-untrusted keys?',
+    options: [
+      'They are fully interchangeable',
+      'Map avoids the prototype-pollution class of bug entirely, since its keys live in an internal slot, not as object properties',
+      'Record is always safer because it is a native language feature',
+      'Map cannot use string keys',
+    ],
+    answer: 1,
+    explain: 'A Map stores entries in an internal data structure with no interaction with the prototype chain, so a key like "__proto__" is just an ordinary entry — the whole bug class Record inherits from being a real JS object does not apply.',
   },
 ];
 
