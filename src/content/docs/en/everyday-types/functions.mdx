@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Typing a function
 
@@ -55,7 +57,111 @@ function len(x: string | unknown[]): number {
 }
 ```
 
-Reach for real overloads only when the return type genuinely depends on which input shape you got in a way a union can't express.
+Reach for real overloads only when the return type genuinely depends on which input shape you got in a way a union can't express — which is exactly the case a union parameter can't reproduce:
+
+```ts
+function makeElement(tag: "a"): HTMLAnchorElement;
+function makeElement(tag: "img"): HTMLImageElement;
+function makeElement(tag: string): HTMLElement {
+  return document.createElement(tag);
+}
+
+const link = makeElement("a");
+link.href = "https://example.com"; // ✅ only exists on HTMLAnchorElement -- overloads know it's that specific type
+```
+
+```ts
+// @expect-error TS2339
+function makeElementUnion(tag: "a" | "img"): HTMLAnchorElement | HTMLImageElement {
+  return document.createElement(tag);
+}
+const linkU = makeElementUnion("a");
+linkU.href = "https://example.com"; // ❌ still a union -- the compiler can't tell which member you got
+// Property 'href' does not exist on type 'HTMLAnchorElement | HTMLImageElement'.
+```
+
+The union version loses the *link* between which literal you passed and which member you got back — the return type is always the full union, even though you know at the call site it must be `HTMLAnchorElement`. Overloads exist for exactly this: correlating one specific input with one specific output, which no single union signature can express.
+
+## Parameter bivariance and `strictFunctionTypes`
+
+Function parameters are normally **contravariant**: a function that accepts a *wider* type is safely assignable where a function accepting a *narrower* type is expected (it can handle everything the narrower one could, and more). Assigning the other way around — a narrower-accepting function where a wider one is expected — should be unsound, since the caller might pass something the narrower function can't handle.
+
+`strictFunctionTypes` (part of `strict`) enforces exactly that contravariance rule — but **only for functions written as a property of type `(...) => ...`**. Functions written with **method shorthand syntax** get an intentional carve-out called **bivariance**, kept for backward compatibility with patterns like array methods and old-style generic overriding:
+
+```ts
+interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterMethod {
+  handle(a: Animal): void; // method shorthand syntax
+}
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function syntax
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); }, // narrower param -- unsound if a plain Animal shows up
+};
+```
+
+```ts
+// @expect-error TS2322
+interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function syntax
+}
+
+const byProp: ShelterProp = {
+  handle: (a: Dog) => { console.log(a.breed); }, // same narrowing, property syntax
+};
+// ❌ Types of parameters 'a' and 'a' are incompatible.
+//    Property 'breed' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+Both assignments narrow the parameter from `Animal` to `Dog` — equally unsound, since `ShelterMethod`/`ShelterProp` promise their `handle` accepts *any* `Animal`, and a plain `Animal` has no `breed`. `byMethod` compiles clean under `--strict` because it's written with method shorthand; `byProp` fails with `TS2322` because it's written as a property holding a function value. Disabling `strictFunctionTypes` (`--strictFunctionTypes false`) makes `byProp` compile too — the flag doesn't add a new check, it just stops the carve-out from applying.
+
+<TSPlayground code={bivarianceCode} id="functions-bivariance" title="Method shorthand vs property function under strictFunctionTypes" />
+
+export const bivarianceCode = `interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterMethod {
+  handle(a: Animal): void; // method shorthand -- bivariant, narrowing the param compiles
+}
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function -- checked contravariantly under strict
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); }, // compiles even though it's unsound
+};
+
+// const byProp: ShelterProp = {
+//   handle: (a: Dog) => { console.log(a.breed); }, // would be TS2322 under strict
+// };`;
+
+Prefer method shorthand only when you actually want covariant-style overriding (common in class hierarchies with generic methods); for a plain callback property, the property-function form's stricter check is usually what you want, since it catches a genuine unsoundness the shorthand form silently allows.
+
+## `this: void`: promising a callback ignores `this`
+
+A callback parameter typed `this: void` is a promise that the function never reads `this` — which matters because a method that *does* depend on `this` isn't safely assignable to that slot:
+
+```ts
+// @expect-error TS2322
+interface Button { onClick: (this: void, event: string) => void }
+class Widget {
+  label = "save";
+  handleClick(this: Widget, event: string) { console.log(this.label, event); }
+}
+const w = new Widget();
+const btn: Button = { onClick: w.handleClick };
+// ❌ The 'this' types of each signature are incompatible.
+//    Type 'void' is not assignable to type 'Widget'.
+```
+
+`handleClick` needs a real `Widget` bound as `this` to work, but `onClick` promises callers can invoke it with `this` as anything (including nothing, as a bare function reference) — which is exactly what happens when a framework calls `btn.onClick(event)` as a detached callback. The fix is either an arrow function (which captures `this` lexically and needs none supplied) or writing the handler itself with `this: void` and reading captured state instead of `this`.
 
 ## Typing `this`
 
@@ -136,8 +242,59 @@ async function run() {
 
 And a reminder from the narrowing lesson: since 5.5 a boolean-returning function whose result is tied to its parameter gets an **inferred type predicate**, so many small guards no longer need `x is T` written out.
 
+## Mental Model
+
+<Mermaid title="Every function-typing rule is a promise the compiler checks at the boundary" code={fnMentalDiagram} />
+
+export const fnMentalDiagram = `flowchart TD
+  sig["A function's type is its promise:\nwhat it needs in, what it needs from this, what comes out"] --> params["Parameter promise\n(checked contravariantly -- but bivariantly for method shorthand)"]
+  sig --> thisP["this promise\n(this: void means 'never reads this')"]
+  sig --> ret["Return promise\n(void means 'caller may ignore it')"]
+  params --> when["Union parameter: one promise for every input\nOverload: a different promise per input shape"]`;
+
+Every feature in this lesson is the compiler checking one side of a promise at a function's boundary. A parameter type promises what the function can be called with; `strictFunctionTypes` is how strictly that promise is checked (except for the bivariant method-shorthand carve-out). A `this` type promises what the function reads from its receiver — `this: void` promises it reads nothing. A return type promises what the caller gets back — `void` uniquely promises the caller doesn't care. Overloads exist because a single promise sometimes can't capture the relationship between what came in and what comes out; that's when you write several promises instead of one.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Union parameter | One signature, simple to read and implement | Cannot express "this input shape implies that specific output shape" |
+| Overloads | Correlates a specific input with a specific output | More declarations to maintain; easy to overuse for cases a union would handle |
+| Method shorthand (`handle(a: T)`) | Matches JS method syntax; allows covariant-style overriding in class hierarchies | Bivariant — silently allows an unsound narrower-parameter override |
+| Property function (`handle: (a: T) => void`) | Checked contravariantly under `strictFunctionTypes` — catches real unsoundness | Slightly more ceremony; can't be overridden the way a class method can |
+| `this: void` | Documents and enforces that a callback never depends on binding | Requires rewriting any handler that genuinely needs `this` |
+
+## Common Misconceptions
+
+- **A method written with shorthand syntax (`handle(a: T)`) and a property holding an arrow function (`handle: (a: T) => void`) are checked identically.** They aren't — method shorthand gets the bivariant carve-out, so it accepts unsound parameter narrowing that the property form correctly rejects under `strictFunctionTypes`.
+- **`strictFunctionTypes` adds a new kind of error.** It doesn't add a check — it removes an intentional exemption (bivariance) for the property-function form specifically, restoring the normal contravariant check.
+- **Storing a class method as a bare callback (`const fn = obj.method`) is caught by the type checker if the method needs `this`.** It generally isn't, unless the target signature explicitly declares an incompatible `this` type — assigning to a plain `() => void` slot (which has an implicit, unconstrained `this`) compiles even when the method depends on a real receiver.
+- **Overloads are just "old-style" generics and should always be replaced.** A union parameter is simpler when the signatures only differ in input type, but overloads are still the correct tool whenever a specific input shape must promise a specific, different output shape.
+
+## Reading AI-generated code
+
+Before trusting a generated function signature, check for:
+
+- A method-shorthand interface member (`handle(a: Base): void`) implemented with a narrower parameter type (`handle(a: Derived) { ... }`) — this compiles silently due to bivariance, even though it's unsound; the same narrowing on a property-typed function would correctly fail.
+- A class method assigned to a plain callback type or array of callbacks (`onClick: fn` or `handlers.push(obj.method)`) without being bound (`.bind(obj)`) or wrapped in an arrow (`() => obj.method()`) — if the method reads `this`, this compiles and crashes at the first call.
+- Two or more overloads that could be replaced by one union parameter with no loss of precision — a sign of copy-pasted boilerplate rather than a genuine input-to-output correlation.
+- A callback parameter that should be `this: void` (a truly detached handler) left untyped — nothing stops a `this`-dependent function from being passed there instead.
+
+<SpotTheBug code={`class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+
+const c = new Counter();
+const handlers: Array<() => void> = [];
+handlers.push(c.increment);
+
+for (const h of handlers) h();`}>
+This compiles with **zero errors**. `increment` declares `this: Counter`, but `Array<() => void>` expects functions with `() => void`'s implicit, unconstrained `this` — TypeScript only checks `this`-compatibility when the *target* signature itself declares a `this` type, and here it doesn't. `c.increment` slips into the array as a plain unbound function reference. At runtime, calling `h()` invokes `increment` with `this` being `undefined` (strict-mode class bodies don't default `this` to the global object), so `this.count++` throws `TypeError: Cannot read properties of undefined (reading 'count')`. The fix is to store a bound reference — `handlers.push(c.increment.bind(c))` or `handlers.push(() => c.increment())` — so the receiver travels with the function.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Type functions with parameter and return types; parameters can be optional, defaulted, or rest. Prefer a **union parameter** over **overloads** unless the return type truly depends on the input shape. A `this` parameter types `this` and vanishes at the call site. And the big gotcha: a `void` return type means "the caller ignores the return," so functions returning a value are still assignable to it — which is why `forEach` callbacks work.
+Type functions with parameter and return types; parameters can be optional, defaulted, or rest. Prefer a **union parameter** over **overloads** unless the return type truly depends on the input shape. Method-shorthand parameters are checked **bivariantly** (unsound narrowing compiles); property-typed functions are checked contravariantly under `strictFunctionTypes` (the same narrowing correctly fails). `this: void` promises a callback never reads `this`. And the big gotcha: a `void` return type means "the caller ignores the return," so functions returning a value are still assignable to it — which is why `forEach` callbacks work.
 </Callout>
 
 export const quizFn = [
@@ -150,6 +307,7 @@ export const quizFn = [
       'When the function has more than two parameters',
     ],
     answer: 1,
+    explain: 'A union parameter can\'t correlate a specific input literal with a specific output type — overloads exist precisely for that relationship.',
   },
   {
     q: 'What does a `this` parameter (`function f(this: T, ...)`) do at the call site?',
@@ -160,6 +318,7 @@ export const quizFn = [
       'It is passed automatically as null',
     ],
     answer: 1,
+    explain: 'A `this` parameter is compile-time-only syntax for typing the receiver; it is erased and never appears as a real argument at runtime.',
   },
   {
     q: 'Is `const cb: () => void = () => 42` allowed?',
@@ -170,6 +329,7 @@ export const quizFn = [
       'Only with a cast',
     ],
     answer: 1,
+    explain: 'A `void`-returning function type means "the caller ignores whatever comes back," not "nothing may be returned" — so a function that returns a value is still assignable to it.',
   },
   {
     q: 'Why does `arr.forEach(x => other.push(x))` type-check even though push returns a number?',
@@ -180,6 +340,29 @@ export const quizFn = [
       'It does not type-check',
     ],
     answer: 1,
+    explain: '`forEach` types its callback as returning `void`; because `void` return types accept any actual return value, a callback that happens to return `push`\'s result compiles fine.',
+  },
+  {
+    q: '```ts\ninterface ShelterMethod {\n  handle(a: Animal): void;\n}\ninterface ShelterProp {\n  handle: (a: Animal) => void;\n}\n\nconst byMethod: ShelterMethod = {\n  handle(a: Dog) { console.log(a.breed); },\n};\nconst byProp: ShelterProp = {\n  handle: (a: Dog) => { console.log(a.breed); },\n};\n```\nUnder `--strict`, which one compiles?',
+    options: [
+      'Both fail — narrowing the parameter is always an error',
+      'Only byMethod compiles — method shorthand is checked bivariantly, byProp is checked contravariantly and fails',
+      'Only byProp compiles',
+      'Both compile — strictFunctionTypes only affects generics',
+    ],
+    answer: 1,
+    explain: 'strictFunctionTypes enforces normal contravariant parameter checking for property-typed functions (`byProp` fails with TS2322), but method-shorthand members keep a bivariant carve-out for backward compatibility, so `byMethod` compiles despite being equally unsound.',
+  },
+  {
+    q: '```ts\nclass Counter {\n  count = 0;\n  increment(this: Counter) { this.count++; }\n}\nconst c = new Counter();\nconst handlers: Array<() => void> = [];\nhandlers.push(c.increment);\nfor (const h of handlers) h();\n```\nDoes this compile, and what happens when it runs?',
+    options: [
+      'Compile error — increment\'s this: Counter is incompatible with () => void',
+      'Compiles fine, but throws at runtime because increment loses its Counter receiver',
+      'Compiles and runs fine — this is inferred from the array',
+      'Compile error — Array<() => void> cannot hold methods',
+    ],
+    answer: 1,
+    explain: '() => void has no declared this type, so TypeScript does not check this-compatibility here, and c.increment is accepted as a bare function reference. At runtime it runs with this as undefined, so this.count++ throws.',
   },
 ];
 

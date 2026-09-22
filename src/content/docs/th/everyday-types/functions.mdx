@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## การ type function
 
@@ -55,7 +57,111 @@ function len(x: string | unknown[]): number {
 }
 ```
 
-หยิบ overload จริง ๆ มาใช้เฉพาะเมื่อ return type ขึ้นกับ input shape ที่รับเข้ามาในแบบที่ union แสดงไม่ได้
+หยิบ overload จริง ๆ มาใช้เฉพาะเมื่อ return type ขึ้นกับ input shape ที่รับเข้ามาในแบบที่ union แสดงไม่ได้ — ซึ่งตรงกับกรณีที่ union parameter สร้างไม่ได้พอดี:
+
+```ts
+function makeElement(tag: "a"): HTMLAnchorElement;
+function makeElement(tag: "img"): HTMLImageElement;
+function makeElement(tag: string): HTMLElement {
+  return document.createElement(tag);
+}
+
+const link = makeElement("a");
+link.href = "https://example.com"; // ✅ only exists on HTMLAnchorElement -- overloads know it's that specific type
+```
+
+```ts
+// @expect-error TS2339
+function makeElementUnion(tag: "a" | "img"): HTMLAnchorElement | HTMLImageElement {
+  return document.createElement(tag);
+}
+const linkU = makeElementUnion("a");
+linkU.href = "https://example.com"; // ❌ still a union -- the compiler can't tell which member you got
+// Property 'href' does not exist on type 'HTMLAnchorElement | HTMLImageElement'.
+```
+
+union version เสียการเชื่อมโยงระหว่าง literal ที่ส่งเข้าไปกับ member ที่ได้กลับมา — return type เป็น union เต็มเสมอ ถึงคุณจะรู้ตรง call site ว่ามันต้องเป็น `HTMLAnchorElement` แน่ ๆ overload มีไว้เพื่อสิ่งนี้พอดี: เชื่อม input เฉพาะเจาะจงหนึ่งตัวเข้ากับ output เฉพาะเจาะจงหนึ่งตัว ซึ่ง union signature เดียวสร้างไม่ได้
+
+## Parameter bivariance กับ `strictFunctionTypes`
+
+parameter ของ function ปกติเป็น **contravariant**: function ที่รับ type *กว้างกว่า* assign แทนที่จุดที่ต้องการ function ที่รับ type *แคบกว่า* ได้อย่างปลอดภัย (มันรับได้ทุกอย่างที่ตัวแคบกว่ารับได้ และมากกว่านั้น) การ assign กลับทางกัน — function ที่รับแคบกว่าไปแทนที่จุดที่ต้องการตัวกว้างกว่า — ควรจะ unsound เพราะ caller อาจส่งอะไรบางอย่างที่ function แคบกว่าจัดการไม่ได้
+
+`strictFunctionTypes` (ส่วนหนึ่งของ `strict`) บังคับกฎ contravariance นั้นเป๊ะ ๆ — แต่**เฉพาะ function ที่เขียนเป็น property ของ type `(...) => ...`** function ที่เขียนด้วย **method shorthand syntax** ได้ข้อยกเว้นที่ตั้งใจไว้เรียกว่า **bivariance** เก็บไว้เพื่อ backward compatibility กับ pattern อย่าง array method และการ override generic แบบเก่า:
+
+```ts
+interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterMethod {
+  handle(a: Animal): void; // method shorthand syntax
+}
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function syntax
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); }, // narrower param -- unsound if a plain Animal shows up
+};
+```
+
+```ts
+// @expect-error TS2322
+interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function syntax
+}
+
+const byProp: ShelterProp = {
+  handle: (a: Dog) => { console.log(a.breed); }, // same narrowing, property syntax
+};
+// ❌ Types of parameters 'a' and 'a' are incompatible.
+//    Property 'breed' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+ทั้งสองการ assign narrow parameter จาก `Animal` เป็น `Dog` เหมือนกัน — unsound เท่ากัน เพราะ `ShelterMethod`/`ShelterProp` สัญญาว่า `handle` ของมันรับ `Animal` *ตัวไหนก็ได้* และ `Animal` ธรรมดาไม่มี `breed` `byMethod` compile ผ่านสะอาดใต้ `--strict` เพราะเขียนด้วย method shorthand; `byProp` fail ด้วย `TS2322` เพราะเขียนเป็น property ที่เก็บ function value ปิด `strictFunctionTypes` (`--strictFunctionTypes false`) ทำให้ `byProp` compile ผ่านด้วย — flag นี้ไม่ได้เพิ่ม check ใหม่ มันแค่หยุดไม่ให้ข้อยกเว้นนั้นทำงาน
+
+<TSPlayground code={bivarianceCode} id="functions-bivariance" title="Method shorthand vs property function under strictFunctionTypes" />
+
+export const bivarianceCode = `interface Animal { name: string }
+interface Dog extends Animal { breed: string }
+
+interface ShelterMethod {
+  handle(a: Animal): void; // method shorthand -- bivariant, narrowing the param compiles
+}
+interface ShelterProp {
+  handle: (a: Animal) => void; // property function -- checked contravariantly under strict
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); }, // compiles even though it's unsound
+};
+
+// const byProp: ShelterProp = {
+//   handle: (a: Dog) => { console.log(a.breed); }, // would be TS2322 under strict
+// };`;
+
+เลือกใช้ method shorthand เฉพาะเมื่อคุณต้องการ covariant-style overriding จริง ๆ (พบบ่อยใน class hierarchy ที่มี generic method); สำหรับ callback property ธรรมดา แบบ property-function ที่เช็คเข้มกว่ามักเป็นสิ่งที่คุณต้องการ เพราะมันจับ unsoundness จริงที่แบบ shorthand ปล่อยผ่านแบบเงียบ ๆ
+
+## `this: void`: สัญญาว่า callback จะไม่แตะ `this`
+
+callback parameter ที่ type เป็น `this: void` คือสัญญาว่า function จะไม่เคยอ่าน `this` เลย — ซึ่งสำคัญเพราะ method ที่*แตะ* `this` จริง ๆ assign เข้าช่องนั้นไม่ปลอดภัย:
+
+```ts
+// @expect-error TS2322
+interface Button { onClick: (this: void, event: string) => void }
+class Widget {
+  label = "save";
+  handleClick(this: Widget, event: string) { console.log(this.label, event); }
+}
+const w = new Widget();
+const btn: Button = { onClick: w.handleClick };
+// ❌ The 'this' types of each signature are incompatible.
+//    Type 'void' is not assignable to type 'Widget'.
+```
+
+`handleClick` ต้องการ `Widget` จริง ๆ ผูกเป็น `this` ถึงจะทำงานได้ แต่ `onClick` สัญญาว่า caller เรียกมันด้วย `this` เป็นอะไรก็ได้ (รวมถึงไม่มีเลย ในฐานะ function reference เปล่า ๆ) ซึ่งตรงกับสิ่งที่เกิดขึ้นพอดีเมื่อ framework เรียก `btn.onClick(event)` แบบ callback ที่หลุดออกมา ทางแก้คือใช้ arrow function (ที่ capture `this` แบบ lexical ไม่ต้องมีใครส่งมาให้) หรือเขียน handler เองด้วย `this: void` แล้วอ่าน state ที่ capture ไว้แทน `this`
 
 ## การ type `this`
 
@@ -136,8 +242,59 @@ async function run() {
 
 และย้ำจากบท narrowing: ตั้งแต่ 5.5 function ที่ return boolean ซึ่งผูกกับ parameter จะได้ **inferred type predicate** guard เล็ก ๆ หลายตัวจึงไม่ต้องเขียน `x is T` อีก
 
+## Mental Model
+
+<Mermaid title="ทุกกฎเรื่อง type function คือสัญญาที่ compiler เช็คตรง boundary" code={fnMentalDiagram} />
+
+export const fnMentalDiagram = `flowchart TD
+  sig["A function's type is its promise:\nwhat it needs in, what it needs from this, what comes out"] --> params["Parameter promise\n(checked contravariantly -- but bivariantly for method shorthand)"]
+  sig --> thisP["this promise\n(this: void means 'never reads this')"]
+  sig --> ret["Return promise\n(void means 'caller may ignore it')"]
+  params --> when["Union parameter: one promise for every input\nOverload: a different promise per input shape"]`;
+
+ทุก feature ในบทนี้คือ compiler เช็คสัญญาด้านหนึ่งตรง boundary ของ function parameter type สัญญาว่า function เรียกด้วยอะไรได้บ้าง; `strictFunctionTypes` คือระดับความเข้มงวดของการเช็คสัญญานั้น (ยกเว้นข้อยกเว้น bivariant ของ method shorthand) `this` type สัญญาว่า function อ่านอะไรจาก receiver — `this: void` สัญญาว่ามันไม่อ่านอะไรเลย return type สัญญาว่า caller ได้อะไรกลับมา — `void` สัญญาแบบพิเศษว่า caller ไม่สนใจ overload มีไว้เพราะบางครั้งสัญญาเดียวจับความสัมพันธ์ระหว่างสิ่งที่เข้ามากับสิ่งที่ออกไปไม่ได้ นั่นคือตอนที่คุณเขียนหลายสัญญาแทนที่จะเป็นสัญญาเดียว
+
+## ข้อแลกเปลี่ยน
+
+| ตัวเลือก | ได้อะไร | เสียอะไร |
+|---|---|---|
+| Union parameter | signature เดียว อ่านง่าย implement ง่าย | แสดง "input shape นี้บอกเป็นนัยถึง output shape เฉพาะนั้น" ไม่ได้ |
+| Overload | เชื่อม input เฉพาะเจาะจงเข้ากับ output เฉพาะเจาะจง | มี declaration ให้ maintain มากขึ้น ใช้เกินง่ายในกรณีที่ union ก็จัดการได้ |
+| Method shorthand (`handle(a: T)`) | ตรงกับ syntax method ของ JS; รองรับ covariant-style overriding ใน class hierarchy | Bivariant — ปล่อยผ่านการ narrow parameter ที่ unsound แบบเงียบ ๆ |
+| Property function (`handle: (a: T) => void`) | เช็คแบบ contravariant ใต้ `strictFunctionTypes` — จับ unsoundness จริง | มี ceremony เพิ่มนิดหน่อย; override แบบ class method ไม่ได้ |
+| `this: void` | บันทึกและบังคับว่า callback ไม่พึ่ง binding เลย | ต้องเขียน handler ที่ต้องการ `this` จริง ๆ ใหม่ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **method ที่เขียนด้วย shorthand syntax (`handle(a: T)`) กับ property ที่เก็บ arrow function (`handle: (a: T) => void`) ถูกเช็คเหมือนกัน** ไม่จริง — method shorthand ได้ข้อยกเว้น bivariant เลยยอมรับการ narrow parameter ที่ unsound ที่ property form ปฏิเสธถูกต้องใต้ `strictFunctionTypes`
+- **`strictFunctionTypes` เพิ่ม error แบบใหม่** ไม่จริง — มันไม่ได้เพิ่ม check ใหม่ มันแค่เอาข้อยกเว้น (bivariance) ออกเฉพาะสำหรับ property-function form คืนค่าการเช็ค contravariant ปกติกลับมา
+- **การเก็บ class method เป็น bare callback (`const fn = obj.method`) ถูกจับโดย type checker ถ้า method ต้องการ `this`** โดยทั่วไปไม่ถูกจับ เว้นแต่ target signature ประกาศ `this` type ที่เข้ากันไม่ได้ตรง ๆ — assign เข้าช่อง `() => void` ธรรมดา (ที่มี `this` แบบ implicit ไม่จำกัด) compile ผ่านแม้ method จะพึ่ง receiver จริง
+- **overload เป็นแค่ generic "แบบเก่า" และควรถูกแทนที่เสมอ** union parameter เรียบง่ายกว่าเมื่อ signature ต่างกันแค่ type ของ input แต่ overload ยังเป็นเครื่องมือที่ถูกต้องเมื่อ input shape เฉพาะต้องสัญญา output shape เฉพาะที่ต่างกันจริง ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ function signature ที่ generate มา ให้เช็คสิ่งเหล่านี้:
+
+- interface member แบบ method shorthand (`handle(a: Base): void`) ที่ implement ด้วย parameter type แคบกว่า (`handle(a: Derived) { ... }`) — อันนี้ compile ผ่านแบบเงียบ ๆ เพราะ bivariance แม้จะ unsound; narrowing แบบเดียวกันบน function ที่ type เป็น property จะ fail ถูกต้อง
+- class method ที่ถูก assign เข้า callback type ธรรมดาหรือ array ของ callback (`onClick: fn` หรือ `handlers.push(obj.method)`) โดยไม่ bind (`.bind(obj)`) หรือห่อด้วย arrow (`() => obj.method()`) — ถ้า method อ่าน `this` อันนี้ compile ผ่านแล้ว crash ตอนเรียกครั้งแรก
+- overload สองตัวขึ้นไปที่แทนด้วย union parameter ตัวเดียวได้โดยไม่เสียความแม่นยำ — สัญญาณของ boilerplate ที่ copy-paste มากกว่าความสัมพันธ์ input-to-output ที่แท้จริง
+- callback parameter ที่ควรเป็น `this: void` (handler ที่หลุดออกมาจริง ๆ) แต่ไม่ได้ type ไว้ — ไม่มีอะไรกัน function ที่พึ่ง `this` ไม่ให้ถูกส่งเข้าไปตรงนั้นแทน
+
+<SpotTheBug code={`class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+
+const c = new Counter();
+const handlers: Array<() => void> = [];
+handlers.push(c.increment);
+
+for (const h of handlers) h();`}>
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย** `increment` ประกาศ `this: Counter` แต่ `Array<() => void>` ต้องการ function ที่มี `this` แบบ implicit ไม่จำกัดของ `() => void` — TypeScript เช็คความเข้ากันได้ของ `this` ก็ต่อเมื่อ signature *เป้าหมาย* ประกาศ `this` type ไว้เอง ซึ่งที่นี่ไม่ได้ประกาศ `c.increment` เลยหลุดเข้าไปใน array ในฐานะ function reference เปล่า ๆ ที่ไม่ผูกอะไร ตอน runtime การเรียก `h()` เรียก `increment` โดยมี `this` เป็น `undefined` (class body แบบ strict-mode ไม่ default `this` เป็น global object) เลยทำให้ `this.count++` throw `TypeError: Cannot read properties of undefined (reading 'count')` ทางแก้คือเก็บ reference ที่ bind ไว้แล้ว — `handlers.push(c.increment.bind(c))` หรือ `handlers.push(() => c.increment())` เพื่อให้ receiver เดินทางไปพร้อมกับ function
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ `this` parameter type `this` และหายไปที่ call site และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้ได้ — นั่นคือเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้
+type function ด้วย parameter และ return type; parameter เป็น optional, defaulted หรือ rest ได้ เลือก **union parameter** แทน **overload** เว้นแต่ return type ขึ้นกับ input shape จริง ๆ parameter แบบ method-shorthand ถูกเช็คแบบ **bivariant** (narrowing ที่ unsound compile ผ่าน); function ที่ type เป็น property ถูกเช็คแบบ contravariant ใต้ `strictFunctionTypes` (narrowing เดียวกัน fail ถูกต้อง) `this: void` สัญญาว่า callback ไม่เคยอ่าน `this` และ gotcha ตัวใหญ่: return type `void` แปลว่า "ผู้เรียกเมิน return" function ที่ return ค่าจึงยัง assign ให้ได้ — นั่นคือเหตุผลว่าทำไม callback ของ `forEach` ถึงใช้ได้
 </Callout>
 
 export const quizFn = [
@@ -150,6 +307,7 @@ export const quizFn = [
       'เมื่อ function มี parameter เกินสองตัว',
     ],
     answer: 1,
+    explain: 'union parameter เชื่อม input literal เฉพาะเจาะจงเข้ากับ output type เฉพาะเจาะจงไม่ได้ — overload มีไว้เพื่อความสัมพันธ์นั้นพอดี',
   },
   {
     q: '`this` parameter (`function f(this: T, ...)`) ทำอะไรที่ call site?',
@@ -160,6 +318,7 @@ export const quizFn = [
       'ถูกส่งเป็น null อัตโนมัติ',
     ],
     answer: 1,
+    explain: '`this` parameter เป็น syntax compile-time-only สำหรับ type receiver มันถูก erase และไม่เคยปรากฏเป็น argument จริงตอน runtime',
   },
   {
     q: '`const cb: () => void = () => 42` ทำได้ไหม?',
@@ -170,6 +329,7 @@ export const quizFn = [
       'ได้ก็ต่อเมื่อ cast',
     ],
     answer: 1,
+    explain: 'function type ที่ return `void` แปลว่า "ผู้เรียกเมินอะไรก็ตามที่กลับมา" ไม่ใช่ "ห้าม return อะไรเลย" — function ที่ return ค่าจึงยัง assign เข้าได้',
   },
   {
     q: 'ทำไม `arr.forEach(x => other.push(x))` ถึง type-check ผ่านทั้งที่ push return number?',
@@ -180,6 +340,29 @@ export const quizFn = [
       'ไม่ type-check',
     ],
     answer: 1,
+    explain: '`forEach` type callback ของมันว่า return `void`; เพราะ return type แบบ `void` รับ return value จริงอะไรก็ได้ callback ที่บังเอิญ return ผลของ `push` เลย compile ผ่าน',
+  },
+  {
+    q: '```ts\ninterface ShelterMethod {\n  handle(a: Animal): void;\n}\ninterface ShelterProp {\n  handle: (a: Animal) => void;\n}\n\nconst byMethod: ShelterMethod = {\n  handle(a: Dog) { console.log(a.breed); },\n};\nconst byProp: ShelterProp = {\n  handle: (a: Dog) => { console.log(a.breed); },\n};\n```\nใต้ `--strict` ตัวไหน compile ผ่าน?',
+    options: [
+      'fail ทั้งคู่ — narrow parameter เป็น error เสมอ',
+      'ผ่านแค่ byMethod — method shorthand ถูกเช็คแบบ bivariant, byProp ถูกเช็คแบบ contravariant แล้ว fail',
+      'ผ่านแค่ byProp',
+      'ผ่านทั้งคู่ — strictFunctionTypes มีผลแค่กับ generic',
+    ],
+    answer: 1,
+    explain: 'strictFunctionTypes บังคับการเช็ค contravariant ปกติกับ function ที่ type เป็น property (`byProp` fail ด้วย TS2322) แต่ member แบบ method-shorthand ยังคงข้อยกเว้น bivariant ไว้เพื่อ backward compatibility เลย `byMethod` compile ผ่านทั้งที่ unsound เท่ากัน',
+  },
+  {
+    q: '```ts\nclass Counter {\n  count = 0;\n  increment(this: Counter) { this.count++; }\n}\nconst c = new Counter();\nconst handlers: Array<() => void> = [];\nhandlers.push(c.increment);\nfor (const h of handlers) h();\n```\nโค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?',
+    options: [
+      'compile error — this: Counter ของ increment เข้ากันไม่ได้กับ () => void',
+      'compile ผ่าน แต่ throw ตอน runtime เพราะ increment เสีย receiver Counter ไป',
+      'compile ผ่านและรันได้ปกติ — this ถูก infer จาก array',
+      'compile error — Array<() => void> เก็บ method ไม่ได้',
+    ],
+    answer: 1,
+    explain: '() => void ไม่มี this type ประกาศไว้ TypeScript เลยไม่เช็คความเข้ากันได้ของ this ตรงนี้ และ c.increment ถูกยอมรับเป็น function reference เปล่า ๆ ตอน runtime มันรันด้วย this เป็น undefined เลยทำให้ this.count++ throw',
   },
 ];
 

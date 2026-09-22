@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## object type และ modifier ของตัวเอง
 
@@ -39,6 +41,126 @@ function greet(u: User) {
 ```
 
 `interface` กับ `type` แทบใช้แทนกันได้สำหรับ object shape; `interface` เปิดต่อได้ (declaration merging) และ idiomatic สำหรับ public object contract ส่วน `type` ยังเขียน union, tuple และ mapped type ได้ ใช้ `type` เมื่อต้องการพวกนั้น สำหรับ object ธรรมดาใช้อันไหนก็ได้
+
+## Excess property check: เฉพาะ literal แบบ fresh เท่านั้น
+
+การ assign object literal ตรง ๆ ไปที่ type ที่ต้องการได้ check เพิ่มที่การ assign ปกติไม่มี: ทุก property ใน literal ต้อง*รู้จัก*โดย target type
+
+```ts
+// @expect-error TS2561
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+create({ width: 100, heigth: 200 });
+// ❌ Object literal may only specify known properties, but 'heigth' does not exist
+// in type 'Options'. Did you mean to write 'height'?
+```
+
+check นี้มีไว้จับ typo บน value ที่ compiler ไม่เคยเห็นถูก assign ที่ไหนมาก่อนเท่านั้น — มันไม่ทำงานอีกต่อไปเมื่อ object ผ่านตัวแปรมาก่อน เพราะตอนนั้น object อาจมี property มากกว่าที่ target type ต้องการได้อย่างถูกต้อง (structural typing คือเรื่องของการมี*อย่างน้อย*ตาม shape ที่ต้องการ):
+
+```ts
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+const o = { width: 100, heigth: 200 }; // same typo
+create(o); // ✅ no error -- o is not a fresh literal anymore
+```
+
+นี่คือช่องว่างจริง ไม่ใช่บั๊ก: `o` อาจถูก share กับโค้ดอื่นที่อ่าน `heigth` เพื่อเหตุผลอื่นอย่างถูกต้อง ถ้าอยากได้ความเข้มงวดกลับมา annotate ตัวแปรเองตรง ๆ (`const o: Options = { ... }`) ซึ่งจะ trigger fresh-literal check ใหม่ตอนที่ประกาศ
+
+## `exactOptionalPropertyTypes`: `?` เทียบ `| undefined`
+
+โดย default optional property `width?: number` ยอมรับการ assign `undefined` แบบ*ชัดเจน*เหมือนกับ property ที่ไม่มี `exactOptionalPropertyTypes` (ปิดโดย default แม้อยู่ใต้ `strict`) ทำให้ความต่างนี้เป็นจริง: `?` แปลว่า "อาจไม่มี" ไม่ใช่ "อาจเป็น `undefined`"
+
+```ts
+interface Options { width?: number }
+const a: Options = { width: undefined }; // compiles today
+```
+
+รันด้วย flag เปิดอยู่ (`npx tsc --noEmit --strict --exactOptionalPropertyTypes …`) ไฟล์เดียวกันจะ fail:
+
+```text
+error TS2375: Type '{ width: undefined; }' is not assignable to type 'Options' with
+'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the
+target's properties.
+  Types of property 'width' are incompatible.
+    Type 'undefined' is not assignable to type 'number'.
+```
+
+เปิดใช้เมื่อโค้ดของคุณแยกความหมาย "caller ไม่ได้ส่งค่านี้มา" กับ "caller ส่ง `undefined` มาตรง ๆ" (พบบ่อยกับ partial update และ form state) — ถ้าไม่เปิด ทั้งสองกรณีจะยุบเหลือ runtime value เดียวกัน และ type system แยกไม่ออก
+
+## `object` เทียบ `Object` เทียบ `{}`: การอนุญาตสามแบบที่ต่างกัน
+
+ทั้งสามตัวหน้าตาคล้ายกันมากแต่ทำงานต่างกันมาก ภายใต้ `strict` ทั้งสามปฏิเสธ `null` และ `undefined` — แต่ไม่เห็นตรงกันเรื่อง primitive:
+
+```ts
+// @expect-error TS2322
+let a: object;
+let b: Object;
+let c: {};
+
+a = { x: 1 }; b = { x: 1 }; c = { x: 1 }; // ✅ all three
+
+a = 5; // ❌ object explicitly excludes primitives
+```
+
+```ts
+let b: Object;
+let c: {};
+b = 5; // ✅ Object accepts primitives -- they structurally have toString/valueOf/etc.
+c = 5; // ✅ {} means "any value except null/undefined" -- almost as permissive as Object
+```
+
+- **`object`** (ตัวพิมพ์เล็ก สร้างขึ้นมาเพื่อสิ่งนี้โดยเฉพาะ) หมายถึง "อะไรก็ได้ที่ไม่ใช่ primitive" — type ที่ไม่ใช่ primitive จริง ๆ
+- **`Object`** คือ interface ที่มี `toString`, `valueOf`, `hasOwnProperty` และเพื่อน ๆ — primitive มี method พวกนี้ด้วยเชิง structural (ผ่าน boxing) เลย assign ได้
+- **`{}`** หมายถึง "value ที่ไม่มี property จำเป็น" — ซึ่งเกือบทุก value ที่ไม่ nullish ตอบโจทย์ได้ รวมถึง primitive
+
+ในทางปฏิบัติ: หยิบ `object` มาใช้เมื่อตั้งใจจะหมายถึง "ไม่ใช่ primitive" โดยเฉพาะ หยิบ interface จริงหรือ `unknown` มาใช้กับที่เหลือ และหลีกเลี่ยง `Object`/`{}` เป็น parameter type — มันรับได้มากกว่าที่หน้าตามันบอก
+
+## `ReadonlyArray`, array hole และ `noUncheckedIndexedAccess`
+
+`readonly number[]` (หรือ `ReadonlyArray<number>`) ห้าม method ที่ mutate อย่าง `push` และการ assign ที่ index:
+
+```ts
+// @expect-error TS2339
+function paint(colors: readonly string[]) {
+  colors.push("red"); // ❌ push does not exist on readonly string[]
+}
+```
+
+การเลือกใช้ `readonly` array parameter เป็นนิสัยราคาถูกที่ได้ค่ามาก — กันบั๊ก mutate โดยไม่ตั้งใจทั้งชุด แต่ `readonly` ไม่พูดอะไรเกี่ยวกับอันตรายอีกแบบ: **การอ่านเลยขอบเขต** โดย default index ที่เกิน bounds ถูก type ราวกับว่าสำเร็จเสมอ:
+
+```ts
+const arr: number[] = [1, 2, 3];
+const x = arr[10]; // out of bounds -- but typed as number, not number | undefined
+console.log(x.toFixed(2)); // compiles -- crashes at runtime
+```
+
+เปิด `noUncheckedIndexedAccess` (ไม่ได้อยู่ใน `strict` เปิดแยกเองเท่านั้น) ทำให้ทุก index access ซื่อสัตย์ขึ้นด้วยการเพิ่ม `| undefined`:
+
+```text
+error TS18048: 'x' is possibly 'undefined'.
+```
+
+นี่คือ flag ที่คุ้มค่าที่สุดตัวหนึ่งที่ไม่ได้อยู่ใน `strict` — index signature (จากก่อนหน้า) และการเข้าถึง array ธรรมดาได้ความซื่อสัตย์เดียวกันเรื่องการไม่มีค่า แลกกับ narrowing check เพิ่มตรงจุดที่ index ด้วยตัวแปร
+
+## Optional และ variadic tuple element
+
+tuple รองรับ element แบบ optional (`?` ต้องอยู่หลัง required element) และ rest element แบบ variadic ตรงไหนก็ได้ ไม่ใช่แค่ท้ายสุด:
+
+```ts
+type Point = [x: number, y: number, z?: number];
+const p1: Point = [1, 2];       // ✅ z omitted
+const p2: Point = [1, 2, 3];    // ✅ z provided
+
+type Padded = [start: number, ...middle: string[], end: boolean]; // rest in the middle
+const pd: Padded = [1, "a", "b", true];
+
+function measure(...args: [string, ...number[]]): void {}
+measure("cm", 1, 2, 3); // the rest parameter itself is typed as a variadic tuple
+```
+
+type ของ optional tuple element รวม `undefined` เหมือน optional object property; variadic rest element วางตรงไหนใน tuple ก็ได้ ตราบใดที่ compiler ยังบอกได้ว่ามันจบตรงไหน (ปกติเพราะมี suffix ความยาวคงที่ตามหลังมัน)
 
 ## index signature: object เป็น map
 
@@ -90,6 +212,166 @@ function paint(color: readonly number[]) { /* can't mutate color */ }
 ```
 
 การเลือกใช้ `readonly` array parameter เป็นนิสัยราคาถูกที่ได้ค่ามาก: กันบั๊ก mutate โดยไม่ตั้งใจทั้งชุด และสื่อเรื่อง ownership
+
+## Enums
+
+`enum` ประกาศชุด named constant ต่างจากแทบทุกอย่างในคอร์สนี้ตรงที่มัน**ไม่ถูก erase** — มันสร้าง runtime code จริง นั่นคือเหตุผลที่มันต้องมี section ของตัวเอง และเหตุผลที่มันชนกับทุกเครื่องมือ "erasable syntax" ในบทหลัง ๆ
+
+### Numeric enum มี reverse mapping
+
+`enum` ธรรมดานับ member จาก `0` เว้นแต่คุณจะระบุเอง และ — เฉพาะ TypeScript เท่านั้นในบรรดา feature ทั้งหมด — compiler ยัง emit **reverse mapping** จาก value กลับไปหาชื่อด้วย:
+
+```ts
+enum Color { Red, Green, Blue }
+console.log(Color.Green);   // 1 -- forward: name to value
+console.log(Color[1]);      // "Green" -- reverse: value to name
+```
+
+enum ไม่ถูก erase เลย — ต่างจากทุก fence ในคอร์สนี้ — อันนี้รันด้วย `node --experimental-strip-types` ไม่ได้ (ดูข้างล่าง) ที่นี่มันแค่ type-check เท่านั้น compile จริง (`tsc --module commonjs`) แล้วรัน JavaScript ที่ emit ออกมาด้วย `node` ธรรมดา จะพิมพ์ `1` แล้ว `Green` ตรงกับ comment ข้างบน reverse mapping นั้นเป็น JavaScript ที่ generate ออกมาจริง ไม่ใช่ trick ระดับ type:
+
+```text
+var Color;
+(function (Color) {
+    Color[Color["Red"] = 0] = "Red";
+    Color[Color["Green"] = 1] = "Green";
+    Color[Color["Blue"] = 2] = "Blue";
+})(Color || (Color = {}));
+```
+
+แต่ละบรรทัดทำ assign สองอย่าง: `Color["Red"] = 0` (forward) และ `Color[0] = "Red"` (reverse) — นั่นคือกลไกทั้งหมด
+
+### String enum ไม่มี reverse mapping
+
+string enum assign แค่ทาง forward เท่านั้น การ index ด้วย value จึงใช้ไม่ได้ — และ object ที่ emit ออกมาก็พิสูจน์:
+
+```ts
+// @expect-error TS2551
+enum Direction { Up = "UP", Down = "DOWN" }
+console.log(Direction.Up);
+console.log(Direction["UP"]); // ❌ typo -- the member is named "Up", not "UP"
+```
+
+compile version ที่แก้แล้วแล้วรัน JavaScript ที่ emit ออกมา (`tsc --module commonjs` แล้วรันด้วย `node` ธรรมดา เพราะ string enum ก็ non-erasable และรันด้วย `--experimental-strip-types` ไม่ได้เหมือนกัน — ดูข้างล่าง) แสดง runtime object ให้เห็นตรง ๆ:
+
+```text
+console.log(Direction) → { Up: 'UP', Down: 'DOWN' }
+```
+
+มีแค่ forward key สองตัว — ไม่มี reverse entry `0`/`1` เพราะไม่มีอะไรเป็นตัวเลขให้ map กลับ
+
+### "type safety" ของ numeric enum จับได้แค่ literal ไม่ใช่ number จริง
+
+numeric enum ปฏิเสธ *literal* ที่นอกช่วง ซึ่งให้ความรู้สึกเหมือน type safety จริง:
+
+```ts
+// @expect-error TS2345
+enum Color { Red, Green, Blue }
+function paint(c: Color) {}
+paint(999); // out of range -- no member has this value
+```
+
+แต่ check นั้นทำงานแค่กับ literal ที่ compiler มองเห็นและจับคู่กับ value ของ member ได้เท่านั้น — `number` ที่มาจาก runtime แบบสุ่ม (response จาก API, output ของ `parseInt`, อะไรก็ตามที่ไม่ใช่ literal) ผ่านไปได้โดยไม่ถูกเช็คเลย รวมถึงเรื่อง range ด้วย:
+
+```ts
+enum Color { Red, Green, Blue }
+function paint(c: Color) {}
+
+paint(Color.Green); // ✅ intended usage
+paint(2);            // ✅ 2 happens to equal Color.Blue's value, so the literal check allows it
+
+declare const n: number; // any runtime number -- not a literal the checker can range-check
+paint(n);              // ✅ still compiles -- no bounds check against a non-literal number
+```
+
+นี่คือ unsoundness จริงของ numeric enum: ในระดับ type `Color` ดูเหมือนเซตปิดสามค่า แต่ตอน runtime มันก็แค่ `number` และ `number` อะไรก็ assign ได้
+
+### `const enum`: inline ค่าเข้าไปเลย และทำไมมันรอดจาก bundling จริงไม่ได้
+
+`const enum` ไม่ emit object เลย — ทุกที่ที่อ้างถึงถูกแทนที่ด้วย literal value ตรง ๆ ที่จุดที่ใช้:
+
+```ts
+const enum Direction { Up, Down }
+console.log(Direction.Up);
+```
+
+```text
+"use strict";
+console.log(0 /* Direction.Up */);
+```
+
+การ inline นั้นเองที่ทำให้มันพังใน multi-file build จริง: `tsc` ทำได้เพราะมัน type-check ทั้ง program พร้อมกัน มองเห็น value ของทุก `const enum` ได้ **single-file transpiler** (esbuild, SWC, Babel หรือ `tsc --isolatedModules` ที่เจอ `const enum` แบบ *ambient* จาก `.d.ts`) ประมวลผลไฟล์เดียวแบบแยกขาด ไม่มีทางไป lookup value ได้:
+
+```ts
+// @skip-verify illustrative -- the import target is a second file (a real .d.ts) in a genuine multi-file build; verified separately in scratch with two real files, see the quoted output below
+import { Direction } from "./somewhere"; // declared there as `export declare const enum Direction { ... }` in a .d.ts
+console.log(Direction.Up);
+```
+
+ตรวจแล้วจริงใน scratch ด้วยไฟล์จริงสองไฟล์ — `direction.d.ts` ที่ประกาศ `export declare const enum Direction { Up, Down }` กับ `main.ts` ที่ import จากมัน — `npx tsc --ignoreConfig --noEmit --target es2025 --module esnext --isolatedModules main.ts` ให้:
+
+```text
+main.ts(2,13): error TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.
+```
+
+`isolatedModules` เป็นสิ่งที่ toolchain แบบ bundler สมัยใหม่แทบทุกตัวต้องการโดยปริยาย เลย `const enum` ที่ import จาก dependency ที่ compile แล้ว (แทนที่จะเป็นจาก source ใน program เดียวกัน) คือการพังจริงที่พบบ่อย ไม่ใช่แค่สมมติฐาน
+
+### `--erasableSyntaxOnly` ของ TypeScript 7 ปฏิเสธ `enum` ตรง ๆ
+
+เพราะ enum สร้าง code จริง มันเลยสอบตกเทสต์ "erasable syntax" แบบเดียวกับที่บท erasure ใช้กับ parameter property รันด้วย flag เปิด (harness แบบ flag ตายตัวของคอร์สนี้ toggle มันไม่ได้ นี่คือคำสั่งและ output จริงจากเครื่องนี้):
+
+```text
+$ npx tsc --ignoreConfig --noEmit --erasableSyntaxOnly --target es2025 enum.ts
+enum.ts(1,6): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+```
+
+ทั้ง `enum` ธรรมดาและ `const enum` โดน `TS1294` เหมือนกันเป๊ะ — `const` เปลี่ยนแค่กลยุทธ์ emit ไม่ใช่ว่า syntax erasable หรือเปล่า
+
+### การ strip type ของ Node ปฏิเสธมันด้วยกฎเดียวกัน
+
+`node --experimental-strip-types` บังคับกฎเดียวกันในระดับ runtime โดยไม่ขึ้นกับ flag ของ TypeScript เลย:
+
+```text
+$ node --experimental-strip-types enum.ts
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+### ตัวแทน: object แบบ `as const` บวก `keyof typeof`
+
+ตัวแทนที่ idiomatic และ erasable คือ object literal ธรรมดา แช่แข็งด้วย `as const` แล้ว derive union type จากค่าของมันเอง:
+
+```ts
+// @run
+const Color = {
+  Red: 0,
+  Green: 1,
+  Blue: 2,
+} as const;
+
+type Color = typeof Color[keyof typeof Color]; // 0 | 1 | 2
+
+function paint(c: Color) {}
+paint(Color.Green); // ✅
+console.log(Color.Green);
+// 1
+```
+
+อันนี้รอดจาก erasure ได้เต็ม ๆ (มันแค่ `const` กับ type alias erasable ทั้งคู่) ใช้ได้กับ `node --experimental-strip-types` ตรง ๆ ไม่ต้องแก้อะไร และให้ autocomplete บน `Color.___` เหมือน enum จริง สิ่งที่มัน*ไม่*ให้คือ reverse mapping — ถ้าต้องการ lookup แบบ value→name ต้องสร้างเอง (`Object.entries(Color)`) เพราะ object แบบ `as const` ไม่สร้างให้อัตโนมัติ
+
+<TSPlayground code={enumsCode} id="everyday-types-enums" title="as const object replacing an enum" />
+
+export const enumsCode = `enum Color { Red, Green, Blue }
+console.log(Color.Green);   // 1
+console.log(Color[1]);      // "Green" -- numeric reverse mapping
+
+const ColorConst = {
+  Red: 0,
+  Green: 1,
+  Blue: 2,
+} as const;
+type ColorConst = typeof ColorConst[keyof typeof ColorConst];
+
+function paint(c: ColorConst) {}
+paint(ColorConst.Green); // erasable replacement -- same autocomplete, no runtime object needed`;
 
 ## built-in ใหม่ ๆ ที่ `lib` ใส่ type ให้แล้ว (es2024 / es2025)
 
@@ -153,8 +435,70 @@ function read() {
 
 `Disposable` และ `AsyncDisposable` คือ interface ที่ต้อง implement ส่วน `DisposableStack` รวมหลายตัวไว้ด้วยกัน model resource แบบนี้แทนบันได `try`/`finally`
 
+## Mental Model
+
+<Mermaid title="ทุก check ในบทนี้คือ 'ตรงจุดนี้ compiler ตรวจจริงแค่ไหน'" code={oatMentalDiagram} />
+
+export const oatMentalDiagram = `flowchart TD
+  v["A value flows toward a typed slot"] --> fresh{"Is it a fresh object literal,\nwritten right at the call site?"}
+  fresh -->|"yes"| epc["Excess property check runs\n(catches typos)"]
+  fresh -->|"no -- via a variable"| indirect["Only structural compatibility checked\n(extra properties allowed)"]
+  v --> idx{"Indexing into an array/object\nby a non-constant key?"}
+  idx -->|"noUncheckedIndexedAccess off"| trust["Trusted -- T, no undefined"]
+  idx -->|"on"| honest["Honest -- T | undefined"]
+  v --> lit{"Is it a number literal into an enum-typed slot?"}
+  lit -->|"yes, matches a member"| passes["Checked against real member values"]
+  lit -->|"no -- a plain number variable"| unchecked["Zero range checking -- any number passes"]`;
+
+แทบทุกเรื่องในบทนี้เป็นการเล่นกับคำถามเดียวกัน: *ตรงจุดนี้ compiler ตรวจอะไรจริง ๆ บ้าง?* excess property check ตรวจเยอะมาก แต่แค่ตอน literal เพิ่งเกิด `noUncheckedIndexedAccess` ตัดสินว่าการ "อ่านเลยขอบเขต" เป็นเงื่อนไขที่ถูกตรวจหรือเปล่า parameter type ของ numeric enum ดูรัดกุมแต่ตรวจแค่ literal ที่ pattern-match กับ member ที่รู้จักได้เท่านั้น — ตัวแปร `number` ธรรมดาเดินผ่านไปได้เฉย ๆ ไม่มีอันไหนเป็นบั๊กของ compiler เลย มันคือขอบเขตของสิ่งที่ static analysis สัญญาได้ และการรู้ว่าขอบเขตแต่ละอันอยู่ตรงไหนแม่นยำ คือสิ่งที่แยก "type system ปกป้องฉัน" ออกจาก "type system ปกป้องฉันตรงนี้ แต่ไม่ตรงนั้น"
+
+## ข้อแลกเปลี่ยน
+
+| Feature | ได้อะไร | เสียอะไร |
+|---|---|---|
+| Excess property check | จับ typo บน object literal ได้ทันที | ใช้ได้แค่กับ literal แบบ fresh — อ้อมผ่านตัวแปรตัวเดียวก็ปิดไปแล้ว |
+| `exactOptionalPropertyTypes` | แยก "ไม่มี" ออกจาก "ส่ง undefined มาตรง ๆ" | ปิดโดย default แม้ใต้ `strict` ต้องตรวจโค้ดเดิมที่พึ่งพฤติกรรมหลวม ๆ |
+| `object`/`{}` เป็น parameter type | หลวมมาก ตอบโจทย์ง่าย | รับได้มากกว่าที่หน้าตาบอก รวม primitive สำหรับ `{}` และ `Object` |
+| `noUncheckedIndexedAccess` | ทำให้ index read ทุกตัวซื่อสัตย์เรื่องการไม่มีค่า | เพิ่ม `| undefined` (และต้อง narrow) ทุกจุดที่ index ด้วย dynamic key ในโค้ดเบส |
+| `enum` จริง | syntax คุ้นเคย มี reverse mapping ให้ฟรี (numeric) | non-erasable — ถูกปฏิเสธโดย `erasableSyntaxOnly` และ type-stripping ของ Node; check range อ่อนกับ number ที่ไม่ใช่ literal |
+| object แบบ `as const` แทน `enum` | erasable เต็มที่ ใช้ได้ทุกที่ autocomplete เหมือนกัน | ไม่มี reverse mapping อัตโนมัติ ต้องสร้างเองถ้าต้องการ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **numeric enum คือเซตปิดของ value ที่ถูกเช็คแล้ว** แค่ literal ที่เป็น enum member เท่านั้นที่ถูกเช็คกับมัน `number` ตัวไหนก็ได้ — จาก `parseInt`, API body, `Math.random()` — assign เข้า parameter ที่ type เป็น enum ได้โดยไม่มีการเช็ค range เลย
+- **`const enum` แค่เป็น `enum` เวอร์ชันเร็วกว่า** มันเปลี่ยน*กลยุทธ์ emit* (inline ค่าแทนที่จะสร้าง object) ซึ่งนั่นแหละคือเหตุผลที่มันพังใต้ `isolatedModules` เมื่อ value อยู่ในไฟล์ที่ compile แยกกัน — เป็นอันตรายจริงของ bundler ไม่ใช่แค่เชิงอรรถเรื่อง performance
+- **`Object` กับ `{}` เข้มงวดกว่า `object` เพราะดู "เจาะจง" กว่า** ตรงกันข้ามเลย: `object` คือตัวที่เข้มงวด (ไม่รับ primitive); `Object` กับ `{}` รับได้แทบทุกอย่างที่ไม่ nullish รวม primitive
+- **การอ่าน array เกิน bounds ถูกจับโดย `strict` อยู่แล้ว** ไม่จริง — `strict` ไม่รวม `noUncheckedIndexedAccess` ถ้าไม่เปิด flag แยกเอง `arr[999]` จะถูก type ราวกับว่าสำเร็จเสมอ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ object, array, tuple หรือ enum ที่ generate มา ให้เช็คสิ่งเหล่านี้:
+
+- function parameter ที่ type เป็น numeric `enum` ที่รับ value จาก boundary ที่ไม่มี type (`req.body`, `JSON.parse`, แถวจาก database) โดยไม่ validate membership ก่อน — type system จับ number นอกช่วงตรงนั้นไม่ได้
+- `switch` ที่ครอบทุก enum member โดยไม่มี `default` ถูกมองว่าเป็นหลักฐานว่า function return เสมอ — มัน exhaustive *สำหรับ value ที่ compiler พิสูจน์ได้ว่าเป็น member จริง* เท่านั้น ไม่ใช่สำหรับอะไรก็ตามที่ caller ส่งผ่าน parameter ที่ widen แล้ว
+- object literal ที่ผ่าน helper (`Object.assign`, spread, factory function) ก่อนถึง parameter ที่ type เข้มงวด — excess property check ที่ควรจะจับ typo ตอน literal ไม่มีโอกาสได้ทำงานเลย
+- index access บน array หรือ `Record` ด้วย computed key โดยไม่มี narrowing ให้เห็นทีหลัง และไม่มี `noUncheckedIndexedAccess` ใน `tsconfig.json` ของ project — น่าจะเป็น "possibly undefined" แบบเงียบ ๆ
+
+<SpotTheBug code={`enum Status { Pending, Active, Closed }
+
+function label(s: Status): string {
+  switch (s) {
+    case Status.Pending: return "pending";
+    case Status.Active: return "active";
+    case Status.Closed: return "closed";
+  }
+}
+
+function fromApi(rawStatus: number): string {
+  return label(rawStatus); // rawStatus came from an API response body -- any number
+}
+
+console.log(fromApi(999).toUpperCase());`}>
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย** ด้วยสองเหตุผลที่แยกจากกันแล้วซ้อนทับกัน อย่างแรก `switch` ของ `label` ครอบทุก member ของ `Status` เลย TypeScript ยอมรับว่า exhaustive โดยไม่ต้องมี `default` — แต่ exhaustiveness นั้นเป็นแค่สัญญาเกี่ยวกับ value ของ `Status` จริง ๆ อย่างที่สอง `fromApi` รับ `number` ธรรมดาแล้วส่งตรงเข้า `label(s: Status)` และ parameter type ของ numeric enum ไม่มีการเช็ค range กับ `number` ที่ไม่ใช่ literal — `rawStatus` เลยผ่านไปโดยไม่ถูกแตะเลย ตอน runtime `label(999)` ไม่ตรงกับ `case` ไหนเลย ตกออกจากท้าย `switch` แล้ว return `undefined` จาก function ที่ประกาศว่า return `string` การ crash จริงคือ `TypeError: Cannot read properties of undefined (reading 'toUpperCase')` ทางแก้คือ validate ตรง boundary — ไม่ว่าจะเป็น `default: throw new Error(...)` ที่ชัดเจนใน `label` หรือเช็ค `rawStatus in Status` (หรือเทียบกับ `Object.values(Status)`) ก่อนจะเรียก `label` เลย
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-object type คือ shape ที่มี modifier `readonly` และ optional (`?`) — จำว่า optional property เป็น `T \| undefined` และต้อง handle index signature type key ที่ยังไม่รู้แบบ uniform (เปิด `noUncheckedIndexedAccess` เพื่อให้ key ที่ไม่มีอ่านได้เป็น `T \| undefined`) **array** ยืดหยุ่นและ homogeneous; **tuple** ความยาวคงที่ มี type ต่อตำแหน่ง เลือกใช้ `readonly` array สำหรับ parameter ที่จะไม่ mutate
+object type คือ shape ที่มี modifier `readonly` และ optional (`?`) — จำว่า optional property เป็น `T \| undefined` และต้อง handle และ excess property check จับได้แค่ typo บน literal แบบ *fresh* เท่านั้น **array** ยืดหยุ่นและ homogeneous; **tuple** ความยาวคงที่ มี type ต่อตำแหน่ง `enum` จริงสร้าง runtime code (และเช็ค number ได้แค่อ่อน ๆ) เครื่องมือ erasable-syntax ของ TypeScript 7 เลยปฏิเสธมัน — หยิบ object แบบ `as const` บวก `keyof typeof` มาใช้แทน เปิด `noUncheckedIndexedAccess` เพื่อให้ key ที่ไม่มีและการอ่านเกิน bounds ซื่อสัตย์เป็น `T \| undefined`
 </Callout>
 
 export const quizOAT = [
@@ -167,6 +511,7 @@ export const quizOAT = [
       'any',
     ],
     answer: 1,
+    explain: 'optional property อาจไม่มีเลย compiler เลยรวม `undefined` เข้าไปใน type ของมัน บังคับให้คุณ handle case นั้นก่อนใช้งาน',
   },
   {
     q: 'option `noUncheckedIndexedAccess` เปลี่ยนอะไร?',
@@ -177,6 +522,7 @@ export const quizOAT = [
       'ทำให้ compile เร็วขึ้น',
     ],
     answer: 1,
+    explain: 'ถ้าไม่เปิด ทั้ง index signature และ array index ธรรมดาถูกเชื่อว่าสำเร็จเสมอ ถ้าเปิด ทั้งคู่ซื่อสัตย์รวม `| undefined`',
   },
   {
     q: 'ความต่างระหว่าง `number[]` กับ `[number, number]` คืออะไร?',
@@ -187,6 +533,7 @@ export const quizOAT = [
       '`number[]` เก็บได้แค่สอง element',
     ],
     answer: 1,
+    explain: 'array อธิบาย "type เดียวกันกี่ตัวก็ได้" ส่วน tuple ตรึงทั้งความยาวและ type ของแต่ละตำแหน่ง',
   },
   {
     q: '`[255, 128, 0] as const` ให้ type อะไร?',
@@ -197,6 +544,7 @@ export const quizOAT = [
       'any[]',
     ],
     answer: 1,
+    explain: '`as const` บน array literal ล็อกแต่ละ element เป็น literal type ของมันเอง และเปลี่ยน array ให้เป็น `readonly` tuple ไม่ใช่ array ทั่วไป',
   },
   {
     q: 'iterator helper method อย่าง `.map` และ `.take` ใน TypeScript 5.6+ return type อะไร?',
@@ -207,6 +555,40 @@ export const quizOAT = [
       'unknown',
     ],
     answer: 1,
+    explain: 'iterator helper return type ในตัว `IteratorObject<T>` ต่างจาก `Array` — เรียก `.toArray()` ถ้าต้องการ array จริง ๆ',
+  },
+  {
+    q: '```ts\ninterface Options { width: number; height?: number }\nfunction create(opts: Options) {}\n\nconst o = { width: 100, heigth: 200 };\ncreate(o);\n```\nโค้ดนี้ compile ผ่านไหม?',
+    options: [
+      'ไม่ผ่าน — heigth ไม่ใช่ property ที่รู้จักของ Options',
+      'ผ่าน — excess property check ใช้ได้แค่กับ object literal แบบ fresh และ o เป็นตัวแปร',
+      'ไม่ผ่าน — TypeScript ปฏิเสธ property ที่ไม่รู้จักเสมอ',
+      'ผ่าน แต่แค่ตอนเปิด exactOptionalPropertyTypes',
+    ],
+    answer: 1,
+    explain: 'ส่ง literal แบบ fresh (`create({ width: 100, heigth: 200 })`) จะ trigger `TS2561` พอ object เดียวกันผ่านตัวแปรมาก่อน excess property check ก็ไม่ทำงานอีกต่อไป — เช็คแค่ความเข้ากันได้เชิง structural เท่านั้น และ `o` ก็มี `width: number` จริง',
+  },
+  {
+    q: '```ts\nlet a: object;\nlet b: Object;\nlet c: {};\n\na = 5;\nb = 5;\nc = 5;\n```\nการ assign ตัวไหน compile ผ่าน?',
+    options: [
+      'ผ่านทั้งสามตัว',
+      'ผ่านแค่ b = 5 กับ c = 5 -- object ปฏิเสธ primitive โดยเฉพาะ',
+      'ไม่ผ่านเลย -- primitive assign เข้า type แบบ object ไม่ได้เลย',
+      'ผ่านแค่ a = 5',
+    ],
+    answer: 1,
+    explain: '`object` ถูกสร้างขึ้นมาเพื่อหมายถึง "ไม่ใช่ primitive" โดยเฉพาะ `a = 5` เลย fail ด้วย `TS2322` `Object` กับ `{}` หลวมกว่ามากและรับ primitive ได้ เลย `b = 5` กับ `c = 5` compile ผ่านทั้งคู่',
+  },
+  {
+    q: '```ts\nenum Status { Pending, Active, Closed }\nfunction label(s: Status): string {\n  switch (s) {\n    case Status.Pending: return "pending";\n    case Status.Active: return "active";\n    case Status.Closed: return "closed";\n  }\n}\nfunction fromApi(rawStatus: number): string {\n  return label(rawStatus);\n}\n```\n`fromApi` compile ผ่านไหม และเรียกด้วย number อะไรก็ได้ปลอดภัยหรือเปล่า?',
+    options: [
+      'ไม่ผ่าน -- label ขาด default case',
+      'ผ่าน แต่ไม่ปลอดภัย -- parameter ของ numeric enum ไม่เช็ค range กับ number ธรรมดาที่ส่งเข้ามา',
+      'ผ่านและปลอดภัยเต็มที่ -- enum เป็นเซตปิดตอน runtime',
+      'ไม่ผ่าน -- rawStatus ต้อง cast เป็น Status ตรง ๆ ก่อน',
+    ],
+    answer: 1,
+    explain: 'switch ถูกยอมรับว่า exhaustive เหนือ member ที่รู้จักของ Status เลยไม่ต้องมี default -- แต่นั่นไม่ได้พูดถึง argument ที่เป็น `number` ธรรมดาเลย numeric enum เช็คแค่ literal กับ member จริง `fromApi(999)` compile ผ่านแล้วเรียก `label(999)` ซึ่งตกจาก switch แล้ว return `undefined` จาก function ที่ type ว่า return `string`',
   },
 ];
 

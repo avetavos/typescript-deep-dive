@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Object types and their modifiers
 
@@ -39,6 +41,126 @@ function greet(u: User) {
 ```
 
 `interface` and `type` are nearly interchangeable for object shapes; `interface` can be re-opened (declaration merging) and is idiomatic for public object contracts, while `type` can also express unions, tuples, and mapped types. Use `type` when you need those; either is fine for a plain object.
+
+## Excess property checks: only on a fresh literal
+
+Assigning an object literal directly where a type is expected gets an extra check that ordinary assignments don't: every property in the literal must be *known* to the target type.
+
+```ts
+// @expect-error TS2561
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+create({ width: 100, heigth: 200 });
+// ❌ Object literal may only specify known properties, but 'heigth' does not exist
+// in type 'Options'. Did you mean to write 'height'?
+```
+
+The check exists only to catch typos on values the compiler has never seen assigned anywhere else — it does not apply once the object passes through a variable first, because at that point the object could legitimately have more properties than the target type requires (structural typing is about *at least* having the required shape):
+
+```ts
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+const o = { width: 100, heigth: 200 }; // same typo
+create(o); // ✅ no error -- o is not a fresh literal anymore
+```
+
+This is a real gap, not a bug: `o` might be shared with other code that legitimately reads `heigth` for some other reason. If you want the strictness back, annotate the variable itself (`const o: Options = { ... }`), which re-triggers the fresh-literal check at the point of declaration.
+
+## `exactOptionalPropertyTypes`: `?` vs. `| undefined`
+
+By default, an optional property `width?: number` accepts an *explicit* `undefined` assignment, the same as an omitted property. `exactOptionalPropertyTypes` (off by default, even under `strict`) makes the distinction real: `?` means "may be absent," not "may be `undefined`."
+
+```ts
+interface Options { width?: number }
+const a: Options = { width: undefined }; // compiles today
+```
+
+Run with the flag on (`npx tsc --noEmit --strict --exactOptionalPropertyTypes …`) and the same file fails:
+
+```text
+error TS2375: Type '{ width: undefined; }' is not assignable to type 'Options' with
+'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the
+target's properties.
+  Types of property 'width' are incompatible.
+    Type 'undefined' is not assignable to type 'number'.
+```
+
+Turn it on when your code distinguishes "the caller didn't pass this" from "the caller explicitly passed `undefined`" (common with partial updates and form state) — without it, both collapse to the same runtime value and the type system can't tell you apart.
+
+## `object` vs `Object` vs `{}`: three different permissions
+
+These three look almost identical and behave very differently. Under `strict`, all three reject `null` and `undefined` — but they disagree sharply about primitives:
+
+```ts
+// @expect-error TS2322
+let a: object;
+let b: Object;
+let c: {};
+
+a = { x: 1 }; b = { x: 1 }; c = { x: 1 }; // ✅ all three
+
+a = 5; // ❌ object explicitly excludes primitives
+```
+
+```ts
+let b: Object;
+let c: {};
+b = 5; // ✅ Object accepts primitives -- they structurally have toString/valueOf/etc.
+c = 5; // ✅ {} means "any value except null/undefined" -- almost as permissive as Object
+```
+
+- **`object`** (lowercase, introduced specifically for this) means "anything that isn't a primitive" — the true non-primitive type.
+- **`Object`** is the interface with `toString`, `valueOf`, `hasOwnProperty`, and friends — primitives structurally have those methods too (via boxing), so they're assignable.
+- **`{}`** means "a value with no required properties" — which almost every non-nullish value satisfies, primitives included.
+
+In practice: reach for `object` when you specifically mean "not a primitive," reach for a real interface or `unknown` for everything else, and avoid `Object`/`{}` as parameter types — they accept far more than they look like they should.
+
+## `ReadonlyArray`, array holes, and `noUncheckedIndexedAccess`
+
+`readonly number[]` (or `ReadonlyArray<number>`) forbids mutating methods like `push` and index assignment:
+
+```ts
+// @expect-error TS2339
+function paint(colors: readonly string[]) {
+  colors.push("red"); // ❌ push does not exist on readonly string[]
+}
+```
+
+Preferring `readonly` array parameters is a cheap, high-value habit — it prevents a whole class of accidental-mutation bugs. But `readonly` says nothing about a different hazard: **reading past the end**. By default, an out-of-bounds index is typed as if it always succeeds:
+
+```ts
+const arr: number[] = [1, 2, 3];
+const x = arr[10]; // out of bounds -- but typed as number, not number | undefined
+console.log(x.toFixed(2)); // compiles -- crashes at runtime
+```
+
+Turning on `noUncheckedIndexedAccess` (not part of `strict`, on by name only) makes every index access honest by adding `| undefined`:
+
+```text
+error TS18048: 'x' is possibly 'undefined'.
+```
+
+This is the single highest-value flag not in `strict` — index signatures (from earlier) and plain array access both get the same honesty about absence, at the cost of an extra narrowing check wherever you index by a variable.
+
+## Optional and variadic tuple elements
+
+Tuples support an optional element (`?`, must come after required elements) and a variadic rest element in any position, not just the end:
+
+```ts
+type Point = [x: number, y: number, z?: number];
+const p1: Point = [1, 2];       // ✅ z omitted
+const p2: Point = [1, 2, 3];    // ✅ z provided
+
+type Padded = [start: number, ...middle: string[], end: boolean]; // rest in the middle
+const pd: Padded = [1, "a", "b", true];
+
+function measure(...args: [string, ...number[]]): void {}
+measure("cm", 1, 2, 3); // the rest parameter itself is typed as a variadic tuple
+```
+
+An optional tuple element's type includes `undefined` just like an optional object property; a variadic rest element can sit anywhere in the tuple as long as the compiler can still tell where it ends (usually because a fixed suffix follows it).
 
 ## Index signatures: objects as maps
 
@@ -90,6 +212,166 @@ function paint(color: readonly number[]) { /* can't mutate color */ }
 ```
 
 Preferring `readonly` array parameters is a cheap, high-value habit: it prevents a whole class of accidental-mutation bugs and communicates ownership.
+
+## Enums
+
+An `enum` declares a set of named constants. Unlike almost everything else in this course, it is **not erased** — it generates real runtime code, which is why it needs its own section and why it collides with every "erasable syntax" tool later in the course.
+
+### Numeric enums have a reverse mapping
+
+A plain `enum` numbers its members from `0` unless you say otherwise, and — uniquely among TypeScript features — the compiler also emits a **reverse mapping** from value back to name:
+
+```ts
+enum Color { Red, Green, Blue }
+console.log(Color.Green);   // 1 -- forward: name to value
+console.log(Color[1]);      // "Green" -- reverse: value to name
+```
+
+Enums are non-erasable, so — unlike every other fence in this course — this one can't be executed with `node --experimental-strip-types` (see below); it only type-checks here. Compiling it for real (`tsc --module commonjs`) and running the emitted JavaScript with plain `node` prints `1` then `Green`, matching the comments above. That reverse mapping is real generated JavaScript, not a type-level trick:
+
+```text
+var Color;
+(function (Color) {
+    Color[Color["Red"] = 0] = "Red";
+    Color[Color["Green"] = 1] = "Green";
+    Color[Color["Blue"] = 2] = "Blue";
+})(Color || (Color = {}));
+```
+
+Each line does two assignments: `Color["Red"] = 0` (forward) and `Color[0] = "Red"` (reverse) — that's the whole mechanism.
+
+### String enums have no reverse mapping
+
+A string enum only assigns forward, so indexing by value doesn't work — and the emitted object proves it:
+
+```ts
+// @expect-error TS2551
+enum Direction { Up = "UP", Down = "DOWN" }
+console.log(Direction.Up);
+console.log(Direction["UP"]); // ❌ typo -- the member is named "Up", not "UP"
+```
+
+Compiling the corrected version and running the emitted JavaScript (`tsc --module commonjs`, then plain `node`, since string enums are non-erasable and can't run under `--experimental-strip-types` either — see below) shows the runtime object directly:
+
+```text
+console.log(Direction) → { Up: 'UP', Down: 'DOWN' }
+```
+
+Only two forward keys — no `0`/`1` reverse entries, because there's nothing numeric to map back from.
+
+### A numeric enum's "type safety" only catches literals, not real numbers
+
+A numeric enum rejects an out-of-range *literal*, which feels like real type safety:
+
+```ts
+// @expect-error TS2345
+enum Color { Red, Green, Blue }
+function paint(c: Color) {}
+paint(999); // out of range -- no member has this value
+```
+
+But that check only fires for literals the compiler can see and match against a member's value — an arbitrary `number` at runtime (an API response, `parseInt` output, anything not a literal) sails through with zero checking, range included:
+
+```ts
+enum Color { Red, Green, Blue }
+function paint(c: Color) {}
+
+paint(Color.Green); // ✅ intended usage
+paint(2);            // ✅ 2 happens to equal Color.Blue's value, so the literal check allows it
+
+declare const n: number; // any runtime number -- not a literal the checker can range-check
+paint(n);              // ✅ still compiles -- no bounds check against a non-literal number
+```
+
+This is the numeric enum's real unsoundness: at the type level `Color` looks like a closed set of three values, but at runtime it's just `number`, and any `number` is assignable.
+
+### `const enum`: inlined, and why it doesn't survive real bundling
+
+A `const enum` never emits an object at all — every reference is replaced by its literal value at the use site:
+
+```ts
+const enum Direction { Up, Down }
+console.log(Direction.Up);
+```
+
+```text
+"use strict";
+console.log(0 /* Direction.Up */);
+```
+
+That inlining is exactly what makes it break in a real multi-file build: `tsc` can do it because it type-checks the whole program at once and can see every `const enum`'s values. A **single-file transpiler** (esbuild, SWC, Babel, or `tsc --isolatedModules` handling *ambient* `const enum`s from a `.d.ts`) processes one file in isolation and has no way to look up the value:
+
+```ts
+// @skip-verify illustrative -- the import target is a second file (a real .d.ts) in a genuine multi-file build; verified separately in scratch with two real files, see the quoted output below
+import { Direction } from "./somewhere"; // declared there as `export declare const enum Direction { ... }` in a .d.ts
+console.log(Direction.Up);
+```
+
+Verified in scratch with two real files — a `direction.d.ts` declaring `export declare const enum Direction { Up, Down }` and a `main.ts` importing from it — `npx tsc --ignoreConfig --noEmit --target es2025 --module esnext --isolatedModules main.ts` gives:
+
+```text
+main.ts(2,13): error TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.
+```
+
+`isolatedModules` is effectively required by every modern bundler-based toolchain, so a `const enum` imported from a compiled dependency (rather than from source in the same program) is a real, common breakage — not a hypothetical.
+
+### TypeScript 7's `--erasableSyntaxOnly` rejects `enum` outright
+
+Because enums generate code, they fail the same "erasable syntax" test the erasure lesson uses for parameter properties. Run with the flag (the fixed-flags harness in this course can't toggle it, so this is the real command and output from this machine):
+
+```text
+$ npx tsc --ignoreConfig --noEmit --erasableSyntaxOnly --target es2025 enum.ts
+enum.ts(1,6): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+```
+
+Both a plain `enum` and a `const enum` hit the identical `TS1294` — `const` changes the emit strategy, not whether the syntax is erasable.
+
+### Node's type-stripping rejects it the same way
+
+`node --experimental-strip-types` enforces the same rule at the runtime level, independent of any TypeScript flag:
+
+```text
+$ node --experimental-strip-types enum.ts
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+### The replacement: an `as const` object plus `keyof typeof`
+
+The idiomatic erasable replacement is a plain object literal, frozen with `as const`, with the union type derived from its own values:
+
+```ts
+// @run
+const Color = {
+  Red: 0,
+  Green: 1,
+  Blue: 2,
+} as const;
+
+type Color = typeof Color[keyof typeof Color]; // 0 | 1 | 2
+
+function paint(c: Color) {}
+paint(Color.Green); // ✅
+console.log(Color.Green);
+// 1
+```
+
+This survives erasure completely (it's just a `const` and a type alias, both erasable), works under `node --experimental-strip-types` unmodified, and gives autocomplete on `Color.___` the same as a real enum. What it does *not* give you is the reverse mapping — if you need value→name lookup, build it explicitly (`Object.entries(Color)`), since `as const` objects don't generate one automatically.
+
+<TSPlayground code={enumsCode} id="everyday-types-enums" title="as const object replacing an enum" />
+
+export const enumsCode = `enum Color { Red, Green, Blue }
+console.log(Color.Green);   // 1
+console.log(Color[1]);      // "Green" -- numeric reverse mapping
+
+const ColorConst = {
+  Red: 0,
+  Green: 1,
+  Blue: 2,
+} as const;
+type ColorConst = typeof ColorConst[keyof typeof ColorConst];
+
+function paint(c: ColorConst) {}
+paint(ColorConst.Green); // erasable replacement -- same autocomplete, no runtime object needed`;
 
 ## Newer built-ins your `lib` already types (es2024 / es2025)
 
@@ -153,8 +435,70 @@ function read() {
 
 `Disposable` and `AsyncDisposable` are the interfaces to implement, and `DisposableStack` collects several. Model resources this way instead of `try`/`finally` ladders.
 
+## Mental Model
+
+<Mermaid title="Every check in this lesson is 'how much does the compiler actually verify here?'" code={oatMentalDiagram} />
+
+export const oatMentalDiagram = `flowchart TD
+  v["A value flows toward a typed slot"] --> fresh{"Is it a fresh object literal,\nwritten right at the call site?"}
+  fresh -->|"yes"| epc["Excess property check runs\n(catches typos)"]
+  fresh -->|"no -- via a variable"| indirect["Only structural compatibility checked\n(extra properties allowed)"]
+  v --> idx{"Indexing into an array/object\nby a non-constant key?"}
+  idx -->|"noUncheckedIndexedAccess off"| trust["Trusted -- T, no undefined"]
+  idx -->|"on"| honest["Honest -- T | undefined"]
+  v --> lit{"Is it a number literal into an enum-typed slot?"}
+  lit -->|"yes, matches a member"| passes["Checked against real member values"]
+  lit -->|"no -- a plain number variable"| unchecked["Zero range checking -- any number passes"]`;
+
+Almost every topic in this lesson is a variation on the same question: *how much does the compiler actually verify at this specific point?* Excess property checks verify a lot, but only at the literal's birth. `noUncheckedIndexedAccess` decides whether "reading past the end" is even a checked condition. A numeric enum's parameter type looks airtight but only checks literals it can pattern-match against known members — a plain `number` variable walks straight through. None of these are bugs in the compiler; they're the edges of what static analysis can promise, and knowing exactly where each edge is is what separates "the type system protects me" from "the type system protects me here, but not there."
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---|---|---|
+| Excess property check | Catches typos on object literals immediately | Only applies to fresh literals — one variable of indirection turns it off |
+| `exactOptionalPropertyTypes` | Distinguishes "absent" from "explicitly undefined" | Off by default even under `strict`; needs auditing existing code that relied on the loose behavior |
+| `object`/`{}` as a parameter type | Extremely permissive, easy to satisfy | Accepts far more than it looks like — primitives included for `{}` and `Object` |
+| `noUncheckedIndexedAccess` | Makes every index read honest about absence | An extra `| undefined` (and narrowing) at every dynamic index site in the codebase |
+| Real `enum` | Familiar syntax, reverse mapping for free (numeric) | Non-erasable — rejected by `erasableSyntaxOnly` and Node's type-stripping; weak range checking against non-literal numbers |
+| `as const` object instead of `enum` | Fully erasable, works everywhere, same autocomplete | No automatic reverse mapping; you build it yourself if you need it |
+
+## Common Misconceptions
+
+- **A numeric enum is a closed, checked set of values.** Only enum-member literals get checked against it. Any `number` — from `parseInt`, an API body, `Math.random()` — is assignable to an enum-typed parameter with no range check at all.
+- **`const enum` is just a faster `enum`.** It changes the *emit strategy* (inlined values instead of an object), which is exactly why it breaks under `isolatedModules` when the values live in another compiled file — a real bundler hazard, not a performance footnote.
+- **`Object` and `{}` are stricter than `object` because they look more "specific."** The opposite: `object` is the strict one (no primitives); `Object` and `{}` accept almost everything non-nullish, primitives included.
+- **An out-of-bounds array read is caught by `strict` alone.** It isn't — `strict` doesn't include `noUncheckedIndexedAccess`. Without that separate flag, `arr[999]` is typed as if it always succeeds.
+
+## Reading AI-generated code
+
+Before trusting generated object, array, tuple, or enum code, check for:
+
+- A function parameter typed with a numeric `enum` that receives a value from an untyped boundary (`req.body`, `JSON.parse`, a database row) without validating membership first — the type system won't catch an out-of-range number there.
+- A `switch` over every enum member with no `default`, treated as proof the function always returns — it's exhaustive *for values the compiler can prove are valid members*, not for whatever a caller passes through a widened parameter.
+- Object literals passed through a helper (`Object.assign`, a spread, a factory function) before reaching a strictly-typed parameter — the excess property check that would have caught a typo at the literal never gets a chance to run.
+- Index access on an array or `Record` by a computed key, with no visible narrowing afterward and no `noUncheckedIndexedAccess` in the project's `tsconfig.json` — a likely silent "possibly undefined."
+
+<SpotTheBug code={`enum Status { Pending, Active, Closed }
+
+function label(s: Status): string {
+  switch (s) {
+    case Status.Pending: return "pending";
+    case Status.Active: return "active";
+    case Status.Closed: return "closed";
+  }
+}
+
+function fromApi(rawStatus: number): string {
+  return label(rawStatus); // rawStatus came from an API response body -- any number
+}
+
+console.log(fromApi(999).toUpperCase());`}>
+This compiles with **zero errors**, for two independent reasons stacking on top of each other. First, `label`'s `switch` covers every `Status` member, so TypeScript accepts it as exhaustive with no `default` needed — but that exhaustiveness is only a promise about real `Status` values. Second, `fromApi` accepts a plain `number` and passes it straight to `label(s: Status)`, and a numeric enum's parameter type has no range check against a non-literal `number` — `rawStatus` sails through untouched. At runtime, `label(999)` matches no `case`, falls off the end of the `switch`, and returns `undefined` from a function declared to return `string`. The real crash is `TypeError: Cannot read properties of undefined (reading 'toUpperCase')`. The fix is to validate at the boundary — either an explicit `default: throw new Error(...)` inside `label`, or checking `rawStatus in Status` (or against `Object.values(Status)`) before ever calling `label`.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Object types are shapes with `readonly` and optional (`?`) modifiers — remember an optional property is `T \| undefined` and must be handled. Index signatures type unknown keys uniformly (turn on `noUncheckedIndexedAccess` so absent keys read as `T \| undefined`). An **array** is variable-length and homogeneous; a **tuple** is fixed-length with a type per position. Prefer `readonly` arrays for parameters you won't mutate.
+Object types are shapes with `readonly` and optional (`?`) modifiers — remember an optional property is `T \| undefined` and must be handled, and the excess property check only catches typos on a *fresh* literal. An **array** is variable-length and homogeneous; a **tuple** is fixed-length with a type per position. A real `enum` generates runtime code (and only weakly checks numbers), so TypeScript 7's erasable-syntax tools reject it — reach for an `as const` object plus `keyof typeof` instead. Turn on `noUncheckedIndexedAccess` so absent keys and out-of-bounds reads are honestly `T \| undefined`.
 </Callout>
 
 export const quizOAT = [
@@ -167,6 +511,7 @@ export const quizOAT = [
       'any',
     ],
     answer: 1,
+    explain: 'An optional property may be absent entirely, so the compiler folds `undefined` into its type and forces you to handle that case before using it.',
   },
   {
     q: 'What does the `noUncheckedIndexedAccess` option change?',
@@ -177,6 +522,7 @@ export const quizOAT = [
       'It speeds up compilation',
     ],
     answer: 1,
+    explain: 'Without it, both an index signature and a plain array index are trusted to always succeed. With it, both honestly include `| undefined`.',
   },
   {
     q: 'What is the difference between `number[]` and `[number, number]`?',
@@ -187,6 +533,7 @@ export const quizOAT = [
       '`number[]` can only hold two elements',
     ],
     answer: 1,
+    explain: 'An array describes "any number of the same type"; a tuple pins down both the length and the type at each position.',
   },
   {
     q: 'What type does `[255, 128, 0] as const` produce?',
@@ -197,6 +544,7 @@ export const quizOAT = [
       'any[]',
     ],
     answer: 1,
+    explain: '`as const` on an array literal locks each element to its literal type and turns the array into a `readonly` tuple, not a general array.',
   },
   {
     q: 'What type do iterator helper methods such as `.map` and `.take` return in TypeScript 5.6+?',
@@ -207,6 +555,40 @@ export const quizOAT = [
       'unknown',
     ],
     answer: 1,
+    explain: 'Iterator helpers return the built-in `IteratorObject<T>` type, distinct from an `Array` — call `.toArray()` if you need a real array.',
+  },
+  {
+    q: '```ts\ninterface Options { width: number; height?: number }\nfunction create(opts: Options) {}\n\nconst o = { width: 100, heigth: 200 };\ncreate(o);\n```\nDoes this compile?',
+    options: [
+      'No — heigth is not a known property of Options',
+      'Yes — the excess property check only applies to a fresh object literal, and o is a variable',
+      'No — TypeScript always rejects unknown properties',
+      'Yes, but only under exactOptionalPropertyTypes',
+    ],
+    answer: 1,
+    explain: 'Passing a fresh literal (`create({ width: 100, heigth: 200 })`) would trigger `TS2561`. Once the same object goes through a variable first, the excess property check no longer applies — only structural compatibility is checked, and `o` does have a `width: number`.',
+  },
+  {
+    q: '```ts\nlet a: object;\nlet b: Object;\nlet c: {};\n\na = 5;\nb = 5;\nc = 5;\n```\nWhich assignments compile?',
+    options: [
+      'All three compile',
+      'Only b = 5 and c = 5 compile -- object specifically excludes primitives',
+      'None compile -- primitives cannot be assigned to any object-like type',
+      'Only a = 5 compiles',
+    ],
+    answer: 1,
+    explain: '`object` was introduced specifically to mean "not a primitive," so `a = 5` fails with `TS2322`. `Object` and `{}` are far more permissive and accept primitives, so `b = 5` and `c = 5` both compile.',
+  },
+  {
+    q: '```ts\nenum Status { Pending, Active, Closed }\nfunction label(s: Status): string {\n  switch (s) {\n    case Status.Pending: return "pending";\n    case Status.Active: return "active";\n    case Status.Closed: return "closed";\n  }\n}\nfunction fromApi(rawStatus: number): string {\n  return label(rawStatus);\n}\n```\nDoes `fromApi` compile, and is it safe to call with any number?',
+    options: [
+      'It does not compile -- label is missing a default case',
+      'It compiles, but is unsafe -- a numeric enum parameter does not range-check a plain number argument',
+      'It compiles and is completely safe -- enums are a closed set at runtime',
+      'It does not compile -- rawStatus must be cast to Status explicitly',
+    ],
+    answer: 1,
+    explain: 'The switch is accepted as exhaustive over Status\'s known members, so no default is required -- but that says nothing about a plain `number` argument. A numeric enum only checks literals against real members; `fromApi(999)` compiles and calls `label(999)`, which falls through the switch and returns `undefined` from a function typed to return `string`.',
   },
 ];
 

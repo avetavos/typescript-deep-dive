@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type ที่คุณใช้อยู่แล้ว — แบบเข้าใจจริง
 
@@ -37,6 +39,126 @@ export const arcDiagram = `flowchart LR
 
 คุณ describe ข้อมูลด้วย union และ object type ซึ่งทำให้คุณถือ type ที่ *กว้าง* อยู่ (มีหลายความเป็นไปได้) จากนั้นก็ **narrow** — ด้วย `typeof`, `in`, discriminant field — ลงมาเหลือ case เฉพาะตัวเดียว แล้ว TypeScript ก็ยอมให้ใช้งานอย่างปลอดภัย เข้าใจ loop นี้แล้วคุณก็เข้าใจ TypeScript ในชีวิตประจำวัน
 
+## รวมทุกอย่างเข้าด้วยกัน
+
+ทุกบทในโมดูลนี้โผล่มาในรูปเดียวกัน: literal union สำหรับ value ที่อนุญาต, object type สำหรับ request, discriminated union สำหรับ response และ `switch` ที่ narrow มัน
+
+```ts
+// @run
+type Method = "GET" | "POST"; // literal union -- describe
+
+interface ApiRequest {
+  readonly method: Method;
+  path: string;
+}
+
+type ApiResponse =
+  | { kind: "ok"; status: 200; data: unknown }
+  | { kind: "error"; status: 400 | 404 | 500; message: string };
+
+function describe(res: ApiResponse): string {
+  switch (res.kind) {
+    case "ok":
+      return `OK: ${JSON.stringify(res.data)}`;
+    case "error":
+      return `Error ${res.status}: ${res.message}`;
+    default: {
+      const _exhaustive: never = res; // exhaustiveness -- a new kind fails to compile here
+      return _exhaustive;
+    }
+  }
+}
+
+const req: ApiRequest = { method: "GET", path: "/users" };
+console.log(req.method, req.path);
+console.log(describe({ kind: "ok", status: 200, data: { id: 1 } }));
+console.log(describe({ kind: "error", status: 404, message: "not found" }));
+// GET /users
+// OK: {"id":1}
+// Error 404: not found
+```
+
+<TSPlayground code={indexDemoCode} id="everyday-types-index-demo" title="Describe, then narrow" />
+
+export const indexDemoCode = `type Method = "GET" | "POST"; // literal union -- describe
+
+interface ApiRequest {
+  readonly method: Method;
+  path: string;
+}
+
+type ApiResponse =
+  | { kind: "ok"; status: 200; data: unknown }
+  | { kind: "error"; status: 400 | 404 | 500; message: string };
+
+function describe(res: ApiResponse): string {
+  switch (res.kind) {
+    case "ok":
+      return \`OK: \${JSON.stringify(res.data)}\`;
+    case "error":
+      return \`Error \${res.status}: \${res.message}\`;
+    default: {
+      const _exhaustive: never = res; // exhaustiveness -- a new kind fails to compile here
+      return _exhaustive;
+    }
+  }
+}
+
+const req: ApiRequest = { method: "GET", path: "/users" };
+console.log(req.method, req.path);
+
+console.log(describe({ kind: "ok", status: 200, data: { id: 1 } }));
+console.log(describe({ kind: "error", status: 404, message: "not found" }));`;
+
+## Mental Model
+
+<Mermaid title="ทุกบทในโมดูลนี้คือหนึ่งขั้นของ pipeline เดียวกัน" code={pipelineDiagram} />
+
+export const pipelineDiagram = `flowchart LR
+  lit["Literals & widening\npin down exact values"] --> ui["Unions & intersections\ncombine (OR) or compose (AND)"]
+  ui --> oat["Objects, arrays & tuples\nshape the data"]
+  oat --> fn["Functions\nshape the behavior"]
+  fn --> nar["Narrowing\ncollapse the union at use-time"]`;
+
+มองห้าบทนี้เป็น pipeline เดียว ไม่ใช่ห้าเรื่องแยกกัน: คุณตรึง value ที่ชัดเจนด้วย **literal** รวม (OR) หรือประกอบ (AND) มันด้วย **union กับ intersection** สร้างรูปร่างข้อมูลด้วย **object, array และ tuple** สร้างรูปร่างพฤติกรรมด้วย **function** และสุดท้ายยุบทุกอย่างกลับลงมาด้วย **narrowing** ตรงจุดที่คุณใช้ value จริง ๆ กระโดดไปใช้ `any` หรือ `string` แบบหลวม ๆ ในขั้นไหนก็ตัดวงจรนี้ทันที — ผลตอบแทนของทั้งโมดูลจะเห็นก็ต่อเมื่อทุกขั้นแม่นยำ และ `switch`/`if` สุดท้าย narrow ลงมาเหลือของจริง
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ได้อะไร | เสียอะไร |
+|---|---|---|
+| type หลวม ๆ (`string`, `object`, `any`) | เขียนไว เข้าใจไม่ต้อง model ล่วงหน้า | ไม่มี autocomplete ไม่มี exhaustiveness bug โผล่ตอน runtime แทนที่จะเป็น compile time |
+| literal union + discriminated union | compiler บังคับให้ handle ทุก case (`never` exhaustiveness) | ต้องประกาศ type ล่วงหน้ามากขึ้น เพิ่ม case ใหม่คือการแก้ที่ตั้งใจและมองเห็นได้ทุกจุดที่ใช้ |
+| object shape ด้วย `interface`/`type` | อธิบายตัวเอง ตรวจทุก call site | มี ceremony เกินจำเป็นสำหรับ object เล็ก ๆ ที่ใช้ครั้งเดียว |
+| narrowing ด้วย control flow | ไม่มีต้นทุนตอน runtime อ่านเหมือน JS ปกติ | ดีเท่าที่เช็คที่คุณเขียนเท่านั้น — ข้อจำกัดของ narrowing (บทหลัง) อาจทำให้มั่นใจผิด ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **describe type แล้วคือปลอดภัยแล้ว** type ปกป้องคุณแค่ตรงจุดที่ compiler ยังมองเห็นมันอยู่ — `switch`/`if` ที่ narrow union ตรงจุดที่คุณใช้ต่างหากที่จับ bug ได้จริง
+- **type กว้างกว่าปลอดภัยกว่าเสมอ** ใช้ `string` แทน literal union ทำให้ compiler จับ typo อย่าง `"colour"` ไม่ได้เลย — แค่ย้าย bug ไปโผล่ที่ production
+- **`interface` กับ `type` ต่างกันอย่างมีนัยสำคัญสำหรับ object ธรรมดา** สำหรับ object shape ทั้งสองใกล้เคียงกันมาก ต่างกันจริงแค่เรื่อง declaration merging, union หรือ mapped type
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ function ที่ generate มาแทน union type ให้เช็คสิ่งเหล่านี้:
+
+- `switch` บน discriminated union ที่ไม่มี `default: never` guard — วันที่มี case ใหม่เพิ่มเข้ามาจะเงียบ ๆ ไม่ exhaustive อีกต่อไป
+- function ที่ `switch`/`if` chain ไม่ครอบคลุมทุก branch ด้วย `return` — inferred return type จะแอบเพิ่ม `| undefined` ที่โผล่เป็น error ทีหลังตอนใช้งานจริง
+- parameter ที่ type เป็น `string` หรือ `object` ทั้งที่มี literal union หรือ interface เฉพาะเจาะจงให้ใช้ — สัญญาณว่าคน (หรือ AI) ไม่ได้ model value ที่อนุญาตจริง ๆ
+
+<SpotTheBug code={`type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape) {
+  if (s.kind === "circle") return Math.PI * s.radius ** 2;
+  if (s.kind === "square") return s.side ** 2;
+}
+
+const s: Shape = { kind: "circle", radius: 2 };
+console.log(area(s).toFixed(2));`}>
+ทั้งสอง `if` ไม่ได้เขียนเป็น `switch` แบบ exhaustive TypeScript เลยพิสูจน์ไม่ได้ว่าทุก `Shape` return เป็นตัวเลข — inferred return type ของ `area` คือ `number | undefined` diagnostic จริงบน `area(s).toFixed(2)` คือ `TS2532: Object is possibly 'undefined'` ทางแก้คือ pattern discriminated union จากบท narrowing: `switch` บน `kind` ที่มี `default` branch assign เข้า `never` เพื่อให้ case ที่หายไปเป็น compile error แทนที่จะเป็น `undefined` แบบเงียบ ๆ
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
 everyday type ทั้งหมดคือวิธี **อธิบายเซตของ value** (literal, union, object, tuple) — ส่วน narrowing คือวิธี **ย่อเซตนั้น** ณ จุดใดจุดหนึ่งในโค้ด เพื่อให้ compiler รู้แน่ชัดว่าคุณมีอะไรอยู่ในมือ describe ให้กว้าง narrow ให้แม่น: นั่นคือจังหวะของ TypeScript จริง ๆ
 </Callout>
@@ -51,6 +173,7 @@ export const quizIndex = [
       'เลี่ยง union ทั้งหมด',
     ],
     answer: 1,
+    explain: 'describe ก่อน (literal, union, object) แล้วค่อย narrow ตรงจุดที่ใช้จริง — loop นี้คือเส้นเรื่องหลักของทุกบทในโมดูลนี้',
   },
   {
     q: 'model พื้นฐานอันไหนที่ร้อยโมดูลนี้เข้าด้วยกัน?',
@@ -61,6 +184,40 @@ export const quizIndex = [
       'ทุก type เป็น nominal',
     ],
     answer: 1,
+    explain: 'ทุก feature ในโมดูลนี้ — literal, union, intersection, tuple — ล้วนเป็นแค่วิธีอธิบายหรือย่อเซตของ value ที่เป็นไปได้',
+  },
+  {
+    q: '```ts\nfunction area(s: Shape) {\n  if (s.kind === "circle") return Math.PI * s.radius ** 2;\n  if (s.kind === "square") return s.side ** 2;\n}\n```\nทำไม `area(s).toFixed(2)` compile ไม่ผ่าน ทั้งที่ `if` สองอันครอบคลุมทุก case ของ `Shape` แล้ว?',
+    options: [
+      'ไม่ผ่านจริง — อันนี้ compile ผ่านสบาย ๆ',
+      '`if` สองอันไม่ถูกมองว่า exhaustive เลย inferred return type เลยมี `undefined` รวมอยู่ด้วย',
+      '`toFixed` ไม่มีอยู่บน number',
+      '`Shape` ขาด discriminant',
+    ],
+    answer: 1,
+    explain: '`if` สองอันแยกกัน (ไม่มี `else` ไม่มี `switch` แบบ exhaustive) เหลือ path ที่ไม่ return อะไรเลย TypeScript infer เป็น `number | undefined` แล้ว `TS2532: Object is possibly \'undefined\'` ก็ยิงตรง call site',
+  },
+  {
+    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case "circle": return Math.PI * s.radius ** 2;\n    case "square": return s.side ** 2;\n    default:\n      const _exhaustive: never = s;\n      return _exhaustive;\n  }\n}\n```\nถ้าเพิ่ม member ใหม่ `{ kind: "triangle"; ... }` เข้าไปใน `Shape` แต่ไม่เพิ่ม `case` ใหม่ จะเกิดอะไรขึ้น?',
+    options: [
+      'ไม่มีอะไรเกิดขึ้น — default branch จัดการแบบเงียบ ๆ ตอน runtime',
+      'การ assign `const _exhaustive: never = s` compile ไม่ผ่าน ชี้ตรงไปที่ case ที่หายไป',
+      'TypeScript เพิ่ม case ให้อัตโนมัติ',
+      'function throw ตอน runtime',
+    ],
+    answer: 1,
+    explain: 'ใน `default` ทุก case ที่ตั้งชื่อไว้ถูก narrow ออกไปหมดแล้ว — `s` จะเป็น `never` ก็ต่อเมื่อทุก member ถูกจัดการครบ เพิ่ม `"triangle"` โดยไม่เพิ่ม case ทำให้ `s` ที่นั่นยังเป็น `{ kind: "triangle"; ... }` เลย assign เข้า `never` ไม่ได้ — compile error ไม่ใช่ surprise ตอน runtime',
+  },
+  {
+    q: 'ทำไม parameter แบบ `string` หลวม ๆ มักแย่กว่า literal union อย่าง `"GET" | "POST"`?',
+    options: [
+      'string ช้ากว่าตอน runtime',
+      'literal union ปฏิเสธ typo อย่าง "GTE" ได้ตั้งแต่ compile time; string รับได้หมด typo เลยหลุดไปจนถึง production',
+      'ไม่ต่างกันเลย — TypeScript ปฏิบัติเหมือนกันทุกประการ',
+      'string ใช้ใน function signature ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'literal union คือเซตค่าที่อนุญาตแบบเจาะจง ถูกเช็คทุก call site `string` คือเซตของ string ทุกตัวที่เป็นไปได้ ดังนั้น typo จึง compile ผ่านสบาย ๆ แล้วไปพังตอนถึง server หรือตอนเทียบค่าจริงที่ runtime',
   },
 ];
 

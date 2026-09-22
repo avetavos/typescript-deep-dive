@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The types you already use — properly understood
 
@@ -37,6 +39,126 @@ export const arcDiagram = `flowchart LR
 
 You describe data with unions and object types, which leaves you holding a *wide* type (several possibilities). Then you **narrow** — with `typeof`, `in`, a discriminant field — down to the one specific case, and TypeScript lets you use it safely. Master that loop and you've mastered day-to-day TypeScript.
 
+## Putting it together
+
+Every lesson in this module shows up in one realistic shape: a literal union for the allowed values, an object type for the request, a discriminated union for the response, and a `switch` that narrows it.
+
+```ts
+// @run
+type Method = "GET" | "POST"; // literal union -- describe
+
+interface ApiRequest {
+  readonly method: Method;
+  path: string;
+}
+
+type ApiResponse =
+  | { kind: "ok"; status: 200; data: unknown }
+  | { kind: "error"; status: 400 | 404 | 500; message: string };
+
+function describe(res: ApiResponse): string {
+  switch (res.kind) {
+    case "ok":
+      return `OK: ${JSON.stringify(res.data)}`;
+    case "error":
+      return `Error ${res.status}: ${res.message}`;
+    default: {
+      const _exhaustive: never = res; // exhaustiveness -- a new kind fails to compile here
+      return _exhaustive;
+    }
+  }
+}
+
+const req: ApiRequest = { method: "GET", path: "/users" };
+console.log(req.method, req.path);
+console.log(describe({ kind: "ok", status: 200, data: { id: 1 } }));
+console.log(describe({ kind: "error", status: 404, message: "not found" }));
+// GET /users
+// OK: {"id":1}
+// Error 404: not found
+```
+
+<TSPlayground code={indexDemoCode} id="everyday-types-index-demo" title="Describe, then narrow" />
+
+export const indexDemoCode = `type Method = "GET" | "POST"; // literal union -- describe
+
+interface ApiRequest {
+  readonly method: Method;
+  path: string;
+}
+
+type ApiResponse =
+  | { kind: "ok"; status: 200; data: unknown }
+  | { kind: "error"; status: 400 | 404 | 500; message: string };
+
+function describe(res: ApiResponse): string {
+  switch (res.kind) {
+    case "ok":
+      return \`OK: \${JSON.stringify(res.data)}\`;
+    case "error":
+      return \`Error \${res.status}: \${res.message}\`;
+    default: {
+      const _exhaustive: never = res; // exhaustiveness -- a new kind fails to compile here
+      return _exhaustive;
+    }
+  }
+}
+
+const req: ApiRequest = { method: "GET", path: "/users" };
+console.log(req.method, req.path);
+
+console.log(describe({ kind: "ok", status: 200, data: { id: 1 } }));
+console.log(describe({ kind: "error", status: 404, message: "not found" }));`;
+
+## Mental Model
+
+<Mermaid title="Every lesson in this module is one stage of the same pipeline" code={pipelineDiagram} />
+
+export const pipelineDiagram = `flowchart LR
+  lit["Literals & widening\npin down exact values"] --> ui["Unions & intersections\ncombine (OR) or compose (AND)"]
+  ui --> oat["Objects, arrays & tuples\nshape the data"]
+  oat --> fn["Functions\nshape the behavior"]
+  fn --> nar["Narrowing\ncollapse the union at use-time"]`;
+
+Treat the five lessons as one pipeline, not five unrelated topics: you pin down exact values with **literals**, combine or compose them with **unions and intersections**, shape data with **objects, arrays and tuples**, shape behavior with **functions**, and finally collapse everything back down with **narrowing** at the point where you actually use the value. Skipping straight to `any` or a loose `string` at any stage breaks the chain — the payoff of the whole module only shows up once every stage is precise and the final `switch`/`if` narrows to something real.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Loose types (`string`, `object`, `any`) | Fast to write, no upfront modeling | No autocomplete, no exhaustiveness, bugs surface at runtime instead of compile time |
+| Literal unions + discriminated unions | Compiler enforces every case is handled (`never` exhaustiveness) | More upfront type declarations; adding a new case is a deliberate, visible edit everywhere it's used |
+| `interface`/`type` object shapes | Self-documenting, checked at every call site | Extra ceremony for small, one-off objects |
+| Narrowing with control flow | Zero runtime cost, reads like normal JS | Only as good as the check you write — narrowing limits (later lessons) can lull you into false confidence |
+
+## Common Misconceptions
+
+- **Describing a type is the safety net.** A type only protects you at the point where the compiler can still see it — the `switch`/`if` that narrows a union at the moment you use it is what actually catches bugs.
+- **A wider type is always the safer choice.** Using `string` instead of a literal union removes the compiler's ability to catch a typo like `"colour"` — it just moves the bug to production.
+- **`interface` and `type` are meaningfully different for a plain object.** For an object shape they're close to interchangeable; the difference only matters for declaration merging, unions, or mapped types.
+
+## Reading AI-generated code
+
+Before trusting a generated function over a union type, check for:
+
+- A `switch` over a discriminated union with no `default: never` guard — it will silently stop being exhaustive the day a new case is added.
+- A function whose `switch`/`if` chain doesn't cover every branch with a `return` — the inferred return type quietly grows an extra `| undefined` that only shows up as an error later, at the call site.
+- A parameter typed `string` or `object` where a literal union or a specific interface was available — a sign the author didn't model the actual allowed values.
+
+<SpotTheBug code={`type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape) {
+  if (s.kind === "circle") return Math.PI * s.radius ** 2;
+  if (s.kind === "square") return s.side ** 2;
+}
+
+const s: Shape = { kind: "circle", radius: 2 };
+console.log(area(s).toFixed(2));`}>
+Neither `if` is written as an exhaustive `switch`, so TypeScript can't prove every `Shape` returns a number — the inferred return type of `area` is `number | undefined`. The real diagnostic on `area(s).toFixed(2)` is `TS2532: Object is possibly 'undefined'`. The fix is the discriminated-union pattern from the narrowing lesson: a `switch` on `kind` with a `default` branch that assigns to `never`, so a missing case is a compile error instead of a silent `undefined`.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
 The everyday types are all ways to **describe a set of values** (literals, unions, objects, tuples) — and narrowing is how you **shrink that set** at a specific point in your code so the compiler knows exactly what you have. Describe wide, narrow to precise: that's the rhythm of real TypeScript.
 </Callout>
@@ -51,6 +173,7 @@ export const quizIndex = [
       'Avoid unions entirely',
     ],
     answer: 1,
+    explain: 'Describe first (literals, unions, objects), then narrow at the point of use — that loop is the through-line of every lesson in this module.',
   },
   {
     q: 'Which underlying model ties this whole module together?',
@@ -61,6 +184,40 @@ export const quizIndex = [
       'Every type is nominal',
     ],
     answer: 1,
+    explain: 'Every feature in this module — literal, union, intersection, tuple — is just a way of describing or shrinking a set of possible values.',
+  },
+  {
+    q: '```ts\nfunction area(s: Shape) {\n  if (s.kind === "circle") return Math.PI * s.radius ** 2;\n  if (s.kind === "square") return s.side ** 2;\n}\n```\nWhy does `area(s).toFixed(2)` fail to compile even though every `Shape` case is handled by an `if`?',
+    options: [
+      'It does not fail — this compiles cleanly',
+      'The two `if` statements are not recognized as exhaustive, so the inferred return type includes `undefined`',
+      '`toFixed` does not exist on numbers',
+      '`Shape` is missing a discriminant',
+    ],
+    answer: 1,
+    explain: 'Two separate `if` statements (no `else`, no exhaustive `switch`) leave a path where nothing returns. TypeScript infers `number | undefined`, and `TS2532: Object is possibly \'undefined\'` fires on the call site.',
+  },
+  {
+    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case "circle": return Math.PI * s.radius ** 2;\n    case "square": return s.side ** 2;\n    default:\n      const _exhaustive: never = s;\n      return _exhaustive;\n  }\n}\n```\nWhat happens if a new `{ kind: "triangle"; ... }` member is added to `Shape` but no new `case` is added?',
+    options: [
+      'Nothing — the default branch silently handles it at runtime',
+      'The assignment `const _exhaustive: never = s` fails to compile, pointing at the missing case',
+      'TypeScript automatically adds the case',
+      'The function throws at runtime',
+    ],
+    answer: 1,
+    explain: 'Inside `default`, every named case has been narrowed away — `s` is `never` only if all members were handled. Adding `"triangle"` without a case leaves `s` as `{ kind: "triangle"; ... }` there, so it is no longer assignable to `never` — a compile error, not a runtime surprise.',
+  },
+  {
+    q: 'Why is a loose `string` parameter usually a worse choice than a literal union like `"GET" | "POST"`?',
+    options: [
+      'string is slower at runtime',
+      'A literal union rejects a typo like "GTE" at compile time; string accepts anything, so the typo ships',
+      'There is no difference — TypeScript treats them identically',
+      'string cannot be used in a function signature',
+    ],
+    answer: 1,
+    explain: 'A literal union is a precise set of allowed values, checked at every call site. `string` is the set of every possible string, so a typo compiles fine and only fails once it reaches the server or a comparison at runtime.',
   },
 ];
 

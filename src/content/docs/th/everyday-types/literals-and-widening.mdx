@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## literal คือเซตที่มีสมาชิกตัวเดียว
 
@@ -112,9 +114,113 @@ theme.typo;      // ❌ property does not exist — the object is fully known
 
 ใช้คู่กับ `as const` (`{ … } as const satisfies Theme`) เมื่ออยากได้ทั้ง member แบบ readonly literal *และ* การ validate ส่วนการรักษา literal ผ่าน generic function call ดู `const` type parameter ในโมดูล Generics
 
+## กับดักของ `satisfies`: มันเก็บ type ที่ *infer ได้* ไม่ใช่ type ที่ประกาศ
+
+`satisfies` มักถูกอธิบายว่าเป็น "annotation ที่เช็คด้วย" — แต่มันไม่ได้กลายเป็น annotation นั้นจริง ๆ type ของตัวแปรยังเป็นสิ่งที่ TypeScript **infer** ได้จาก literal ซึ่งมักจะแคบกว่า type ที่คุณเอาไป validate ความแคบนี้มีสองด้าน:
+
+```ts
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red.push(0); // ✅ good -- inferred as number[], not widened to string | number[]
+```
+
+```ts
+// @expect-error TS2322
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red = "not an array anymore"; // reassigning within the DECLARED union, Channel
+// ❌ Type 'string' is not assignable to type 'number[]'.
+```
+
+type จริงของ `palette.red` คือ `number[]` — literal type ที่ infer ได้ — ไม่ใช่ `Channel` การ reassign เป็น `string` ถูกต้องตามหลัก type ที่*ประกาศ*ไว้ `Record<string, Channel>` แต่ `satisfies` ไม่เคย widen ตัวแปรให้เป็น type ที่ประกาศนั้น การ assign เลยล้มเหลวเทียบกับ type ที่ infer ได้ซึ่งแคบกว่า เทียบกับ annotation ธรรมดา ที่ใช้ type ที่ประกาศเป็น type จริงของตัวแปร และไม่มีข้อจำกัดแบบนี้:
+
+```ts
+type Channel = string | number[];
+
+let palette: Record<string, Channel> = {
+  red: [255, 0, 0],
+  note: "middle-c",
+};
+
+palette.red = "not an array anymore"; // ✅ fine -- the declared type is the wide union
+```
+
+หยิบ `satisfies` มาใช้เมื่อคุณอยากให้ type ที่ infer ได้แบบแคบไหลต่อไป (กรณีที่พบบ่อยและต้องการ) หยิบ annotation ธรรมดามาใช้แทนเมื่อตัวแปรเองต้องรับได้ทุก member ของ type ที่ประกาศตลอดอายุของมัน — `satisfies` เช็คแค่ครั้งเดียวตอน literal แล้วก็ถอยออกไป
+
+<TSPlayground code={satisfiesFootgunCode} id="satisfies-footgun" title="satisfies keeps the inferred type" />
+
+export const satisfiesFootgunCode = `type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red.push(0); // ✅ number[] -- the narrow inferred type
+console.log(palette.red);
+
+// palette.red = "nope"; // would be TS2322 -- red's real type is number[], not Channel`;
+
 <Callout title="สรุปหนึ่งบรรทัด">
 literal type คือเซตที่มีค่าเดียว และ union ของ literal คือการ model "หนึ่งในค่าที่ระบุพวกนี้" TypeScript จะ **widen** literal ทุกที่ที่ value อาจเปลี่ยน — รวมถึง property ของ object ที่แก้ค่าได้ นั่นคือเหตุผลว่าทำไม `const config = { method: "GET" }` ถึงให้ `method: string` หยิบ `as const` มาใช้เพื่อเก็บ literal ให้แคบ ทำ property เป็น `readonly` และเปลี่ยน array เป็น tuple — กุญแจสำคัญของการ derive type ที่แม่นยำจากข้อมูล
 </Callout>
+
+## Mental Model
+
+<Mermaid title="type ของ value มาจากไหน แล้วไปตกที่ไหน" code={widenMentalDiagram} />
+
+export const widenMentalDiagram = `flowchart LR
+  lit["Literal value written\n('GET', 42, true)"] --> ctx{"Could this binding change?"}
+  ctx -->|"no -- const, readonly prop"| narrow["Stays the literal type"]
+  ctx -->|"yes -- let, mutable prop"| wide["Widens to the base type\n(string, number, boolean)"]
+  narrow --> asconst["as const locks the whole value tree\n(nested props + arrays too)"]
+  wide -->|"satisfies"| checked["Checked against a type,\nkeeps its own inferred type"]`;
+
+literal ทุกตัวเริ่มต้นเป็น value เป๊ะ ๆ ที่คุณเขียน จากนั้น TypeScript ถามคำถามเดียว — "binding นี้ reassign ได้ไหม" — แล้ว widen ก็ต่อเมื่อคำตอบคือได้ `as const` คือคำตอบ "ไม่ได้" แบบครอบคลุมที่ใช้กับทั้ง value tree (property ของ object กลายเป็น `readonly`, array กลายเป็น tuple) ส่วน `satisfies` ไม่แตะ widening เลย มันแค่เช็ค type ที่ infer ได้แล้วกับ contract แล้วส่ง type ที่ infer ได้ตัวเดิมกลับมา
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ได้อะไร | เสียอะไร |
+|---|---|---|
+| literal ธรรมดา (`let x = "GET"`) | เขียนง่ายที่สุด | widen เป็น `string` — เสีย value เป๊ะ ๆ ทันทีที่ reassign ได้ |
+| `as const` | ล็อก literal, property ที่ซ้อนอยู่ข้างใน และ array element ทั้งหมดพร้อมกัน | ทุกอย่างกลายเป็น `readonly` — mutation ต้องทำสำเนาใหม่ที่ไม่ใช่ const |
+| annotation (`: Theme`) | ตัวแปรมี type ตรงตามที่ประกาศเป๊ะ | property ส่วนเกินถูกซ่อน และความแม่นยำของ literal ที่ infer ได้หายไป |
+| `satisfies` | validate กับ type ไว้ พร้อมเก็บ type ที่ infer ได้แบบแคบ | ตัวแปร*ไม่ใช่*ชนิดตามที่ประกาศ — assign ทีหลังต้องตรงกับ shape ที่ infer ได้ที่แคบกว่า ไม่ใช่ contract ที่กว้างกว่า |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`const` อย่างเดียวเก็บทุก literal ให้แคบ** `const` หยุดแค่*การ reassign binding*; property ของ object ที่เป็น `const` ยัง widen ได้ (`const config = { method: "GET" }` ให้ `method: string`) จนกว่าจะเพิ่ม `as const`
+- **`satisfies` ทำให้ตัวแปรมี type ตามที่ satisfy ไว้** ไม่จริง — ตัวแปรเก็บ type ที่ infer ได้ของตัวเอง ซึ่งมักจะแคบกว่า assign ค่าที่ valid สำหรับ type ที่ประกาศแต่ไม่ valid สำหรับ type ที่ infer ได้ ก็ยังล้มเหลวอยู่ดี
+- **`as const` กับ type annotation ทำงานเหมือนกัน** annotation แทนที่ type ด้วยสิ่งที่คุณเขียน (ซ่อน property ส่วนเกิน widen literal); `as const` เก็บ type ที่ literal, แคบ, `readonly` ที่ infer ได้จาก value เอง — สองอย่างนี้รวมกันได้ด้วยซ้ำ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ literal หรือ config object ที่ generate มา ให้เช็คสิ่งเหล่านี้:
+
+- config object ที่ส่งเข้า function ที่ต้องการ literal union โดยไม่มี `as const` — property ของ object literal ธรรมดา widen เป็น `string`/`number` แล้ว call จะ fail ก็ต่อเมื่อ union check รันจริง ซึ่งมักจะห่างจาก object ตัวจริงไปหลาย function
+- `satisfies` ที่ถูกใช้ในจุดที่คนเขียนตั้งใจจะใช้ annotation จริง ๆ (หรือกลับกัน) — ดูว่าเกิดอะไรขึ้นตอน assign*ครั้งถัดไป*ให้ตัวแปร ไม่ใช่แค่ครั้งแรก เพราะช่องว่างระหว่าง inferred กับ declared จะโผล่ตรงนั้น
+- `as const` ที่ใช้กับสิ่งที่กำลังจะถูก mutate — spread หรือ `.push` บน value ที่ mark `as const` ไว้คือ error ละเมิด `readonly` ที่รอเกิดขึ้น ไม่ใช่ runtime bug ที่ type system พลาดไป
+
+<SpotTheBug code={`const defaultConfig = { method: "GET", retries: 3 };
+
+function send(m: "GET" | "POST") {}
+
+function withOverrides(overrides: Partial<typeof defaultConfig>) {
+  const merged = { ...defaultConfig, ...overrides };
+  send(merged.method);
+}`}>
+`defaultConfig` ไม่มี `as const` เลย `typeof defaultConfig` infer เป็น `{ method: string; retries: number }` — literal `"GET"` widen เป็น `string` ไปแล้วตั้งแต่จุดที่ประกาศ spread เข้า `merged` ก็ไม่ทำให้ literal กลับมา `merged.method` เลยเป็น `string` diagnostic จริงคือ `TS2345: Argument of type 'string' is not assignable to parameter of type '"GET" | "POST"'` ทางแก้คือ `const defaultConfig = { method: "GET", retries: 3 } as const;` (หรือ annotate `method` ด้วย literal union ตรง ๆ) เพื่อให้ literal รอดผ่าน spread
+</SpotTheBug>
 
 export const quizLit = [
   {
@@ -126,6 +232,7 @@ export const quizLit = [
       'x เป็น string, y เป็น "GET"',
     ],
     answer: 1,
+    explain: '`const` reassign ไม่ได้เลย TypeScript เก็บ literal เป๊ะ ๆ ไว้ `let` อาจถูก reassign เป็น string อะไรก็ได้ทีหลัง เลย widen เป็น type `string` ทั่วไป',
   },
   {
     q: 'ทำไม `method` ถึงเป็น string ใน `const config = { method: "GET" }`?',
@@ -136,6 +243,7 @@ export const quizLit = [
       'เพราะ method เป็น reserved word',
     ],
     answer: 1,
+    explain: 'ถึง `config` เองจะเป็น `const` แต่ `config.method` ยัง reassign ได้ (`config.method = "POST"` ถูกกฎหมาย) compiler เลย widen property นี้เป็น `string`',
   },
   {
     q: '`as const` ทำอะไร?',
@@ -146,6 +254,7 @@ export const quizLit = [
       'ใช้ได้กับ number เท่านั้น',
     ],
     answer: 1,
+    explain: '`as const` แช่แข็ง value ทั้งต้นไม้: literal ยังเป็น literal, property ของ object กลายเป็น `readonly`, และ array literal กลายเป็น `readonly` tuple แทนที่จะเป็น array ทั่วไป',
   },
   {
     q: 'ทำไม union ของ literal อย่าง "GET" | "POST" ถึงดีกว่า string สำหรับ parameter?',
@@ -156,6 +265,29 @@ export const quizLit = [
       'ไม่มีความต่าง',
     ],
     answer: 1,
+    explain: 'literal union คือเซตค่าที่อนุญาตแบบเจาะจง ถูกเช็คทุก call site — typo อย่าง `"GTE"` compile ไม่ผ่านแทนที่จะหลุดไปถึง server แบบ `string` ธรรมดา',
+  },
+  {
+    q: '```ts\ntype Channel = string | number[];\n\nlet palette = {\n  red: [255, 0, 0],\n  note: "middle-c",\n} satisfies Record<string, Channel>;\n\npalette.red = "not an array anymore";\n```\nโค้ดนี้ compile ผ่านไหม เพราะอะไร?',
+    options: [
+      'ผ่าน — satisfies widen palette เป็น Record<string, Channel> และ string เป็น Channel ที่ valid',
+      'ไม่ผ่าน — satisfies เก็บ palette.red ไว้ที่ type แคบกว่าที่ infer ได้คือ number[] เลย assign string ไม่ได้',
+      'ผ่าน — satisfies ไม่มีผลต่อ assignability เลย',
+      'ไม่ผ่าน — satisfies ห้าม assign ทีหลังทุกกรณี',
+    ],
+    answer: 1,
+    explain: '`satisfies` เช็ค literal กับ `Record<string, Channel>` แค่ครั้งเดียว — มันไม่เคยกลายเป็น type ของตัวแปร type จริงของ `palette.red` ยังเป็น `number[]` ที่ infer ได้ เลยยิง `TS2322: Type \'string\' is not assignable to type \'number[]\'` annotation ธรรมดา `: Record<string, Channel>` จะยอมให้ reassign ได้',
+  },
+  {
+    q: '```ts\nconst defaultConfig = { method: "GET", retries: 3 };\nfunction send(m: "GET" | "POST") {}\nfunction withOverrides(overrides: Partial<typeof defaultConfig>) {\n  const merged = { ...defaultConfig, ...overrides };\n  send(merged.method);\n}\n```\nทำไม `send(merged.method)` compile ไม่ผ่าน?',
+    options: [
+      'send ไม่รับ object',
+      'defaultConfig ไม่มี as const ทำให้ method widen เป็น string ตั้งแต่ตอนประกาศ และ spread ก็ไม่ทำให้ literal กลับมา',
+      'Partial ลบทุก property ทิ้ง',
+      'มัน compile ผ่านสบาย ๆ',
+    ],
+    answer: 1,
+    explain: 'ถ้าไม่มี `as const` `defaultConfig.method` จะเป็น `string` ไม่ใช่ `"GET"` ตั้งแต่ตอนประกาศแล้ว ทุก spread และ merge ที่ตามมาสืบทอด type ที่ widen ไปแล้วนี้ เลยทำให้ `merged.method` เป็น `string` และ fail `TS2345` กับ parameter `"GET" | "POST"`',
   },
 ];
 

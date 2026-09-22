@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Union: value ที่เป็นหนึ่งในหลาย type
 
@@ -82,6 +84,74 @@ type Both = A & B;
 
 ตัวสุดท้ายเป็นสัญญาณ: เวลาคุณอยากได้ "หนึ่งใน object shape พวกนี้" คุณเกือบทุกครั้งต้องการ **union** (`A | B`) ที่มี discriminant field ร่วมกัน — ไม่ใช่ intersection นั่นคือ discriminated-union pattern ในบท narrowing
 
+## Weak type: check ที่รอดจากการอ้อมผ่านตัวแปร
+
+object literal ได้ excess-property check แต่แค่ตอน assign แบบ *fresh* — ผ่านตัวแปร property ส่วนเกินมักผ่านได้ตามปกติ (บท object พูดเรื่องนี้) union ของ object type ที่มีแต่ optional property ล้วน ๆ ได้ check ที่เข้มกว่าและไม่โดนหลอกด้วยการอ้อมผ่านตัวแปร: ถ้า value ไม่มี property ร่วมกับ union member ไหนเลย มันถูกปฏิเสธแม้จะผ่านตัวแปรก็ตาม
+
+```ts
+// @expect-error TS2345
+interface Circle { radius?: number }
+interface Square { side?: number }
+
+function paint(shape: Circle | Square) {}
+
+const opts = { raduis: 10 }; // typo -- not a fresh literal, assigned to a variable first
+paint(opts); // ❌ still rejected -- 'opts' shares no property with Circle or Square
+```
+
+กฎ "weak type" นี้มีอยู่เพราะ union ของ interface ที่ optional ล้วนจะรับได้เกือบทุกอย่างถ้าไม่มีกฎนี้ — object ไหนก็ compatible กับ `{ radius?: number }` แบบ vacuous เพราะมันไม่มี property จำเป็นเลย การบังคับให้ต้องมี property ร่วมกัน*อย่างน้อยหนึ่งตัว* ปิดช่องโหว่นี้ และต่างจาก excess-property check ปกติตรงที่มันไม่จำกัดแค่ fresh literal
+
+## Intersect function type: รวม call signature เข้าด้วยกัน
+
+`&` บน function type สองตัวไม่ได้เฉลี่ยมันเข้าด้วยกัน — มันสร้าง value ที่เรียกได้ทั้งสอง signature นี่คือวิธีสร้าง function ที่ overload จาก function ธรรมดาสองตัว:
+
+```ts
+// @run
+type StrFn = (x: string) => string;
+type NumFn = (x: number) => number;
+type Overloaded = StrFn & NumFn;
+
+function impl(x: string): string;
+function impl(x: number): number;
+function impl(x: string | number): string | number {
+  return typeof x === "string" ? x.toUpperCase() : x * 2;
+}
+
+const fn: Overloaded = impl as Overloaded; // one runtime function, two call signatures
+console.log(fn("hi")); // ✅ matches StrFn
+console.log(fn(5));    // ✅ matches NumFn
+// HI
+// 10
+```
+
+**union** ของ function type สองตัวเดียวกันเข้มงวดกว่ามาก: เรียกได้ด้วย argument ที่ valid สำหรับ*ทุก* member เท่านั้น เพราะ compiler ไม่รู้ตรงจุดที่เรียกว่ามันเป็นตัวไหนจริง ๆ
+
+```ts
+// @expect-error TS2554
+type Logger = (msg: string) => void;
+type Reporter = (msg: string, code: number) => void;
+declare const handler: Logger | Reporter;
+handler("hi"); // ❌ Expected 2 arguments, but got 1 -- Reporter's signature also has to be satisfied
+```
+
+นี่คือความตึงระหว่าง widen/narrow แบบเดียวกับที่เจอทั้งโมดูล แค่เอามาใช้กับ callable: intersect function ทำให้เรียกได้ด้วย argument ที่กว้างขึ้น (ต้องตรงกับ signature มากขึ้น) ส่วน union ของ function ทำให้แคบลง (ปลอดภัยแค่ส่วนที่ร่วมกัน)
+
+<TSPlayground code={unionsFunctionsCode} id="unions-intersections-functions" title="Intersecting vs unioning function types" />
+
+export const unionsFunctionsCode = `type StrFn = (x: string) => string;
+type NumFn = (x: number) => number;
+type Overloaded = StrFn & NumFn; // callable as either signature
+
+function impl(x: string): string;
+function impl(x: number): number;
+function impl(x: string | number): string | number {
+  return typeof x === "string" ? x.toUpperCase() : x * 2;
+}
+
+const fn: Overloaded = impl as Overloaded; // one runtime function, two call signatures
+console.log(fn("hi")); // matches StrFn
+console.log(fn(5));    // matches NumFn`;
+
 ## หมายเหตุเรื่องการแสดงผลใน TypeScript 7
 
 TypeScript 7 เรียงลำดับ member ของ union แบบ deterministic (`--stableTypeOrdering` เปิดถาวร) hover หรือ error message จึงอาจแสดง `string | number` ในจุดที่ 6.0 เคยแสดง `number | string` เรื่อง assignability ไม่เปลี่ยนเลย — union คือเซต — แต่ test ที่ snapshot ข้อความ error หรือ output `.d.ts` อาจต้อง generate ใหม่
@@ -89,6 +159,55 @@ TypeScript 7 เรียงลำดับ member ของ union แบบ det
 <Callout title="สรุปหนึ่งบรรทัด">
 `A \| B` คือ **union** — OR — และกว้างกว่า ระหว่างที่ถือ union คุณแตะได้แค่ member ที่ทุก branch มีร่วมกันจนกว่าจะ narrow `A & B` คือ **intersection** — AND — และสำหรับ object จะแคบกว่า ต้องมีทุก property ของทั้งสอง ในฐานะวิธีประกอบ object type ทั้งสองชี้ไปคนละทาง: union เพิ่ม value แต่จำกัดการเข้าถึง; intersection จำกัด value แต่เพิ่ม member
 </Callout>
+
+## Mental Model
+
+<Mermaid title="union กับ intersection ขยับขอบเขตเซตไปคนละทาง" code={mentalUiDiagram} />
+
+export const mentalUiDiagram = `flowchart LR
+  A["Type A\n(a set of values)"] --- OR{{"A | B"}}
+  B["Type B\n(a set of values)"] --- OR
+  OR --> wider["Wider set\nfewer guaranteed members"]
+  A --- AND{{"A & B"}}
+  B --- AND
+  AND --> narrower["Narrower set\nmore guaranteed members"]`;
+
+ถามคำถามเดียวกันทุกครั้งที่เจอ `|` หรือ `&`: *กำลังอธิบายเซตของ value อันไหนอยู่ และแตะ member ตัวไหนได้อย่างปลอดภัยโดยไม่ต้อง narrow?* union ขยายเซตของ value ที่ valid แต่ย่อพื้นที่ที่แตะได้อย่างปลอดภัยลงเหลือแค่ member ที่มีร่วมกัน ส่วน intersection ย่อเซตของ value ที่ valid แต่ขยายพื้นที่ที่การันตีได้ให้ครบทุก member ของทุกส่วน check "weak type" และพฤติกรรมของ function signature ข้างบนก็คือกฎเดียวกันนี้ที่เอาไปใช้กับรูปแบบที่ไม่ค่อยชัดเจน — union ของ object ที่มี optional property, union ของ callable
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ได้อะไร | เสียอะไร |
+|---|---|---|
+| Union (`A \| B`) | model "หนึ่งในหลาย shape" ตรงกับความหลากหลายของข้อมูลจริง | แตะได้แค่ member ที่มีร่วมกันจนกว่าจะ narrow |
+| Intersection (`A & B`) | ประกอบ object piece เล็ก ๆ ที่ reuse ได้โดยไม่ต้องใช้ inheritance | property primitive ที่ชนกันทำให้ intersection ยุบเป็น `never` |
+| Intersect function type | สร้าง value ที่ overload ได้จากสอง signature | implementation จริงตอน runtime ต้อง handle ทุก signature จริง ๆ — type แค่สัญญาไว้ ไม่ได้ให้ implementation |
+| Union ของ interface ที่ optional ล้วน | สะดวกเมื่อทุก field เป็น optional จริง ๆ ในทุก member | check "weak type" ต้องการแค่ property ร่วมกัน*ตัวเดียว* typo เลยหลุดผ่านได้ถ้าไปตรงกับชื่อ field อื่นพอดี |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **union ของ object type ที่มี property boolean หรือ string ร่วมกัน narrow บน property นั้นได้อัตโนมัติ** ไม่จริง เว้นแต่ property นั้นเป็น **literal** discriminant ที่ไม่ซ้ำกันในแต่ละ member (pattern `kind: "circle"` จากบท narrowing) — เช็คค่า truthy ของ `ok: boolean` ที่มีร่วมกันไม่ narrow อะไรเลย
+- **intersect object type สองตัวที่เข้ากันไม่ได้เป็น error เสมอ** ไม่จริง — `A & B` ที่ property primitive ชนกัน แค่ทำให้*property นั้น*กลายเป็น `never` type ยังมีอยู่ (แค่ field นั้นสร้างไม่ได้จริง ๆ)
+- **union ปฏิเสธ object ที่มี property ไม่รู้จักเหมือน object type ตัวเดียว** มันปฏิเสธแค่ literal แบบ *fresh* ที่ไม่มี property ร่วมกับ member ไหนเลย — ตัวแปรที่มีอยู่แล้ว หรือตัวที่มี property ร่วมแม้แค่ตัวเดียว ก็ผ่านไปได้เฉย ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ union หรือ intersection ที่ generate มา ให้เช็คสิ่งเหล่านี้:
+
+- `if (obj.someSharedBooleanProperty)` ที่ใช้ narrow union ของ object type — ถ้า property นั้นไม่ใช่ literal เฉพาะแต่ละ member จะไม่ narrow อะไรเลย และการเข้าถึง property ต่อ ๆ ไปก็ยังถูกเช็คกับ union ทั้งก้อน
+- union parameter ที่รับ object ที่สร้างจากการ spread หรือ merge จาก source ที่ไม่มี type — check "weak type" ต้องการแค่ property ชื่อตรงกันตัวเดียวก็ปล่อยผ่านทั้ง object รวม typo ด้วย
+- function ที่ type เป็น intersection ของ call signature (`FnA & FnB`) แต่ implementation จริงรองรับแค่ตัวเดียว — type สัญญาว่าเรียกได้ทั้งคู่อย่างปลอดภัย แต่ไม่มีอะไรเช็คว่า body แยก branch ถูกต้องจริงตอน runtime
+
+<SpotTheBug code={`interface SuccessResult { data?: unknown; ok?: boolean }
+interface ErrorResult { message?: string; ok?: boolean }
+
+function handle(result: SuccessResult | ErrorResult) {
+  console.log(result.ok);
+}
+
+const response = { ok: true, dta: "typo -- meant 'data', but shares 'ok' with both members" };
+handle(response); // does the typo get caught?`}>
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย** `response` ไม่ใช่ fresh literal argument (มันเป็นตัวแปร) excess-property check ปกติเลยไม่ทำงาน และ check "weak type" ของ union ต้องการแค่ property ร่วมกัน*อย่างน้อยหนึ่งตัว* — `ok` ตอบโจทย์นั้นให้ทั้ง `SuccessResult` และ `ErrorResult` field `dta` ที่พิมพ์ผิดเลยลอดผ่านไปโดยไม่มีใครสังเกตเห็น สัญญาของ type system ตรงนี้อ่อนกว่าที่มันดูมาก — แค่มีชื่อ property ตรงกับ union member ตัวเดียวก็พอแล้ว ไม่ว่าที่เหลือของ object จะผิดแค่ไหน
+</SpotTheBug>
 
 export const quizUI = [
   {
@@ -100,6 +219,7 @@ export const quizUI = [
       'ไม่ได้เลย',
     ],
     answer: 1,
+    explain: 'compiler ไม่รู้ว่าคุณถือ branch ไหนอยู่จริง ๆ เลยยอมให้แตะแค่ surface ที่ string กับ number มีร่วมกันเท่านั้น',
   },
   {
     q: 'intersection ของ object type สองตัว `A & B` ต้องการอะไร?',
@@ -110,6 +230,7 @@ export const quizUI = [
       'เป็น never เสมอ',
     ],
     answer: 1,
+    explain: 'intersection อธิบาย value ที่เป็นทั้ง A *และ* B พร้อมกัน object ที่เป็น type นี้เลยต้องมีทุก property ของทั้งสอง',
   },
   {
     q: 'อันไหนกว้างกว่า (อนุญาต value มากกว่า): union หรือ intersection?',
@@ -120,6 +241,7 @@ export const quizUI = [
       'ไม่มีตัวไหนมี value',
     ],
     answer: 0,
+    explain: 'union คือ set union ของ member (value ที่ valid มากขึ้น) intersection คือ set intersection (value ที่ valid น้อยลง แต่การันตี member ได้มากขึ้น)',
   },
   {
     q: 'คุณอยากได้ "value ที่เป็นหนึ่งใน object shape หลายแบบ" ควรหยิบอะไรมาใช้?',
@@ -130,6 +252,29 @@ export const quizUI = [
       'type any',
     ],
     answer: 1,
+    explain: 'discriminated union — union ที่มี literal tag field ร่วมกัน — คือวิธี idiomatic สำหรับ model "หนึ่งในหลาย shape" แล้ว switch ระหว่างมันได้อย่างปลอดภัย',
+  },
+  {
+    q: '```ts\ntype StrFn = (x: string) => string;\ntype NumFn = (x: number) => number;\ntype Overloaded = StrFn & NumFn;\n\ndeclare const fn: Overloaded;\nfn(5);\n```\n`fn(5)` compile ผ่านไหม?',
+    options: [
+      'ไม่ผ่าน — Overloaded เป็น never เพราะ parameter type ชนกัน',
+      'ผ่าน — intersection เรียกได้ทั้งสอง signature และ 5 ตรงกับ NumFn',
+      'ไม่ผ่าน — intersection ของ function เรียกไม่ได้เลย',
+      'ผ่าน แต่ต้อง cast fn เป็น any ก่อน',
+    ],
+    answer: 1,
+    explain: 'intersect function type ไม่ได้เฉลี่ย parameter เข้าด้วยกัน — มันสร้าง value ที่เรียกได้ด้วย signature เต็ม ๆ ของฝั่งไหนก็ได้ `fn(5)` ตรงกับ `NumFn` คือ `(x: number) => number` เลย compile ผ่าน',
+  },
+  {
+    q: '```ts\ninterface SuccessResult { data?: unknown; ok?: boolean }\ninterface ErrorResult { message?: string; ok?: boolean }\n\nfunction handle(result: SuccessResult | ErrorResult) {\n  console.log(result.ok);\n}\n\nconst response = { ok: true, dta: "typo" };\nhandle(response);\n```\nproperty `dta` ที่พิมพ์ผิดถูกจับได้ไหม?',
+    options: [
+      'ได้ — TypeScript ปฏิเสธ property ที่ไม่รู้จักบน union เสมอ',
+      'ไม่ได้ — response ถูกส่งเป็นตัวแปร ไม่ใช่ fresh literal และมี "ok" ร่วมกับทั้งสอง member เลยผ่าน check "weak type"',
+      'ได้ แต่แค่ตอนเปิด exactOptionalPropertyTypes',
+      'ไม่ได้ — TypeScript ไม่เช็ค object ที่ assign เข้า union เลย',
+    ],
+    answer: 1,
+    explain: 'excess-property check ทำงานแค่กับ fresh literal — ที่นี่ `response` เป็นตัวแปร check "weak type" ของ union (ที่รอดจากการอ้อมผ่านตัวแปรได้) ต้องการแค่ property ร่วมกันอย่างน้อยหนึ่งตัว — `ok` ตอบโจทย์นั้นให้ทั้งสอง member typo เลยมองไม่เห็นสำหรับ compiler',
   },
 ];
 

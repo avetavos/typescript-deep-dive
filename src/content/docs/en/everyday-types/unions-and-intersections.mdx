@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Union: a value that is one of several types
 
@@ -82,6 +84,74 @@ type Both = A & B;
 
 That last one is a hint: when you want "one of these object shapes," you almost always want a **union** (`A | B`) with a shared discriminant field — not an intersection. That's the discriminated-union pattern in the narrowing lesson.
 
+## Weak types: a check that survives variable indirection
+
+Object literals get an excess-property check, but only when assigned *fresh* — through a variable, extra properties are normally allowed (the objects lesson covers this). Unions of object types made entirely of optional properties get a stricter check that isn't fooled by indirection: if the value shares **no property at all** with any union member, it's rejected even through a variable:
+
+```ts
+// @expect-error TS2345
+interface Circle { radius?: number }
+interface Square { side?: number }
+
+function paint(shape: Circle | Square) {}
+
+const opts = { raduis: 10 }; // typo -- not a fresh literal, assigned to a variable first
+paint(opts); // ❌ still rejected -- 'opts' shares no property with Circle or Square
+```
+
+This "weak type" rule exists specifically because a union of all-optional interfaces would otherwise accept almost anything — every object is vacuously compatible with `{ radius?: number }` since it has no required properties. Requiring *at least one* shared property closes that hole, and unlike the ordinary excess-property check, it isn't limited to fresh literals.
+
+## Intersecting function types: combined call signatures
+
+`&` on two function types doesn't average them — it produces a value that's callable as *either* signature, which is how you build an overloaded function value out of two plain ones:
+
+```ts
+// @run
+type StrFn = (x: string) => string;
+type NumFn = (x: number) => number;
+type Overloaded = StrFn & NumFn;
+
+function impl(x: string): string;
+function impl(x: number): number;
+function impl(x: string | number): string | number {
+  return typeof x === "string" ? x.toUpperCase() : x * 2;
+}
+
+const fn: Overloaded = impl as Overloaded; // one runtime function, two call signatures
+console.log(fn("hi")); // ✅ matches StrFn
+console.log(fn(5));    // ✅ matches NumFn
+// HI
+// 10
+```
+
+A **union** of the same two function types is far more restrictive: you can only call it with arguments valid for *every* member, because the compiler doesn't know at the call site which one it actually is.
+
+```ts
+// @expect-error TS2554
+type Logger = (msg: string) => void;
+type Reporter = (msg: string, code: number) => void;
+declare const handler: Logger | Reporter;
+handler("hi"); // ❌ Expected 2 arguments, but got 1 -- Reporter's signature also has to be satisfied
+```
+
+This is the same widen/narrow tension from the rest of the module, just applied to callables: intersecting functions widens what you can call them *with* (more signatures to match), while a union of functions narrows it (only the common ground is safe).
+
+<TSPlayground code={unionsFunctionsCode} id="unions-intersections-functions" title="Intersecting vs unioning function types" />
+
+export const unionsFunctionsCode = `type StrFn = (x: string) => string;
+type NumFn = (x: number) => number;
+type Overloaded = StrFn & NumFn; // callable as either signature
+
+function impl(x: string): string;
+function impl(x: number): number;
+function impl(x: string | number): string | number {
+  return typeof x === "string" ? x.toUpperCase() : x * 2;
+}
+
+const fn: Overloaded = impl as Overloaded; // one runtime function, two call signatures
+console.log(fn("hi")); // matches StrFn
+console.log(fn(5));    // matches NumFn`;
+
 ## A display note for TypeScript 7
 
 TypeScript 7 orders the members of a union deterministically (`--stableTypeOrdering`, permanently on), so a hover or error message may show `string | number` where 6.0 showed `number | string`. Nothing about assignability changes — unions are sets — but tests that snapshot error text or `.d.ts` output may need regenerating.
@@ -89,6 +159,55 @@ TypeScript 7 orders the members of a union deterministically (`--stableTypeOrder
 <Callout title="The one-line takeaway">
 `A \| B` is a **union** — OR — and is wider; while you hold it you can only access members common to every branch until you narrow. `A & B` is an **intersection** — AND — and for objects is narrower, requiring all properties of both, which is how you compose object types. They point in opposite directions: unions add values but restrict access; intersections restrict values but add members.
 </Callout>
+
+## Mental Model
+
+<Mermaid title="Union and intersection move the set boundary in opposite directions" code={mentalUiDiagram} />
+
+export const mentalUiDiagram = `flowchart LR
+  A["Type A\n(a set of values)"] --- OR{{"A | B"}}
+  B["Type B\n(a set of values)"] --- OR
+  OR --> wider["Wider set\nfewer guaranteed members"]
+  A --- AND{{"A & B"}}
+  B --- AND
+  AND --> narrower["Narrower set\nmore guaranteed members"]`;
+
+Keep asking one question at every `|` or `&`: *which set of values am I describing, and which members am I guaranteed to be able to touch without narrowing?* A union enlarges the set of valid values but shrinks the safely-accessible surface to the common members; an intersection shrinks the set of valid values but grows the guaranteed surface to every member of every part. The "weak type" check and the function-signature behavior above are both just this same rule applied to a less obvious shape — a union of optional-property objects, a union of callables.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Union (`A \| B`) | Models "one of several shapes," matches real-world variance in data | Only common members are accessible until you narrow |
+| Intersection (`A & B`) | Composes small, reusable object pieces without inheritance | For conflicting primitive properties, the intersection collapses to `never` |
+| Intersection of function types | Builds one overloaded value from two signatures | The runtime implementation must genuinely handle every signature — the type only promises it, it doesn't provide it |
+| Union of all-optional interfaces | Convenient when every field really is optional in every member | The "weak type" check only requires *one* shared property, so a typo can slip through if it happens to match another field's name |
+
+## Common Misconceptions
+
+- **A union of object types with a shared boolean or string property automatically narrows on that property.** It doesn't unless that property is a **literal** discriminant unique to each member (the narrowing lesson's `kind: "circle"` pattern) — checking a shared `ok: boolean` truthy value narrows nothing.
+- **Intersecting two incompatible object types is always an error.** It's not — `A & B` with conflicting primitive property types just makes *that property* resolve to `never`, and the type still exists (just practically unconstructable for that field).
+- **A union rejects any object with an unrecognized property, the same as a single object type would.** It only rejects a *fresh* literal with no properties in common with any member — an existing variable, or one that shares even one property, gets through untouched.
+
+## Reading AI-generated code
+
+Before trusting a generated union or intersection, check for:
+
+- An `if (obj.someSharedBooleanProperty)` used to narrow a union of object types — if that property isn't a per-member literal, this doesn't narrow anything, and every subsequent property access is checked against the whole union.
+- A union parameter accepting an object that was built by spreading or merging from an untyped source — the "weak type" check only needs one matching property name to let the whole object through, typos included.
+- A function typed as an intersection of call signatures (`FnA & FnB`) whose actual implementation only really handles one of them — the type promises both are safe to call, but nothing checks the body actually branches correctly at runtime.
+
+<SpotTheBug code={`interface SuccessResult { data?: unknown; ok?: boolean }
+interface ErrorResult { message?: string; ok?: boolean }
+
+function handle(result: SuccessResult | ErrorResult) {
+  console.log(result.ok);
+}
+
+const response = { ok: true, dta: "typo -- meant 'data', but shares 'ok' with both members" };
+handle(response); // does the typo get caught?`}>
+This compiles with **zero errors**. `response` is not a fresh literal argument (it's a variable), so the ordinary excess-property check doesn't apply, and the union's "weak type" check only demands *at least one* shared property — `ok` satisfies that for both `SuccessResult` and `ErrorResult`, so the typo'd `dta` field rides along completely unnoticed. The type system's promise here is much weaker than it looks: sharing one property name with a union member is enough to pass, regardless of what else is wrong with the object.
+</SpotTheBug>
 
 export const quizUI = [
   {
@@ -100,6 +219,7 @@ export const quizUI = [
       'None at all',
     ],
     answer: 1,
+    explain: 'The compiler cannot know which branch you actually have, so it only lets you touch the surface both string and number share.',
   },
   {
     q: 'What does an intersection of two object types `A & B` require?',
@@ -110,6 +230,7 @@ export const quizUI = [
       'It is always never',
     ],
     answer: 1,
+    explain: 'An intersection describes a value that is A *and* B at once, so an object of that type must satisfy every property of both.',
   },
   {
     q: 'Which is wider (allows more values): a union or an intersection?',
@@ -120,6 +241,7 @@ export const quizUI = [
       'Neither has values',
     ],
     answer: 0,
+    explain: 'A union is the set union of its members (more values qualify); an intersection is the set intersection (fewer values qualify, but more members are guaranteed).',
   },
   {
     q: 'You want "a value that is one of several object shapes." Which should you usually reach for?',
@@ -130,6 +252,29 @@ export const quizUI = [
       'The any type',
     ],
     answer: 1,
+    explain: 'A discriminated union — a union with a shared literal tag field — is the idiomatic way to model "one of several shapes" and switch safely between them.',
+  },
+  {
+    q: '```ts\ntype StrFn = (x: string) => string;\ntype NumFn = (x: number) => number;\ntype Overloaded = StrFn & NumFn;\n\ndeclare const fn: Overloaded;\nfn(5);\n```\nDoes `fn(5)` compile?',
+    options: [
+      'No — Overloaded is never because the parameter types conflict',
+      'Yes — the intersection is callable as either signature, and 5 matches NumFn',
+      'No — intersections of functions are not callable at all',
+      'Yes, but only if fn is cast to any first',
+    ],
+    answer: 1,
+    explain: 'Intersecting function types does not average their parameters — it produces a value callable as *either* full signature. `fn(5)` matches `NumFn`\'s `(x: number) => number`, so it compiles.',
+  },
+  {
+    q: '```ts\ninterface SuccessResult { data?: unknown; ok?: boolean }\ninterface ErrorResult { message?: string; ok?: boolean }\n\nfunction handle(result: SuccessResult | ErrorResult) {\n  console.log(result.ok);\n}\n\nconst response = { ok: true, dta: "typo" };\nhandle(response);\n```\nDoes the typo\'d `dta` property get caught?',
+    options: [
+      'Yes — TypeScript always rejects unrecognized properties on a union',
+      'No — response is passed as a variable, not a fresh literal, and it shares "ok" with both members, so the "weak type" check is satisfied',
+      'Yes, but only under exactOptionalPropertyTypes',
+      'No — TypeScript never checks objects assigned to unions',
+    ],
+    answer: 1,
+    explain: 'The excess-property check only fires on fresh literals; here `response` is a variable. The union\'s "weak type" check (which does survive indirection) only requires at least one shared property — `ok` satisfies it for both members, so the typo is invisible to the compiler.',
   },
 ];
 

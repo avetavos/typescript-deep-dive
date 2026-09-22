@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The point of unions is narrowing
 
@@ -47,6 +49,39 @@ function area(shape: Circle | Square) {
   return shape.side ** 2;               // shape is Square
 }
 ```
+
+### `in` with optional properties
+
+`in` narrows by which members of the union **declare** the property at all — not by whether the property is currently present at runtime. That means it works even when the property is optional, as long as only one side of the union declares it:
+
+```ts
+interface Cat { meow(): void }
+interface Dog { bark(): void; leash?: string }
+
+function speak(pet: Cat | Dog) {
+  if ("leash" in pet) {
+    pet.bark(); // pet narrowed to Dog -- because only Dog even declares leash
+  }
+}
+```
+
+This narrows to `Dog` even for a `Dog` whose `leash` is currently `undefined` — `in` checks the *type's* declared shape, and only `Dog` has a `leash` key at all, optional or not. If both members declared the same optional property, `in` alone couldn't distinguish them and you'd need a real discriminant.
+
+### Equality narrowing between two variables
+
+Comparing two variables with `===` narrows **both** of them to whatever they have in common — not just one side to a literal:
+
+```ts
+function compare(a: string | number, b: string | boolean) {
+  if (a === b) {
+    // only string is common to both unions -- narrows both to string
+    a.toUpperCase();
+    b.toUpperCase();
+  }
+}
+```
+
+Neither `a` nor `b` is a literal here, so this isn't the `if (x === "a")` case — the compiler reasons that `a === b` can only be `true` if both hold a value from the *intersection* of their possible types, `string`. Both variables narrow together inside the `if`, even though neither was compared against a fixed value.
 
 ## Discriminated unions: the pattern to reach for
 
@@ -119,6 +154,45 @@ function handle(v: unknown) {
 
 The predicate is a promise to the compiler: "if this returns true, treat the argument as `T`." It's how you narrow `unknown` from external data, and how libraries expose validation that the type system trusts.
 
+### Type predicates can lie
+
+That promise is never checked against the function's body — the compiler trusts the *signature*, not the implementation. A type-guard function that lies compiles with zero errors:
+
+```ts
+function isString(x: unknown): x is string {
+  return true; // lies -- always claims true, no real check
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase()); // trusted -- x is "string" here
+  }
+}
+```
+
+```ts
+// @run
+function isString(x: unknown): x is string {
+  return true; // lies -- always claims true, no real check
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase()); // trusted -- x is "string" here
+  }
+}
+
+shout(42); // not a string at all
+```
+
+Running it crashes exactly where the compiler said it was safe:
+
+```text
+TypeError: x.toUpperCase is not a function
+```
+
+This is the sharpest version of the course's core warning: any type annotation — including a predicate — is a claim, not a proof. A hand-written or AI-generated type guard is only as trustworthy as its actual logic; always read the body of a custom `x is T` function before trusting what it narrows to.
+
 ## Assertion functions: `asserts x is T`
 
 A cousin of the type guard is the **assertion function**, which throws instead of returning a boolean and narrows for the rest of the scope:
@@ -135,6 +209,33 @@ function use(v: string | null) {
 ```
 
 After the call, the compiler knows the asserted condition held (or execution would have thrown), so it narrows accordingly. This is how `assert`-style helpers and Node's `assert` give you type narrowing for free.
+
+### `unknown` in `catch`: narrowing an error before you can use it
+
+Under `strict` (specifically `useUnknownInCatchVariables`, on by default since TypeScript 4.4 whenever `strict` is on), a caught exception is typed `unknown`, not `any` — because JavaScript lets you `throw` literally anything, so the compiler refuses to assume it has an `Error`'s shape:
+
+```ts
+// @expect-error TS18046
+try {
+  JSON.parse("{");
+} catch (e) {
+  console.log(e.message); // ❌ 'e' is of type 'unknown'.
+}
+```
+
+Narrow it the same way you'd narrow any other `unknown`, most commonly with `instanceof`:
+
+```ts
+try {
+  JSON.parse("{");
+} catch (e) {
+  if (e instanceof Error) {
+    console.log(e.message); // ✅ narrowed from unknown
+  }
+}
+```
+
+This is a direct, everyday application of the module's whole theme: `catch` hands you the widest possible type on purpose, and narrowing is what turns it back into something you can safely call `.message` on.
 
 ## Inferred type predicates (TypeScript 5.5)
 
@@ -206,6 +307,136 @@ function f(value: number, max: number) {
 
 Literal `true`, `false`, `0` and `1` stay allowed (`while (true)` is idiomatic). Regex *literals* are also syntax-checked since 5.5, so an unbalanced group or a backreference to a missing capture is a compile error, not a runtime surprise.
 
+## Narrowing limits: lost across a closure, optimistic across `await`
+
+Narrowing is a property of the *linear control-flow graph* the compiler builds for one function body — and that graph has real edges it can't see across.
+
+**Lost across a closure.** Narrowing an object's property doesn't survive being read inside a nested function, because that function might run at any later time, after something else has mutated the property:
+
+```ts
+// @expect-error TS2339
+interface State { id: string | number }
+function handleState(state: State) {
+  if (typeof state.id === "string") {
+    setTimeout(() => {
+      state.id.toUpperCase(); // property narrowing does not survive a closure
+    }, 0);
+  }
+}
+```
+
+The fix is to capture the narrowed value into a local `const` *before* creating the closure — a `const` can never be reassigned, so its narrowed type is safe to carry into a nested function:
+
+```ts
+interface State { id: string | number }
+function handleState(state: State) {
+  if (typeof state.id === "string") {
+    const id = state.id; // capture the narrowed value in a local const
+    setTimeout(() => {
+      id.toUpperCase(); // ✅ id is a const, never reassigned — narrowing survives
+    }, 0);
+  }
+}
+```
+
+**Optimistic across `await`.** `await` doesn't create a new function scope, so narrowing *does* survive it syntactically — but that's actually unsound, because an awaited call can run arbitrary code that mutates the narrowed value while your function is suspended, and the compiler has no way to know:
+
+```ts
+// @run
+interface State { id: string | number }
+
+async function corrupt(state: State) {
+  state.id = 42; // runs while the caller is suspended at its own await
+}
+
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state); // TS has no idea this mutates state.id
+    console.log(state.id.toUpperCase()); // still typed string here -- but is it?
+  }
+}
+
+run({ id: "abc" });
+```
+
+This compiles with **zero errors** — TypeScript has no interprocedural analysis, so it doesn't know `corrupt` touches `state.id` at all, and keeps trusting the narrowing from before the `await`. Running it crashes:
+
+```text
+TypeError: state.id.toUpperCase is not a function
+```
+
+The lesson generalizes: narrowing is only as reliable as the compiler's certainty that nothing else ran in between. A closure might run later — narrowing loses on purpose, conservatively. An `await` runs *now*, in the same function, so narrowing optimistically survives — even though real code, including code you don't control, gets a chance to invalidate it in between. Re-check (or re-narrow) any shared, mutable value immediately after an `await`, rather than trusting a check that happened before it.
+
+<TSPlayground code={narrowingLimitsCode} id="narrowing-limits-await" title="Narrowing survives await, but it's optimistic" />
+
+export const narrowingLimitsCode = `interface State { id: string | number }
+
+async function corrupt(state: State) {
+  state.id = 42; // runs while the caller is suspended at its own await
+}
+
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state); // TS has no idea this mutates state.id
+    console.log(state.id.toUpperCase()); // still typed string here -- but is it?
+  }
+}
+
+run({ id: "abc" });`;
+
+## Mental Model
+
+<Mermaid title="Narrowing is a claim the compiler trusts, checked only where it can see" code={narrowMentalDiagram} />
+
+export const narrowMentalDiagram = `flowchart TD
+  check["A runtime check the compiler understands\n(typeof, instanceof, in, equality, discriminant)"] --> cfa["Tracked in the linear control-flow graph\nof THIS function body"]
+  cfa --> same["Used later in the SAME graph\n(if/else, switch, after an await)"] --> trusted["Narrowing holds"]
+  cfa --> escapes["Read inside a NESTED function\n(closure, setTimeout, event handler)"] --> lost["Narrowing lost -- could run any time"]
+  guard["A custom function returning x is T"] --> sig["Compiler trusts the SIGNATURE"]
+  sig -.->|"never checks"| body["...not the function body"]`;
+
+Every narrowing rule in this lesson is the compiler tracking one thing: a claim, and how far that claim can travel before something might invalidate it. A `typeof` check is a claim tracked precisely through the linear flow of one function. A type predicate is a claim the compiler takes on faith from a signature, never verified against the body. `await` doesn't end the flow, so a claim survives it — optimistically, since real code ran in between. A closure begins a *new* flow that might execute at any time, so the compiler conservatively refuses to carry old claims into it. None of this is arbitrary: it's exactly as much certainty as static analysis of one function body, read top to bottom, can actually offer.
+
+## Trade-offs
+
+| Technique | Benefit | Cost |
+|---|---|---|
+| Built-in operators (`typeof`, `instanceof`, `in`, equality) | Zero-cost, no custom code, compiler-verified against real checks | Only covers patterns the compiler recognizes natively |
+| Discriminated union + exhaustive `switch` | New variant is a compile error until handled everywhere | Requires every variant to carry a shared literal tag up front |
+| Custom type guard (`x is T`) | Encapsulates arbitrary validation logic behind a reusable check | The compiler trusts the signature, not the body — a wrong or incomplete guard compiles clean |
+| Assertion function (`asserts x is T`) | Narrows for the rest of the scope, not just one branch | Same trust problem as a type guard, plus it throws instead of branching |
+| Capturing into a `const` before a closure | Restores narrowing that a closure would otherwise lose | One extra local variable per narrowed value used in a callback |
+
+## Common Misconceptions
+
+- **A function returning `x is T` is verified by the compiler to actually check what it claims.** It isn't — the predicate is trusted from the signature alone. A guard that returns `true` unconditionally, or checks the wrong thing, compiles with zero errors.
+- **Narrowing a variable before an `await` is still safe after it.** It's syntactically preserved, but not actually safe — the awaited operation can run code that mutates the value while your function is suspended, and the compiler can't see that.
+- **Narrowing a variable before creating a closure survives inside that closure.** It doesn't, for property access — a closure might run at any later time, so the compiler drops the narrowing rather than risk it being stale. A `const` local captured beforehand is the fix.
+- **`in` only works when the property is actually present at runtime.** It narrows based on which union member *declares* the property in its type, so it works even for a currently-`undefined` optional property, as long as only one member declares that key at all.
+
+## Reading AI-generated code
+
+Before trusting generated narrowing logic, check for:
+
+- A type-guard function (`x is T`) whose body checks something much weaker than what it claims — `typeof x === "object" && x !== null` returning `x is { id: string; name: string }` is a common shape, and it compiles with zero errors while claiming far more than it verified.
+- A value narrowed before an `await`, then used immediately after without re-checking — especially if anything awaited could plausibly touch the same shared object or module-level state.
+- A narrowed value read inside a `setTimeout`, event handler, or any other callback defined inside the narrowing branch — if it's a property access (not a captured local), the type is likely wider there than the surrounding code implies.
+- An assertion function or type guard used to validate data crossing a real boundary (parsed JSON, a fetch response) with a check that only confirms "is an object," not the actual required shape.
+
+<SpotTheBug code={`function isValidUser(x: unknown): x is { id: string; name: string } {
+  return typeof x === "object" && x !== null;
+}
+
+function greet(input: unknown) {
+  if (isValidUser(input)) {
+    console.log(\`Hello, \${input.name}\`);
+  }
+}
+
+greet({ id: "1" });`}>
+This compiles with **zero errors** and does not crash — it just silently prints `Hello, undefined`. `isValidUser` claims the much stronger predicate `x is { id: string; name: string }`, but its body only checks "is a non-null object," which `{ id: "1" }` satisfies without ever having a `name` property. Because the compiler never checks a type guard's body against its claimed predicate, `greet` trusts `input.name` is a `string` — it's actually `undefined`, and template-literal interpolation happily stringifies that without throwing. The fix is to make the guard's runtime check match its claim: `typeof x === "object" && x !== null && "id" in x && "name" in x && typeof (x as any).name === "string"`, or use a real validation library that keeps the check and the type in sync.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
 Narrowing is how a wide union becomes a usable specific type: the compiler reads control flow (`typeof`, `instanceof`, `in`, truthiness, equality) and shrinks the type per branch. Model variants as **discriminated unions** with a shared literal tag, `switch` on it, and add a `never` default for **compile-time exhaustiveness**. For custom logic, write type guards (`x is T`) or assertion functions (`asserts x is T`) that the compiler trusts.
 </Callout>
@@ -220,6 +451,7 @@ export const quizNarrow = [
       'Deleting unused branches',
     ],
     answer: 1,
+    explain: 'The compiler reads ordinary runtime checks (typeof, instanceof, in, equality) and shrinks a union to the case that must be true within each branch — no casting involved.',
   },
   {
     q: 'What defines a discriminated union?',
@@ -230,6 +462,7 @@ export const quizNarrow = [
       'It uses intersection instead of union',
     ],
     answer: 0,
+    explain: 'A shared literal field (like kind: "circle") lets a switch narrow to the exact member — that shared tag is what makes it "discriminated."',
   },
   {
     q: 'How does assigning to `never` in a default branch help?',
@@ -240,6 +473,7 @@ export const quizNarrow = [
       'It has no effect',
     ],
     answer: 1,
+    explain: 'Once every named case is handled, the remaining value in default is never. Adding a new union member without a case makes that value no longer never, so the assignment fails to compile.',
   },
   {
     q: 'What does a function returning `x is string` (a type predicate) do?',
@@ -250,6 +484,7 @@ export const quizNarrow = [
       'Converts x to a string',
     ],
     answer: 1,
+    explain: 'A type predicate is a signal to the compiler, not a runtime conversion — it tells TypeScript how to narrow the argument when the function returns true.',
   },
   {
     q: 'What does an assertion function `asserts cond` do after it is called?',
@@ -260,6 +495,7 @@ export const quizNarrow = [
       'Runs only in tests',
     ],
     answer: 1,
+    explain: 'An assertion function throws instead of returning a boolean — reaching the line after the call proves the condition held, so the compiler narrows for the rest of the scope, not just one branch.',
   },
   {
     q: 'When does TypeScript 5.5+ infer a type predicate for a function that has no explicit `x is T`?',
@@ -270,6 +506,29 @@ export const quizNarrow = [
       'Never — predicates must always be written out',
     ],
     answer: 1,
+    explain: 'The inference is conservative and specific: no explicit return type, exactly one return, the boolean tied to the parameter, and the parameter never reassigned — anything fancier still needs an explicit predicate.',
+  },
+  {
+    q: '```ts\nfunction isString(x: unknown): x is string {\n  return true;\n}\n\nfunction shout(x: unknown) {\n  if (isString(x)) {\n    console.log(x.toUpperCase());\n  }\n}\n\nshout(42);\n```\nDoes this compile, and what happens when it runs?',
+    options: [
+      'Compile error — the predicate must actually check typeof x === "string"',
+      'Compiles fine, but throws at runtime -- the predicate is trusted from the signature, never checked against the body',
+      'Compiles and runs fine -- isString always returns true so it is always safe',
+      'Compile error -- unknown cannot be narrowed by a custom function',
+    ],
+    answer: 1,
+    explain: 'The compiler trusts a type predicate\'s signature, not its implementation, so a guard that always returns true compiles with zero errors. Calling shout(42) then crashes with "x.toUpperCase is not a function" exactly where the compiler said it was safe.',
+  },
+  {
+    q: '```ts\ninterface State { id: string | number }\nasync function corrupt(state: State) {\n  state.id = 42;\n}\nasync function run(state: State) {\n  if (typeof state.id === "string") {\n    await corrupt(state);\n    state.id.toUpperCase();\n  }\n}\n```\nDoes `run` compile, and is the narrowing after `await corrupt(state)` actually safe?',
+    options: [
+      'Does not compile -- await always clears narrowing',
+      'Compiles, but the narrowing is unsound -- corrupt can mutate state.id while run is suspended, and the compiler has no way to know',
+      'Compiles and is completely safe -- await preserves narrowing correctly',
+      'Does not compile -- state.id cannot be reassigned inside corrupt',
+    ],
+    answer: 1,
+    explain: 'await does not create a new function scope, so narrowing survives it syntactically -- but TypeScript has no interprocedural analysis, so it has no idea corrupt mutates state.id. The narrowing is trusted anyway, and calling state.id.toUpperCase() after really can throw at runtime.',
   },
 ];
 

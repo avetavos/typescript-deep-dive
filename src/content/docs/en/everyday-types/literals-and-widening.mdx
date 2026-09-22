@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## A literal is a one-member set
 
@@ -112,9 +114,113 @@ theme.typo;      // ❌ property does not exist — the object is fully known
 
 Combine it with `as const` (`{ … } as const satisfies Theme`) when you want readonly literal members *and* validation. To keep literals through a generic function call, see `const` type parameters in the Generics module.
 
+## The `satisfies` footgun: it keeps the *inferred* type, not the declared one
+
+`satisfies` is often described as "an annotation that also checks" — but it does not become that annotation. The variable's type stays whatever TypeScript **inferred** from the literal, which is usually narrower than the type you validated against. That narrowness cuts both ways:
+
+```ts
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red.push(0); // ✅ good -- inferred as number[], not widened to string | number[]
+```
+
+```ts
+// @expect-error TS2322
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red = "not an array anymore"; // reassigning within the DECLARED union, Channel
+// ❌ Type 'string' is not assignable to type 'number[]'.
+```
+
+`palette.red`'s real type is `number[]` — the inferred literal type — not `Channel`. Reassigning it to a `string` is perfectly legal for the *declared* type `Record<string, Channel>`, but `satisfies` never widens the variable to that declared type, so the assignment fails against the narrower inferred one. Compare a plain annotation, which uses the declared type as the variable's actual type and has no such restriction:
+
+```ts
+type Channel = string | number[];
+
+let palette: Record<string, Channel> = {
+  red: [255, 0, 0],
+  note: "middle-c",
+};
+
+palette.red = "not an array anymore"; // ✅ fine -- the declared type is the wide union
+```
+
+Reach for `satisfies` when you want the narrow inferred type to flow onward (the common, desirable case). Reach for a plain annotation instead when the variable itself needs to keep accepting every member of the declared type over its lifetime — `satisfies` checks once, at the literal, and then gets out of the way.
+
+<TSPlayground code={satisfiesFootgunCode} id="satisfies-footgun" title="satisfies keeps the inferred type" />
+
+export const satisfiesFootgunCode = `type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red.push(0); // ✅ number[] -- the narrow inferred type
+console.log(palette.red);
+
+// palette.red = "nope"; // would be TS2322 -- red's real type is number[], not Channel`;
+
 <Callout title="The one-line takeaway">
 A literal type is a one-value set, and unions of literals model "one of these exact values." TypeScript **widens** literals wherever a value could change — including mutable object properties, which is why `const config = { method: "GET" }` gives `method: string`. Reach for `as const` to keep literals narrow, make properties `readonly`, and turn arrays into tuples — the key to deriving precise types from data.
 </Callout>
+
+## Mental Model
+
+<Mermaid title="Where a value's type comes from vs where it settles" code={widenMentalDiagram} />
+
+export const widenMentalDiagram = `flowchart LR
+  lit["Literal value written\n('GET', 42, true)"] --> ctx{"Could this binding change?"}
+  ctx -->|"no -- const, readonly prop"| narrow["Stays the literal type"]
+  ctx -->|"yes -- let, mutable prop"| wide["Widens to the base type\n(string, number, boolean)"]
+  narrow --> asconst["as const locks the whole value tree\n(nested props + arrays too)"]
+  wide -->|"satisfies"| checked["Checked against a type,\nkeeps its own inferred type"]`;
+
+Every literal starts as the exact value you wrote. From there TypeScript asks one question — "could this binding be reassigned?" — and only widens when the answer is yes. `as const` is a blanket "no" applied recursively to an entire value (object properties become `readonly`, arrays become tuples); `satisfies` doesn't touch widening at all, it only checks the already-inferred type against a contract and hands that same inferred type back.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Plain literal (`let x = "GET"`) | Simplest to write | Widens to `string` — loses the exact value the moment it's reassignable |
+| `as const` | Locks every literal, nested property, and array element at once | Everything becomes `readonly` — mutation needs a fresh non-const copy |
+| Annotation (`: Theme`) | Variable keeps exactly the declared type | Excess properties are hidden, and the inferred literal precision is discarded |
+| `satisfies` | Validates against a type while keeping the narrow inferred type | The variable is *not* the declared type — a later assignment must satisfy the narrower inferred shape, not the wider contract |
+
+## Common Misconceptions
+
+- **`const` alone keeps every literal narrow.** `const` only stops *reassignment of the binding*; a `const` object's properties still widen (`const config = { method: "GET" }` gives `method: string`) unless you add `as const`.
+- **`satisfies` makes the variable have the type you satisfied against.** It doesn't — the variable keeps its own inferred type, which is usually narrower. Assigning back a value that's valid for the declared type but not the inferred one still fails.
+- **`as const` and a type annotation do the same job.** An annotation replaces the type with what you wrote (hiding extra properties, widening literals); `as const` keeps the literal, narrow, `readonly` type inferred from the value itself — the two can even be combined.
+
+## Reading AI-generated code
+
+Before trusting a generated literal or config object, check for:
+
+- A config object passed to a function expecting a literal union, without `as const` — a plain object literal's properties widen to `string`/`number`, and the call only fails once the union check runs, often several functions away from the actual object.
+- `satisfies` used where the author actually wanted an annotation (or vice versa) — look at what happens on the *next* assignment to the variable, not just the first one, since that's where the inferred-vs-declared gap shows up.
+- `as const` applied to something that's about to be mutated — a spread or a `.push` on a value marked `as const` is a `readonly`-violation error waiting to happen, not a runtime bug the type system missed.
+
+<SpotTheBug code={`const defaultConfig = { method: "GET", retries: 3 };
+
+function send(m: "GET" | "POST") {}
+
+function withOverrides(overrides: Partial<typeof defaultConfig>) {
+  const merged = { ...defaultConfig, ...overrides };
+  send(merged.method);
+}`}>
+`defaultConfig` has no `as const`, so `typeof defaultConfig` infers `{ method: string; retries: number }` — the literal `"GET"` already widened to `string` at the point of declaration. Spreading it into `merged` doesn't recover the literal, so `merged.method` is `string`, and the real diagnostic is `TS2345: Argument of type 'string' is not assignable to parameter of type '"GET" | "POST"'`. The fix is `const defaultConfig = { method: "GET", retries: 3 } as const;` (or annotate `method` with the literal union directly), so the literal survives the spread.
+</SpotTheBug>
 
 export const quizLit = [
   {
@@ -126,6 +232,7 @@ export const quizLit = [
       'x is string, y is "GET"',
     ],
     answer: 1,
+    explain: '`const` can never be reassigned, so TypeScript keeps the exact literal. `let` could be reassigned to any string later, so it widens to the general `string` type.',
   },
   {
     q: 'Why is `method` typed as string in `const config = { method: "GET" }`?',
@@ -136,6 +243,7 @@ export const quizLit = [
       'Because method is a reserved word',
     ],
     answer: 1,
+    explain: 'Even though `config` itself is a `const`, `config.method` can still be reassigned (`config.method = "POST"` is legal), so the compiler widens the property to `string`.',
   },
   {
     q: 'What does `as const` do?',
@@ -146,6 +254,7 @@ export const quizLit = [
       'Only works on numbers',
     ],
     answer: 1,
+    explain: '`as const` freezes an entire value tree: literals stay literal, object properties become `readonly`, and array literals become `readonly` tuples instead of a general array type.',
   },
   {
     q: 'Why is a union of literals like "GET" | "POST" better than string for a parameter?',
@@ -156,6 +265,29 @@ export const quizLit = [
       'There is no difference',
     ],
     answer: 1,
+    explain: 'A literal union is the precise set of allowed values, checked at every call site — a typo like `"GTE"` fails to compile instead of silently reaching the server as a plain `string` would.',
+  },
+  {
+    q: '```ts\ntype Channel = string | number[];\n\nlet palette = {\n  red: [255, 0, 0],\n  note: "middle-c",\n} satisfies Record<string, Channel>;\n\npalette.red = "not an array anymore";\n```\nDoes this compile, and why?',
+    options: [
+      'Yes — satisfies widens palette to Record<string, Channel>, and string is a valid Channel',
+      'No — satisfies keeps palette.red at its narrower inferred type, number[], so assigning a string fails',
+      'Yes — satisfies has no effect on assignability at all',
+      'No — satisfies forbids any later assignment to the object',
+    ],
+    answer: 1,
+    explain: '`satisfies` only checks the literal against `Record<string, Channel>` once — it never becomes the variable\'s type. `palette.red`\'s real type stays the inferred `number[]`, so `TS2322: Type \'string\' is not assignable to type \'number[]\'` fires. A plain `: Record<string, Channel>` annotation would have allowed the reassignment.',
+  },
+  {
+    q: '```ts\nconst defaultConfig = { method: "GET", retries: 3 };\nfunction send(m: "GET" | "POST") {}\nfunction withOverrides(overrides: Partial<typeof defaultConfig>) {\n  const merged = { ...defaultConfig, ...overrides };\n  send(merged.method);\n}\n```\nWhy does `send(merged.method)` fail to compile?',
+    options: [
+      'send does not accept objects',
+      'defaultConfig has no as const, so method widened to string at declaration, and spreading never recovers the literal',
+      'Partial removes all properties',
+      'It compiles fine',
+    ],
+    answer: 1,
+    explain: 'Without `as const`, `defaultConfig.method` is already `string`, not `"GET"`, the moment it\'s declared. Every spread and merge downstream inherits that widened type, so `merged.method` is `string` and fails `TS2345` against the `"GET" | "POST"` parameter.',
   },
 ];
 

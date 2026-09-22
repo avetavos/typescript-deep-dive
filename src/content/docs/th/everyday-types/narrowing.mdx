@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## จุดประสงค์ของ union คือการ narrow
 
@@ -47,6 +49,39 @@ function area(shape: Circle | Square) {
   return shape.side ** 2;               // shape is Square
 }
 ```
+
+### `in` กับ optional property
+
+`in` narrow ด้วยการดูว่า member ไหนของ union**ประกาศ**ว่ามี property นั้นเลย — ไม่ใช่ดูว่า property นั้นมีอยู่จริงตอน runtime หรือเปล่า แปลว่ามันทำงานได้แม้ property จะเป็น optional ตราบใดที่มีแค่ฝั่งเดียวของ union ที่ประกาศมัน:
+
+```ts
+interface Cat { meow(): void }
+interface Dog { bark(): void; leash?: string }
+
+function speak(pet: Cat | Dog) {
+  if ("leash" in pet) {
+    pet.bark(); // pet narrowed to Dog -- because only Dog even declares leash
+  }
+}
+```
+
+อันนี้ narrow เป็น `Dog` แม้กับ `Dog` ที่ `leash` ตอนนี้เป็น `undefined` — `in` เช็ค shape ที่*ประกาศไว้ใน type*ไม่ใช่ค่าจริง และมีแค่ `Dog` เท่านั้นที่มี key `leash` เลย ไม่ว่าจะ optional หรือไม่ ถ้าทั้งสอง member ประกาศ optional property ตัวเดียวกัน `in` อย่างเดียวแยกไม่ออก ต้องมี discriminant จริง ๆ
+
+### Equality narrowing ระหว่างสองตัวแปร
+
+การเทียบสองตัวแปรด้วย `===` narrow **ทั้งคู่**ให้เหลือแค่สิ่งที่มีร่วมกัน — ไม่ใช่แค่ฝั่งเดียวเป็น literal:
+
+```ts
+function compare(a: string | number, b: string | boolean) {
+  if (a === b) {
+    // only string is common to both unions -- narrows both to string
+    a.toUpperCase();
+    b.toUpperCase();
+  }
+}
+```
+
+ทั้ง `a` และ `b` ไม่ใช่ literal เลย นี่จึงไม่ใช่กรณี `if (x === "a")` — compiler ให้เหตุผลว่า `a === b` เป็น `true` ได้ก็ต่อเมื่อทั้งคู่ถือ value จาก*ส่วนที่ตัดกัน*ของ possible type ทั้งสอง คือ `string` ตัวแปรทั้งสองตัว narrow ไปด้วยกันใน `if` แม้จะไม่ได้เทียบกับค่าคงที่เลยสักตัว
 
 ## Discriminated union: pattern ที่ควรหยิบมาใช้
 
@@ -119,6 +154,45 @@ function handle(v: unknown) {
 
 predicate คือคำสัญญาต่อ compiler: "ถ้าอันนี้ return true ให้มอง argument เป็น `T`" นี่คือวิธี narrow `unknown` จากข้อมูลภายนอก และวิธีที่ library เปิด validation ที่ type system เชื่อถือ
 
+### Type predicate โกหกได้
+
+สัญญานั้นไม่เคยถูกเช็คกับ body ของ function เลย — compiler เชื่อ *signature* ไม่ใช่ implementation type-guard function ที่โกหก compile ผ่านโดยไม่มี error เลย:
+
+```ts
+function isString(x: unknown): x is string {
+  return true; // lies -- always claims true, no real check
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase()); // trusted -- x is "string" here
+  }
+}
+```
+
+```ts
+// @run
+function isString(x: unknown): x is string {
+  return true; // lies -- always claims true, no real check
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase()); // trusted -- x is "string" here
+  }
+}
+
+shout(42); // not a string at all
+```
+
+รันจริงแล้ว crash ตรงจุดที่ compiler บอกว่าปลอดภัย:
+
+```text
+TypeError: x.toUpperCase is not a function
+```
+
+นี่คือคำเตือนหลักของคอร์สในเวอร์ชันที่คมที่สุด: type annotation ไหนก็ตาม — รวมถึง predicate — คือคำกล่าวอ้าง ไม่ใช่บทพิสูจน์ type guard ที่เขียนเองหรือ AI เขียนให้ น่าเชื่อถือแค่ที่ logic จริงของมันเท่านั้น อ่าน body ของ custom `x is T` function เสมอก่อนจะเชื่อว่ามัน narrow ไปเป็นอะไร
+
 ## Assertion function: `asserts x is T`
 
 ญาติของ type guard คือ **assertion function** ซึ่ง throw แทนที่จะ return boolean และ narrow ให้ตลอด scope ที่เหลือ:
@@ -135,6 +209,33 @@ function use(v: string | null) {
 ```
 
 หลังเรียก compiler รู้ว่าเงื่อนไขที่ assert เป็นจริง (ไม่งั้นคง throw ไปแล้ว) เลย narrow ตาม นี่คือวิธีที่ helper แบบ `assert` และ `assert` ของ Node ให้ type narrowing มาฟรี ๆ
+
+### `unknown` ใน `catch`: narrow error ก่อนจะใช้งานได้
+
+ใต้ `strict` (เจาะจงคือ `useUnknownInCatchVariables` เปิดโดย default ตั้งแต่ TypeScript 4.4 เมื่อไหร่ก็ตามที่ `strict` เปิด) exception ที่ catch ได้ type เป็น `unknown` ไม่ใช่ `any` — เพราะ JavaScript ให้ `throw` อะไรก็ได้จริง ๆ compiler เลยปฏิเสธที่จะสันนิษฐานว่ามัน shape เหมือน `Error`:
+
+```ts
+// @expect-error TS18046
+try {
+  JSON.parse("{");
+} catch (e) {
+  console.log(e.message); // ❌ 'e' is of type 'unknown'.
+}
+```
+
+narrow มันแบบเดียวกับที่ narrow `unknown` ตัวอื่น ที่พบบ่อยที่สุดคือด้วย `instanceof`:
+
+```ts
+try {
+  JSON.parse("{");
+} catch (e) {
+  if (e instanceof Error) {
+    console.log(e.message); // ✅ narrowed from unknown
+  }
+}
+```
+
+นี่คือการประยุกต์ใช้ theme ทั้งหมดของโมดูลนี้แบบตรง ๆ ในชีวิตประจำวัน: `catch` ยื่น type ที่กว้างที่สุดให้โดยตั้งใจ และ narrowing คือสิ่งที่เปลี่ยนมันกลับเป็นอะไรที่คุณเรียก `.message` ได้อย่างปลอดภัย
 
 ## Inferred type predicate (TypeScript 5.5)
 
@@ -206,8 +307,138 @@ function f(value: number, max: number) {
 
 literal `true`, `false`, `0` และ `1` ยังใช้ได้ (`while (true)` เป็นสำนวนปกติ) regex *literal* ก็ถูกตรวจ syntax ตั้งแต่ 5.5 ด้วย วงเล็บไม่ครบหรือ backreference ไปยัง group ที่ไม่มีจึงเป็น compile error ไม่ใช่เซอร์ไพรส์ตอน runtime
 
+## ข้อจำกัดของ narrowing: หายข้าม closure, มองโลกในแง่ดีข้าม `await`
+
+narrowing เป็น property ของ *control-flow graph แบบ linear* ที่ compiler สร้างให้ function body เดียว — และ graph นั้นมี edge จริงที่มันมองไม่เห็นข้ามไปได้
+
+**หายข้าม closure** narrowing บน property ของ object ไม่รอดเมื่อถูกอ่านข้างใน nested function เพราะ function นั้นอาจรันเมื่อไหร่ก็ได้ทีหลัง หลังจากอะไรบางอย่างไป mutate property นั้นแล้ว:
+
+```ts
+// @expect-error TS2339
+interface State { id: string | number }
+function handleState(state: State) {
+  if (typeof state.id === "string") {
+    setTimeout(() => {
+      state.id.toUpperCase(); // property narrowing does not survive a closure
+    }, 0);
+  }
+}
+```
+
+ทางแก้คือ capture ค่าที่ narrow แล้วเข้า local `const` *ก่อน* สร้าง closure — `const` reassign ไม่ได้เลย type ที่ narrow แล้วของมันจึงพกเข้า nested function ได้อย่างปลอดภัย:
+
+```ts
+interface State { id: string | number }
+function handleState(state: State) {
+  if (typeof state.id === "string") {
+    const id = state.id; // capture the narrowed value in a local const
+    setTimeout(() => {
+      id.toUpperCase(); // ✅ id is a const, never reassigned — narrowing survives
+    }, 0);
+  }
+}
+```
+
+**มองโลกในแง่ดีข้าม `await`** `await` ไม่ได้สร้าง function scope ใหม่ narrowing เลย*รอด*ข้ามมันได้ในเชิง syntax — แต่นั่นจริง ๆ แล้ว unsound เพราะ call ที่ await อยู่รันโค้ดอะไรก็ได้ที่อาจ mutate ค่าที่ narrow ไว้ระหว่างที่ function ของคุณถูกพักไว้ และ compiler ไม่มีทางรู้เลย:
+
+```ts
+// @run
+interface State { id: string | number }
+
+async function corrupt(state: State) {
+  state.id = 42; // runs while the caller is suspended at its own await
+}
+
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state); // TS has no idea this mutates state.id
+    console.log(state.id.toUpperCase()); // still typed string here -- but is it?
+  }
+}
+
+run({ id: "abc" });
+```
+
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย** — TypeScript ไม่มี interprocedural analysis เลยไม่รู้เลยว่า `corrupt` แตะ `state.id` ด้วย ยังคงเชื่อ narrowing จากก่อน `await` ต่อไป รันจริงแล้ว crash:
+
+```text
+TypeError: state.id.toUpperCase is not a function
+```
+
+บทเรียนนี้ generalize ได้: narrowing น่าเชื่อถือแค่ที่ความมั่นใจของ compiler ว่าไม่มีอะไรอื่นรันแทรกระหว่างนั้น closure อาจรันทีหลัง — narrowing หายไปโดยตั้งใจ แบบระมัดระวัง `await` รัน *ตอนนี้เลย* ใน function เดียวกัน narrowing เลยรอดแบบมองโลกในแง่ดี — ถึงแม้โค้ดจริง รวมถึงโค้ดที่คุณควบคุมไม่ได้ จะมีโอกาส invalidate มันระหว่างนั้น re-check (หรือ re-narrow) ค่าที่ share และ mutable ได้ทันทีหลัง `await` แทนที่จะเชื่อ check ที่เกิดขึ้นก่อนหน้ามัน
+
+<TSPlayground code={narrowingLimitsCode} id="narrowing-limits-await" title="Narrowing survives await, but it's optimistic" />
+
+export const narrowingLimitsCode = `interface State { id: string | number }
+
+async function corrupt(state: State) {
+  state.id = 42; // runs while the caller is suspended at its own await
+}
+
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state); // TS has no idea this mutates state.id
+    console.log(state.id.toUpperCase()); // still typed string here -- but is it?
+  }
+}
+
+run({ id: "abc" });`;
+
+## Mental Model
+
+<Mermaid title="Narrowing คือคำกล่าวอ้างที่ compiler เชื่อ เท่าที่มันมองเห็นเท่านั้น" code={narrowMentalDiagram} />
+
+export const narrowMentalDiagram = `flowchart TD
+  check["A runtime check the compiler understands\n(typeof, instanceof, in, equality, discriminant)"] --> cfa["Tracked in the linear control-flow graph\nof THIS function body"]
+  cfa --> same["Used later in the SAME graph\n(if/else, switch, after an await)"] --> trusted["Narrowing holds"]
+  cfa --> escapes["Read inside a NESTED function\n(closure, setTimeout, event handler)"] --> lost["Narrowing lost -- could run any time"]
+  guard["A custom function returning x is T"] --> sig["Compiler trusts the SIGNATURE"]
+  sig -.->|"never checks"| body["...not the function body"]`;
+
+narrowing rule ทุกตัวในบทนี้คือ compiler ติดตามสิ่งเดียว: คำกล่าวอ้างหนึ่งอัน และมันเดินทางไปได้ไกลแค่ไหนก่อนที่อะไรบางอย่างจะ invalidate มัน `typeof` check คือคำกล่าวอ้างที่ถูกติดตามแม่นยำผ่าน flow แบบ linear ของ function เดียว type predicate คือคำกล่าวอ้างที่ compiler เชื่อจาก signature เฉยๆ ไม่เคยตรวจกับ body เลย `await` ไม่ได้ตัดจบ flow คำกล่าวอ้างเลยรอดข้ามมันได้ — แบบมองโลกในแง่ดี เพราะโค้ดจริงรันแทรกระหว่างนั้น closure เริ่ม flow *ใหม่* ที่อาจรันเมื่อไหร่ก็ได้ compiler เลยระมัดระวังปฏิเสธที่จะพกคำกล่าวอ้างเก่าเข้าไป ไม่มีอะไรในนี้เป็นเรื่องสุ่ม: มันคือความมั่นใจเท่าที่ static analysis ของ function body เดียว อ่านจากบนลงล่าง ให้ได้จริง ๆ
+
+## ข้อแลกเปลี่ยน
+
+| เทคนิค | ได้อะไร | เสียอะไร |
+|---|---|---|
+| built-in operator (`typeof`, `instanceof`, `in`, equality) | ไม่มีต้นทุน ไม่ต้องเขียน code เอง compiler verify กับ check จริง | ครอบแค่ pattern ที่ compiler รู้จักโดยธรรมชาติเท่านั้น |
+| discriminated union + exhaustive `switch` | variant ใหม่คือ compile error จนกว่าจะ handle ครบทุกที่ | ต้องมี literal tag ร่วมกันทุก variant ตั้งแต่แรก |
+| custom type guard (`x is T`) | ห่อ validation logic อะไรก็ได้ไว้หลัง check ที่ reuse ได้ | compiler เชื่อ signature ไม่ใช่ body — guard ที่ผิดหรือไม่ครบ compile ผ่านสะอาด |
+| assertion function (`asserts x is T`) | narrow ให้ตลอด scope ที่เหลือ ไม่ใช่แค่ branch เดียว | มีปัญหาความเชื่อใจแบบเดียวกับ type guard บวก throw แทนที่จะ branch |
+| capture เข้า `const` ก่อน closure | คืน narrowing ที่ closure จะทำหายไปกลับมา | ตัวแปร local เพิ่มหนึ่งตัวต่อค่าที่ narrow แล้วที่ใช้ใน callback |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **function ที่ return `x is T` ถูก compiler verify ว่าเช็คตามที่มันกล่าวอ้างจริง** ไม่จริง — predicate ถูกเชื่อจาก signature เพียงอย่างเดียว guard ที่ return `true` เสมอ หรือเช็คผิดอย่าง compile ผ่านโดยไม่มี error เลย
+- **narrow ตัวแปรก่อน `await` ยังปลอดภัยหลังจากนั้น** มันถูกรักษาไว้ในเชิง syntax แต่ไม่ได้ปลอดภัยจริง — operation ที่ await อยู่รันโค้ดที่อาจ mutate ค่านั้นระหว่างที่ function ของคุณถูกพักไว้ compiler มองไม่เห็นเรื่องนั้นเลย
+- **narrow ตัวแปรก่อนสร้าง closure จะรอดข้างในนั้น** ไม่รอด สำหรับ property access — closure อาจรันเมื่อไหร่ก็ได้ทีหลัง compiler เลยทิ้ง narrowing แทนที่จะเสี่ยงว่ามัน stale local `const` ที่ capture ไว้ก่อนคือทางแก้
+- **`in` ทำงานได้ก็ต่อเมื่อ property มีอยู่จริงตอน runtime** มัน narrow จากการดูว่า union member ไหน*ประกาศ*ว่ามี property นั้นใน type ของมัน เลยทำงานได้แม้กับ optional property ที่ตอนนี้เป็น `undefined` ตราบใดที่มีแค่ member เดียวที่ประกาศ key นั้นเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ narrowing logic ที่ generate มา ให้เช็คสิ่งเหล่านี้:
+
+- type-guard function (`x is T`) ที่ body เช็คอะไรบางอย่างที่อ่อนกว่าที่มันกล่าวอ้างมาก — `typeof x === "object" && x !== null` แล้ว return `x is { id: string; name: string }` เป็น shape ที่พบบ่อย และมัน compile ผ่านโดยไม่มี error เลยทั้งที่กล่าวอ้างมากกว่าที่ verify จริง
+- ค่าที่ narrow ไว้ก่อน `await` แล้วใช้ทันทีหลังจากนั้นโดยไม่ re-check — โดยเฉพาะถ้าอะไรที่ await อยู่มีโอกาสแตะ shared object หรือ module-level state เดียวกัน
+- ค่าที่ narrow แล้วถูกอ่านข้างใน `setTimeout`, event handler หรือ callback อื่นที่ประกาศข้างใน branch ที่ narrow ไว้ — ถ้าเป็น property access (ไม่ใช่ local ที่ capture ไว้) type ตรงนั้นมักจะกว้างกว่าที่โค้ดรอบข้างบอกเป็นนัย
+- assertion function หรือ type guard ที่ใช้ validate ข้อมูลข้าม boundary จริง (JSON ที่ parse มา, response จาก fetch) ด้วย check ที่ยืนยันแค่ "เป็น object" ไม่ใช่ shape ที่ต้องการจริง
+
+<SpotTheBug code={`function isValidUser(x: unknown): x is { id: string; name: string } {
+  return typeof x === "object" && x !== null;
+}
+
+function greet(input: unknown) {
+  if (isValidUser(input)) {
+    console.log(\`Hello, \${input.name}\`);
+  }
+}
+
+greet({ id: "1" });`}>
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย** และไม่ crash ด้วย — มันแค่พิมพ์ `Hello, undefined` แบบเงียบ ๆ `isValidUser` กล่าวอ้าง predicate ที่แข็งแรงกว่ามากคือ `x is { id: string; name: string }` แต่ body ของมันเช็คแค่ "เป็น non-null object" ซึ่ง `{ id: "1" }` ผ่านโดยไม่เคยมี property `name` เลย เพราะ compiler ไม่เคยเช็ค body ของ type guard กับ predicate ที่มันกล่าวอ้าง `greet` เลยเชื่อว่า `input.name` เป็น `string` — จริง ๆ มันเป็น `undefined` และการ interpolate ด้วย template literal ก็แปลงมันเป็น string ให้เฉย ๆ โดยไม่ throw ทางแก้คือทำให้ runtime check ของ guard ตรงกับที่มันกล่าวอ้าง: `typeof x === "object" && x !== null && "id" in x && "name" in x && typeof (x as any).name === "string"` หรือใช้ library validation จริงที่รักษา check กับ type ให้ตรงกันเสมอ
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บน tag นั้น แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) ที่ compiler เชื่อถือ
+narrowing คือวิธีเปลี่ยน union กว้าง ๆ ให้เป็น type เฉพาะที่ใช้งานได้: compiler อ่าน control flow (`typeof`, `instanceof`, `in`, truthiness, equality) แล้วย่อ type ต่อ branch model variant เป็น **discriminated union** ที่มี literal tag ร่วมกัน `switch` บน tag นั้น แล้วเพิ่ม `never` default เพื่อ **exhaustiveness ตอน compile** type predicate ถูกเชื่อจาก signature ไม่เคยตรวจกับ body เลย และ narrowing บน property หายข้าม closure แต่รอดข้าม `await` แบบมองโลกในแง่ดี (ซึ่งจริง ๆ unsound) สำหรับ logic เอง เขียน type guard (`x is T`) หรือ assertion function (`asserts x is T`) แต่อ่าน body ของมันเสมอก่อนจะเชื่อ
 </Callout>
 
 export const quizNarrow = [
@@ -220,6 +451,7 @@ export const quizNarrow = [
       'การลบ branch ที่ไม่ใช้',
     ],
     answer: 1,
+    explain: 'compiler อ่าน runtime check ธรรมดา (typeof, instanceof, in, equality) แล้วย่อ union ให้เหลือ case ที่ต้องเป็นจริงในแต่ละ branch — ไม่มีการ cast เลย',
   },
   {
     q: 'อะไรนิยาม discriminated union?',
@@ -230,6 +462,7 @@ export const quizNarrow = [
       'ใช้ intersection แทน union',
     ],
     answer: 0,
+    explain: 'literal field ร่วมกัน (อย่าง kind: "circle") ทำให้ switch narrow เหลือ member ที่ตรงได้ — tag ร่วมกันนั้นแหละที่ทำให้มันเป็น "discriminated"',
   },
   {
     q: 'การ assign เข้า `never` ใน branch default ช่วยอะไร?',
@@ -240,6 +473,7 @@ export const quizNarrow = [
       'ไม่มีผล',
     ],
     answer: 1,
+    explain: 'พอทุก case ที่ตั้งชื่อไว้ถูก handle ครบ value ที่เหลือใน default คือ never เพิ่ม union member ใหม่โดยไม่มี case ทำให้ value นั้นไม่ใช่ never อีกต่อไป การ assign เลย compile ไม่ผ่าน',
   },
   {
     q: 'function ที่ return `x is string` (type predicate) ทำอะไร?',
@@ -250,6 +484,7 @@ export const quizNarrow = [
       'แปลง x เป็น string',
     ],
     answer: 1,
+    explain: 'type predicate เป็นสัญญาณให้ compiler ไม่ใช่การแปลงค่าตอน runtime — มันบอก TypeScript ว่าจะ narrow argument ยังไงเมื่อ function return true',
   },
   {
     q: 'assertion function `asserts cond` ทำอะไรหลังถูกเรียก?',
@@ -260,6 +495,7 @@ export const quizNarrow = [
       'run เฉพาะใน test',
     ],
     answer: 1,
+    explain: 'assertion function throw แทนที่จะ return boolean — การไปถึงบรรทัดหลังการเรียกพิสูจน์ว่าเงื่อนไขเป็นจริง compiler เลย narrow ให้ตลอด scope ที่เหลือ ไม่ใช่แค่ branch เดียว',
   },
   {
     q: 'TypeScript 5.5+ infer type predicate ให้ function ที่ไม่ได้เขียน `x is T` เมื่อไร?',
@@ -270,6 +506,29 @@ export const quizNarrow = [
       'ไม่เคย — ต้องเขียน predicate เองเสมอ',
     ],
     answer: 1,
+    explain: 'การ infer ระมัดระวังและเจาะจง: ไม่มี return type annotation, return เดียวพอดี, boolean ผูกกับ parameter และ parameter ไม่ถูก assign ใหม่ — อะไรที่ซับซ้อนกว่านั้นยังต้องเขียน predicate เอง',
+  },
+  {
+    q: '```ts\nfunction isString(x: unknown): x is string {\n  return true;\n}\n\nfunction shout(x: unknown) {\n  if (isString(x)) {\n    console.log(x.toUpperCase());\n  }\n}\n\nshout(42);\n```\nโค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?',
+    options: [
+      'compile error — predicate ต้องเช็ค typeof x === "string" จริง ๆ',
+      'compile ผ่าน แต่ throw ตอน runtime -- predicate ถูกเชื่อจาก signature ไม่เคยเช็คกับ body',
+      'compile ผ่านและรันได้ปกติ -- isString return true เสมอเลยปลอดภัยเสมอ',
+      'compile error -- unknown narrow ด้วย custom function ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'compiler เชื่อ signature ของ type predicate ไม่ใช่ implementation ของมัน เลย guard ที่ return true เสมอ compile ผ่านโดยไม่มี error เรียก shout(42) แล้ว crash ด้วย "x.toUpperCase is not a function" ตรงจุดที่ compiler บอกว่าปลอดภัยพอดี',
+  },
+  {
+    q: '```ts\ninterface State { id: string | number }\nasync function corrupt(state: State) {\n  state.id = 42;\n}\nasync function run(state: State) {\n  if (typeof state.id === "string") {\n    await corrupt(state);\n    state.id.toUpperCase();\n  }\n}\n```\n`run` compile ผ่านไหม และ narrowing หลัง `await corrupt(state)` ปลอดภัยจริงหรือเปล่า?',
+    options: [
+      'compile ไม่ผ่าน -- await ล้าง narrowing เสมอ',
+      'compile ผ่าน แต่ narrowing ไม่ sound -- corrupt mutate state.id ได้ระหว่างที่ run ถูกพักไว้ และ compiler ไม่มีทางรู้',
+      'compile ผ่านและปลอดภัยเต็มที่ -- await รักษา narrowing ถูกต้อง',
+      'compile ไม่ผ่าน -- state.id reassign ข้างใน corrupt ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'await ไม่ได้สร้าง function scope ใหม่ narrowing เลยรอดข้ามมันได้ในเชิง syntax -- แต่ TypeScript ไม่มี interprocedural analysis เลยไม่รู้ว่า corrupt แตะ state.id เลย ยังเชื่อ narrowing ต่อไป การเรียก state.id.toUpperCase() หลังจากนั้นจริง ๆ throw ได้ตอน runtime',
   },
 ];
 
