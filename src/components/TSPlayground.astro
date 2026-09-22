@@ -1,0 +1,165 @@
+---
+import { Code } from 'astro-expressive-code/components';
+
+interface Props {
+  code: string;
+  id?: string;
+  title?: string;
+}
+
+const { code, id, title } = Astro.props;
+---
+
+<div class="tsp" data-code={code} id={id}>
+  {title && <p class="tsp__title">{title}</p>}
+  <Code code={code} lang="ts" />
+  <div class="tsp__bar">
+    <button class="tsp__check" data-check type="button">Check types</button>
+    <button class="tsp__run" data-run type="button">Run ▸</button>
+    <a class="tsp__open" data-open href="#" target="_blank" rel="noopener">Open in TS Playground</a>
+    <span class="tsp__badge" data-badge></span>
+  </div>
+  <p class="tsp__hint" data-hint hidden></p>
+  <pre class="tsp__err" data-err hidden><code></code></pre>
+  <pre class="tsp__out" data-out hidden><code></code></pre>
+</div>
+
+<script>
+  import {
+    loadTypeScript,
+    checkTypes,
+    fetchLibFromCdn,
+    hasTopLevelImport,
+    transpileForRun,
+    runInSandbox,
+    buildPlaygroundUrl,
+    CHECK_BADGE,
+    TS_CDN_VERSION,
+  } from './ts-runner';
+
+  const TH = document.documentElement.lang?.startsWith('th');
+  const T = TH
+    ? {
+        check: 'ตรวจ type',
+        run: 'รัน ▸',
+        open: 'เปิดใน TS Playground',
+        loading: 'กำลังโหลด TypeScript…',
+        running: 'กำลังรัน…',
+        noOutput: 'ไม่มี output',
+        noErrors: 'ไม่มี error',
+        importsNotRunnable: 'รันคำสั่ง import ไม่ได้ใน sandbox นี้ — ลองกด "เปิดใน TS Playground" แทน',
+        timedOut: 'รันไม่เสร็จภายในเวลาที่กำหนด (5 วินาที)',
+        failedCheck: 'ตรวจ type ไม่สำเร็จ — ลองใหม่อีกครั้ง',
+        badge: CHECK_BADGE.th,
+      }
+    : {
+        check: 'Check types',
+        run: 'Run ▸',
+        open: 'Open in TS Playground',
+        loading: 'Loading TypeScript…',
+        running: 'Running…',
+        noOutput: '(no output)',
+        noErrors: 'No errors ✓',
+        importsNotRunnable: "Imports aren't runnable in this sandbox — try \"Open in TS Playground\" instead.",
+        timedOut: 'Timed out after 5s.',
+        failedCheck: 'Type check failed — please try again.',
+        badge: CHECK_BADGE.en,
+      };
+
+  document.querySelectorAll<HTMLElement>('.tsp').forEach((tsp) => {
+    if (tsp.dataset.wired) return;
+    tsp.dataset.wired = '1';
+
+    const code = tsp.dataset.code || '';
+    const checkBtn = tsp.querySelector<HTMLButtonElement>('[data-check]');
+    const runBtn = tsp.querySelector<HTMLButtonElement>('[data-run]');
+    const openLink = tsp.querySelector<HTMLAnchorElement>('[data-open]');
+    const badge = tsp.querySelector<HTMLElement>('[data-badge]');
+    const hint = tsp.querySelector<HTMLElement>('[data-hint]');
+    const errBox = tsp.querySelector<HTMLElement>('[data-err]');
+    const outBox = tsp.querySelector<HTMLElement>('[data-out]');
+
+    if (checkBtn) checkBtn.textContent = T.check;
+    if (runBtn) runBtn.textContent = T.run;
+    if (openLink) {
+      openLink.textContent = T.open;
+      openLink.href = buildPlaygroundUrl(code);
+    }
+    if (badge) {
+      badge.textContent = T.badge;
+      badge.title = `Loaded from jsdelivr, pinned to ${TS_CDN_VERSION}`;
+    }
+
+    function showHint(text: string) {
+      if (!hint) return;
+      hint.textContent = text;
+      hint.hidden = false;
+    }
+    function hideHint() {
+      if (hint) hint.hidden = true;
+    }
+    function showError(text: string) {
+      if (!errBox) return;
+      errBox.querySelector('code')!.textContent = text;
+      errBox.hidden = false;
+    }
+    function showOutput(text: string) {
+      if (!outBox) return;
+      outBox.querySelector('code')!.textContent = text;
+      outBox.hidden = false;
+    }
+    function resetPanels() {
+      if (errBox) errBox.hidden = true;
+      if (outBox) outBox.hidden = true;
+    }
+
+    checkBtn?.addEventListener('click', async () => {
+      checkBtn.disabled = true;
+      resetPanels();
+      showHint(T.loading);
+      try {
+        const ts = await loadTypeScript();
+        const result = await checkTypes(ts, code, fetchLibFromCdn);
+        hideHint();
+        if (result.diagnostics.length === 0) {
+          showOutput(T.noErrors);
+        } else {
+          showError(result.diagnostics.join('\n'));
+        }
+      } catch {
+        hideHint();
+        showError(T.failedCheck);
+      } finally {
+        checkBtn.disabled = false;
+      }
+    });
+
+    runBtn?.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = T.running;
+      resetPanels();
+      if (hasTopLevelImport(code)) {
+        showError(T.importsNotRunnable);
+        runBtn.disabled = false;
+        runBtn.textContent = T.run;
+        return;
+      }
+      showHint(T.loading);
+      try {
+        const ts = await loadTypeScript();
+        const js = transpileForRun(ts, code);
+        hideHint();
+        const result = await runInSandbox(js);
+        if (result.errorLines.length) showError(result.errorLines.join('\n'));
+        if (result.timedOut) showError(T.timedOut);
+        showOutput(result.lines.join('\n') || T.noOutput);
+      } catch {
+        hideHint();
+        showError(T.failedCheck);
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = T.run;
+      }
+    });
+  });
+</script>

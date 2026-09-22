@@ -14,7 +14,10 @@ const files = globSync('src/content/docs/en/**/*.mdx').filter((f) => f.includes(
 
 const codesOf = (out) => [...new Set([...out.matchAll(/error (TS\d+):/g)].map((m) => m[1]))].sort();
 function compile(bin, file) {
-  const r = spawnSync(`node_modules/.bin/${bin}`, [...FLAGS, file], { encoding: 'utf8' });
+  // typescript-browser (5.9, for the in-browser TSPlayground) also ships a `tsc` bin and can win
+  // the .bin/ symlink race, so resolve the TS 7 binary by package path, not by .bin name.
+  const exe = bin === 'tsc' ? 'node_modules/typescript/bin/tsc' : `node_modules/.bin/${bin}`;
+  const r = spawnSync(exe, [...FLAGS, file], { encoding: 'utf8' });
   return { codes: codesOf(r.stdout + r.stderr), out: (r.stdout + r.stderr).trim() };
 }
 
