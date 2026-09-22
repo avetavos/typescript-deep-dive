@@ -24,10 +24,11 @@ id = 123; // ✅ ทั้งคู่เป็นสมาชิกของ un
 จุดที่ต้องระวัง: ระหว่างที่คุณถือ union อยู่ คุณแตะได้แค่ member ที่ **ทุก** branch มีร่วมกัน เพราะ compiler ยังไม่รู้ว่าคุณถือตัวไหน
 
 ```ts
+// @expect-error TS2339
 function printId(id: string | number) {
   id.toUpperCase();
-  // ❌ toUpperCase ไม่มีบน number
-  // ตรงนี้ใช้ได้แค่ member ที่ string และ number มีร่วมกัน
+  // ❌ toUpperCase does not exist on number.
+  // Only members common to string AND number are available here.
 }
 ```
 

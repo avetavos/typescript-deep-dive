@@ -37,6 +37,9 @@ TypeScript understands several ordinary JavaScript checks and narrows from them:
 - **Equality** — `if (x === "a")` narrows to that literal; comparing two variables narrows both.
 
 ```ts
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+
 function area(shape: Circle | Square) {
   if ("radius" in shape) {
     return Math.PI * shape.radius ** 2; // shape is Circle
@@ -78,14 +81,20 @@ This pattern is everywhere: Redux actions, API responses, state machines, result
 Here's the payoff. Add a `default` branch that assigns the value to `never`, and the compiler will error the day someone adds a new union member and forgets to handle it:
 
 ```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "rect"; width: number; height: number };
+
 function area(s: Shape): number {
   switch (s.kind) {
     case "circle": return Math.PI * s.radius ** 2;
     case "square": return s.side ** 2;
     case "rect":   return s.width * s.height;
     default:
-      const _exhaustive: never = s; // ❌ errors if a new kind is unhandled
+      const _exhaustive: never = s; // compiles now — every member is handled
       return _exhaustive;
+      // add a new Shape member and this line starts erroring, pointing at the gap
   }
 }
 ```
@@ -132,6 +141,10 @@ After the call, the compiler knows the asserted condition held (or execution wou
 You no longer have to write `x is T` for the simplest guards. When a function returns a boolean that is *about* its parameter, TypeScript infers the predicate for you:
 
 ```ts
+interface Bird { name: string }
+declare const countries: string[];
+declare const nationalBirds: Map<string, Bird>;
+
 function isBirdReal(bird: Bird | undefined) {
   return bird !== undefined;
 }
@@ -152,6 +165,8 @@ Three newer refinements remove common "why won't it narrow?" moments:
 - **`switch (true)` (5.3).** Each `case` expression narrows as if it were an `if`:
 
   ```ts
+  declare const x: unknown;
+
   switch (true) {
     case typeof x === "string": x.toUpperCase(); break;
     case x instanceof Date:     x.getTime();     break;
@@ -180,9 +195,13 @@ Three newer refinements remove common "why won't it narrow?" moments:
 The flip side of narrowing: a condition that can *never* narrow is almost always a bug, and 5.6 makes several of them errors. A bare regex or arrow function in an `if` is always truthy; a `??` whose left side can never be nullish is unreachable:
 
 ```ts
-if (/0x[0-9a-f]/) { }        // ❌ This kind of expression is always truthy
-if (x => 0) { }              // ❌ (you meant x >= 0)
-return value < max ?? 100;   // ❌ Right operand of ?? is unreachable
+// @expect-error TS2872 TS2869
+if (/0x[0-9a-f]/) { }             // ❌ this kind of expression is always truthy
+if ((x: number) => 0) { }         // ❌ (you meant x >= 0) — an arrow function is always truthy too
+
+function f(value: number, max: number) {
+  return value < max ?? 100;      // ❌ right operand of ?? is unreachable
+}
 ```
 
 Literal `true`, `false`, `0` and `1` stay allowed (`while (true)` is idiomatic). Regex *literals* are also syntax-checked since 5.5, so an unbalanced group or a backreference to a missing capture is a compile error, not a runtime surprise.

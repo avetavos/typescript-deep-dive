@@ -26,10 +26,15 @@ interface User {
 - **`?` (optional)** หมายถึง property อาจไม่มี สำคัญคือ optional property มี type `T | undefined` คุณจึงต้อง handle case `undefined`:
 
 ```ts
+// @expect-error TS18048
+interface User {
+  email?: string;
+}
+
 function greet(u: User) {
   u.email.toLowerCase();
-  // ❌ Object is possibly 'undefined'.
-  u.email?.toLowerCase(); // ✅ optional chaining จัดการกรณีไม่มี
+  // ❌ 'u.email' is possibly 'undefined'.
+  u.email?.toLowerCase(); // ✅ optional chaining handles the absence
 }
 ```
 
@@ -97,6 +102,10 @@ function paint(color: readonly number[]) { /* mutate color ไม่ได้ */
   function* naturals() { let i = 1; while (true) yield i++; }
   const evens = naturals().map((n) => n * 2).take(3).toArray(); // number[]
 
+  const userById = new Map<number, { email: string }>([
+    [1, { email: "ada@example.com" }],
+    [2, { email: "alan@example.com" }],
+  ]);
   const byEmail = new Map(userById.entries().map(([id, u]) => [u.email, id]));
   ```
 
@@ -104,14 +113,24 @@ function paint(color: readonly number[]) { /* mutate color ไม่ได้ */
 - **upsert (6.0):** `map.getOrInsert(key, fallback)` และ `map.getOrInsertComputed(key, () => …)`
 - **อยู่ใน `es2025` ด้วย:** `RegExp.escape`, `Promise.try`, `Promise.withResolvers` และ type ของ **Temporal** ในตัว (`Temporal.Now.instant()`) ไม่ต้องลง `@types` เพิ่มแล้ว
 
-## typed array เป็น generic แล้ว (5.7 / 5.9)
+<Callout title="Type มาก่อน runtime">
+`Map.prototype.getOrInsert` และ `Temporal` type-check ผ่านสะอาดบน lib ของ 7.0 แต่ Node 24.13 ยังไม่ implement ทั้งคู่ พิสูจน์บนเครื่องนี้ด้วย `node -e`: `new Map().getOrInsert("a", 1)` throw `TypeError: m.getOrInsert is not a function` และ `globalThis.Temporal === undefined` ได้ `true` ตัวอย่างจริงของ type ที่นำหน้าความจริงของ runtime — ตรวจด้วย `node -e` ก่อนเชื่อ claim "ไม่ต้องลง `@types` เพิ่มแล้ว" แม้จะอยู่ในย่อหน้าเดียวกับ API อื่น (`RegExp.escape`, `Promise.try`, Set algebra, iterator helper) ที่ใช้งานได้จริงวันนี้
+</Callout>
 
-`Uint8Array` และพวกพ้องกลายเป็น generic เหนือ buffer ของมัน — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — และใน 5.9 `ArrayBuffer` เลิกเป็น supertype ของ typed array ผลในทางปฏิบัติ: API ที่ต้องการ `BufferSource` จะปฏิเสธค่าที่มี type `ArrayBufferLike` และ `Buffer` ของ Node assign ให้ `Uint8Array<ArrayBuffer>` ไม่ได้อีก แก้ด้วยการระบุ type ของ buffer หรือส่ง `.buffer`:
+## typed array เป็น generic แล้ว (5.7)
+
+`Uint8Array` และพวกพ้องกลายเป็น generic เหนือ buffer ของมัน — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — และใน 5.7 `ArrayBuffer` เลิกเป็น supertype ของ typed array ผลในทางปฏิบัติ: การส่ง `Uint8Array` เข้า parameter ที่ type เป็น `ArrayBuffer` ไม่ทำงานแบบเดิมอีกแล้ว แก้ด้วยการส่ง `.buffer` เมื่อคุณเป็นเจ้าของ API:
 
 ```ts
+// @expect-error TS2345
 const data = new Uint8Array([1, 2, 3]);      // Uint8Array<ArrayBuffer>
+function send(b: ArrayBuffer) {}
 send(data.buffer);                            // ✅ ArrayBuffer
-function send(b: Uint8Array<ArrayBuffer>) {}  // ระบุให้ชัดเมื่อคุณเป็นเจ้าของ API
+
+// A plain Uint8Array (no buffer type argument) is Uint8Array<ArrayBufferLike> —
+// its .buffer can be a SharedArrayBuffer, so it still fails:
+declare const generic: Uint8Array;
+send(generic.buffer);                         // ❌ ArrayBufferLike is not assignable to ArrayBuffer
 ```
 
 ## `using`: cleanup resource ตาม scope (5.2)
@@ -119,13 +138,15 @@ function send(b: Uint8Array<ArrayBuffer>) {}  // ระบุให้ชัด�
 Explicit Resource Management — `using` และ `await using` — มาใน TypeScript 5.2 และตอนนี้ Node.js 24+ กับ browser สมัยใหม่รันได้ native ค่าที่มี `[Symbol.dispose]` (หรือ `[Symbol.asyncDispose]`) จะถูก cleanup เมื่อออกจาก block ในลำดับย้อนกลับ แม้จะ `throw`:
 
 ```ts
+import * as fs from "node:fs";
+
 function openFile(path: string) {
   const fd = fs.openSync(path, "r");
   return { fd, [Symbol.dispose]() { fs.closeSync(fd); } };
 }
 
 function read() {
-  using file = openFile("data.txt"); // ปิดให้อัตโนมัติเมื่อจบ block
+  using file = openFile("data.txt"); // closed automatically at block end
   return fs.readFileSync(file.fd);
 }
 ```

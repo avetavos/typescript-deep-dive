@@ -93,28 +93,46 @@ This is exactly why `array.forEach(x => arr.push(x))` type-checks even though `p
 
 Three recent checks change how functions type-check, with no new syntax:
 
-- **Never-initialized variables (5.7).** A `let` declared with a type but never assigned is an error even when the use sits inside a nested function:
+- **Never-initialized variables (5.7).** A `let` declared with a type but never assigned is an error even when the use sits inside a nested function.
+- **Each branch of a returned conditional is checked (5.8).** Previously an `any` on one side of `cond ? a : b` masked a wrong type on the other; now every branch must satisfy the declared return type.
+- **Callbacks that only return `null` or `undefined`.** `p.catch(() => null)` infers the handler's return type from what you wrote, so the awaited result widens to `T | null` — not an error at the call site, but a value you must narrow before use.
 
-  ```ts
-  function report() {
-    let result: number; // declared, never assigned
-    function print() {
-      console.log(result); // ❌ Variable 'result' is used before being assigned
-    }
+Never-initialized:
+
+```ts
+// @expect-error TS2454
+function report() {
+  let result: number; // declared, never assigned
+  function print() {
+    console.log(result); // ❌ Variable 'result' is used before being assigned
   }
-  ```
+}
+```
 
-- **Each branch of a returned conditional is checked (5.8).** Previously an `any` on one side of `cond ? a : b` masked a wrong type on the other; now every branch must satisfy the declared return type:
+Each conditional branch checked:
 
-  ```ts
-  declare const cache: Map<any, any>;
-  function getUrl(s: string): URL {
-    return cache.has(s) ? cache.get(s) : s;
-    //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
-  }
-  ```
+```ts
+// @expect-error TS2322
+declare const cache: Map<any, any>;
+function getUrl(s: string): URL {
+  return cache.has(s) ? cache.get(s) : s;
+  //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
+}
+```
 
-- **Callbacks that only return `null` or `undefined` (5.7).** Under `noImplicitAny`, `p.catch(() => null)` is an implicit-`any` return error when the generic return type can't be inferred — annotate the callback (`(): number | null => null`) or the receiving variable.
+Callback returning only `null`/`undefined`:
+
+```ts
+// @expect-error TS18047
+async function getNumber(): Promise<number> {
+  throw new Error("boom");
+}
+
+async function run() {
+  const n = await getNumber().catch(() => null); // n: number | null
+  n.toFixed(2); // ❌ 'n' is possibly 'null'
+}
+```
 
 And a reminder from the narrowing lesson: since 5.5 a boolean-returning function whose result is tied to its parameter gets an **inferred type predicate**, so many small guards no longer need `x is T` written out.
 

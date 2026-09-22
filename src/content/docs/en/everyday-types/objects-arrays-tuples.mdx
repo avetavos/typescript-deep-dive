@@ -26,9 +26,14 @@ interface User {
 - **`?` (optional)** means the property may be absent. Crucially, an optional property has type `T | undefined`, so you must handle the `undefined` case:
 
 ```ts
+// @expect-error TS18048
+interface User {
+  email?: string;
+}
+
 function greet(u: User) {
   u.email.toLowerCase();
-  // ❌ Object is possibly 'undefined'.
+  // ❌ 'u.email' is possibly 'undefined'.
   u.email?.toLowerCase(); // ✅ optional chaining handles the absence
 }
 ```
@@ -97,6 +102,10 @@ With `target` and `lib` at `es2025` (the TypeScript 7 default), a lot of collect
   function* naturals() { let i = 1; while (true) yield i++; }
   const evens = naturals().map((n) => n * 2).take(3).toArray(); // number[]
 
+  const userById = new Map<number, { email: string }>([
+    [1, { email: "ada@example.com" }],
+    [2, { email: "alan@example.com" }],
+  ]);
   const byEmail = new Map(userById.entries().map(([id, u]) => [u.email, id]));
   ```
 
@@ -104,14 +113,24 @@ With `target` and `lib` at `es2025` (the TypeScript 7 default), a lot of collect
 - **Upsert (6.0):** `map.getOrInsert(key, fallback)` and `map.getOrInsertComputed(key, () => …)`.
 - **Also in `es2025`:** `RegExp.escape`, `Promise.try`, `Promise.withResolvers`, and built-in **Temporal** types (`Temporal.Now.instant()`), so you no longer need extra `@types` for them.
 
-## Typed arrays are generic now (5.7 / 5.9)
+<Callout title="Type comes before runtime">
+`Map.prototype.getOrInsert` and `Temporal` type-check cleanly against the 7.0 `lib`, but Node 24.13 doesn't implement either yet. Proven on this machine with `node -e`: `new Map().getOrInsert("a", 1)` throws `TypeError: m.getOrInsert is not a function`, and `globalThis.Temporal === undefined` is `true`. A real example of a type that's ahead of the runtime — check with `node -e` before you trust a "no `@types` needed" claim, even in the same paragraph as APIs (`RegExp.escape`, `Promise.try`, Set algebra, iterator helpers) that do work today.
+</Callout>
 
-`Uint8Array` and friends became generic over their buffer — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — and in 5.9 `ArrayBuffer` stopped being a supertype of the typed arrays. The practical effect: APIs that want a `BufferSource` reject `ArrayBufferLike`-typed values, and Node's `Buffer` is no longer assignable to `Uint8Array<ArrayBuffer>`. Fix it by naming the buffer type or passing `.buffer`:
+## Typed arrays are generic now (5.7)
+
+`Uint8Array` and friends became generic over their buffer — `Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>` — and in 5.7 `ArrayBuffer` stopped being a supertype of the typed arrays. The practical effect: passing a `Uint8Array` to a parameter typed `ArrayBuffer` no longer works the way it used to. Fix it by taking the `.buffer` when you own the API:
 
 ```ts
+// @expect-error TS2345
 const data = new Uint8Array([1, 2, 3]);      // Uint8Array<ArrayBuffer>
+function send(b: ArrayBuffer) {}
 send(data.buffer);                            // ✅ ArrayBuffer
-function send(b: Uint8Array<ArrayBuffer>) {}  // be explicit when you own the API
+
+// A plain Uint8Array (no buffer type argument) is Uint8Array<ArrayBufferLike> —
+// its .buffer can be a SharedArrayBuffer, so it still fails:
+declare const generic: Uint8Array;
+send(generic.buffer);                         // ❌ ArrayBufferLike is not assignable to ArrayBuffer
 ```
 
 ## `using`: scoped cleanup for resources (5.2)
@@ -119,6 +138,8 @@ function send(b: Uint8Array<ArrayBuffer>) {}  // be explicit when you own the AP
 Explicit Resource Management — `using` and `await using` — shipped in TypeScript 5.2, and Node.js 24+ and modern browsers now run it natively. A value with `[Symbol.dispose]` (or `[Symbol.asyncDispose]`) is cleaned up when the block exits, in reverse order, even on `throw`:
 
 ```ts
+import * as fs from "node:fs";
+
 function openFile(path: string) {
   const fd = fs.openSync(path, "r");
   return { fd, [Symbol.dispose]() { fs.closeSync(fd); } };

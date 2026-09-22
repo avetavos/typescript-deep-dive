@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 **literal type** คือ type ที่มี value ได้ค่าเดียวคือ literal ที่ระบุ `"GET"` เป็น type และ value เดียวที่ assign ให้ type นี้ได้คือ string `"GET"` เช่นเดียวกับ `42`, `true` และอื่น ๆ
 
 ```ts
+// @expect-error TS2322
 let method: "GET" = "GET";
 method = "POST"; // ❌ Type '"POST"' is not assignable to type '"GET"'.
 ```
@@ -40,11 +41,12 @@ let   b = "GET"; // type: string   (widen — b reassign ได้)
 widening แบบเดียวกันเกิดกับ **property ของ object** ด้วย เพราะ property ของ object แก้ค่าได้โดย default:
 
 ```ts
+// @expect-error TS2345
 const config = { method: "GET" };
-// type: { method: string }  — ไม่ใช่ { method: "GET" }
+// type: { method: string }  — NOT { method: "GET" }
 
 function send(m: "GET" | "POST") {}
-send(config.method); // ❌ string assign ให้ "GET" | "POST" ไม่ได้
+send(config.method); // ❌ string is not assignable to "GET" | "POST"
 ```
 
 ถึง `config` จะเป็น `const` แต่ property `method` ยัง reassign ได้ (`config.method = "POST"` ทำได้) compiler เลย widen เป็น `string` จุดนี้ทำทุกคนงงครั้งหนึ่งเสมอ
@@ -54,10 +56,12 @@ send(config.method); // ❌ string assign ให้ "GET" | "POST" ไม่ไ�
 **const assertion** (`as const`) บอก compiler ว่า "มองค่านี้เป็น immutable แบบลึก และเก็บทุก literal ให้แคบไว้"
 
 ```ts
+function send(m: "GET" | "POST") {}
+
 const config = { method: "GET" } as const;
 // type: { readonly method: "GET" }
 
-send(config.method); // ✅ ตอนนี้ "GET" อยู่รอด
+send(config.method); // ✅ now "GET" survives
 ```
 
 `as const` ทำ 3 อย่างพร้อมกัน:
@@ -94,6 +98,7 @@ type Route = typeof ROUTES[keyof typeof ROUTES];
 `as const` ล็อก literal ไว้แต่ไม่เช็คว่า object ตรงกับ contract หรือไม่ annotation เช็คให้แต่ *แทนที่* type ที่ infer ได้ด้วย annotation นั้น `satisfies` เช็คให้และยังคง type แคบ ๆ ที่ infer ได้ไว้:
 
 ```ts
+// @expect-error TS2339
 type Theme = Record<string, string | [number, number, number]>;
 
 const theme = {
@@ -101,8 +106,8 @@ const theme = {
   accent: [255, 128, 0],
 } satisfies Theme;
 
-theme.accent[0]; // ✅ number — ยังเป็น tuple ไม่ถูก widen เป็น value type ของ Theme
-theme.typo;      // ❌ property ไม่มี — object รู้จักครบทุก key
+theme.accent[0]; // ✅ number — still a tuple, not widened to the Theme value type
+theme.typo;      // ❌ property does not exist — the object is fully known
 ```
 
 ใช้คู่กับ `as const` (`{ … } as const satisfies Theme`) เมื่ออยากได้ทั้ง member แบบ readonly literal *และ* การ validate ส่วนการรักษา literal ผ่าน generic function call ดู `const` type parameter ในโมดูล Generics

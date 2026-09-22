@@ -24,6 +24,7 @@ id = 123; // ✅ both are members of the union
 The catch: while you hold a union, you may only touch the members that **all** branches share, because the compiler can't know which one you have yet.
 
 ```ts
+// @expect-error TS2339
 function printId(id: string | number) {
   id.toUpperCase();
   // ❌ toUpperCase does not exist on number.

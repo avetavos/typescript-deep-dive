@@ -93,28 +93,46 @@ export const voidDiagram = `flowchart LR
 
 สาม check ใหม่ที่เปลี่ยนวิธี type-check function โดยไม่มี syntax ใหม่:
 
-- **ตัวแปรที่ไม่เคยถูก initialize (5.7)** `let` ที่ประกาศ type ไว้แต่ไม่เคย assign เป็น error แม้จุดที่ใช้จะอยู่ใน nested function:
+- **ตัวแปรที่ไม่เคยถูก initialize (5.7)** `let` ที่ประกาศ type ไว้แต่ไม่เคย assign เป็น error แม้จุดที่ใช้จะอยู่ใน nested function
+- **แต่ละ branch ของ conditional ที่ return ถูกเช็คแยก (5.8)** เมื่อก่อน `any` ฝั่งหนึ่งของ `cond ? a : b` กลบ type ผิดของอีกฝั่ง ตอนนี้ทุก branch ต้องเข้ากับ return type ที่ประกาศ
+- **callback ที่ return แค่ `null` หรือ `undefined`** `p.catch(() => null)` infer return type ของ handler จากสิ่งที่คุณเขียน ผลลัพธ์ที่ await ได้จึง widen เป็น `T | null` — ไม่ error ตรง call site แต่เป็นค่าที่คุณต้อง narrow ก่อนใช้
 
-  ```ts
-  function report() {
-    let result: number; // ประกาศไว้ ไม่เคย assign
-    function print() {
-      console.log(result); // ❌ Variable 'result' is used before being assigned
-    }
+ตัวแปรที่ไม่เคย initialize:
+
+```ts
+// @expect-error TS2454
+function report() {
+  let result: number; // declared, never assigned
+  function print() {
+    console.log(result); // ❌ Variable 'result' is used before being assigned
   }
-  ```
+}
+```
 
-- **แต่ละ branch ของ conditional ที่ return ถูกเช็คแยก (5.8)** เมื่อก่อน `any` ฝั่งหนึ่งของ `cond ? a : b` กลบ type ผิดของอีกฝั่ง ตอนนี้ทุก branch ต้องเข้ากับ return type ที่ประกาศ:
+แต่ละ branch ของ conditional ถูกเช็ค:
 
-  ```ts
-  declare const cache: Map<any, any>;
-  function getUrl(s: string): URL {
-    return cache.has(s) ? cache.get(s) : s;
-    //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
-  }
-  ```
+```ts
+// @expect-error TS2322
+declare const cache: Map<any, any>;
+function getUrl(s: string): URL {
+  return cache.has(s) ? cache.get(s) : s;
+  //                                  ^ ❌ Type 'string' is not assignable to type 'URL'
+}
+```
 
-- **callback ที่ return แค่ `null` หรือ `undefined` (5.7)** ภายใต้ `noImplicitAny` `p.catch(() => null)` เป็น error implicit-`any` return เมื่อ infer generic return type ไม่ได้ — annotate callback (`(): number | null => null`) หรือตัวแปรที่รับค่า
+callback ที่ return แค่ `null`/`undefined`:
+
+```ts
+// @expect-error TS18047
+async function getNumber(): Promise<number> {
+  throw new Error("boom");
+}
+
+async function run() {
+  const n = await getNumber().catch(() => null); // n: number | null
+  n.toFixed(2); // ❌ 'n' is possibly 'null'
+}
+```
 
 และย้ำจากบท narrowing: ตั้งแต่ 5.5 function ที่ return boolean ซึ่งผูกกับ parameter จะได้ **inferred type predicate** guard เล็ก ๆ หลายตัวจึงไม่ต้องเขียน `x is T` อีก
 

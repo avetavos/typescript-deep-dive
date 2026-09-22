@@ -37,11 +37,14 @@ TypeScript เข้าใจ JavaScript check ทั่วไปหลายต
 - **equality** — `if (x === "a")` narrow เป็น literal นั้น; เทียบสองตัวแปร narrow ทั้งคู่
 
 ```ts
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+
 function area(shape: Circle | Square) {
   if ("radius" in shape) {
-    return Math.PI * shape.radius ** 2; // shape เป็น Circle
+    return Math.PI * shape.radius ** 2; // shape is Circle
   }
-  return shape.side ** 2;               // shape เป็น Square
+  return shape.side ** 2;               // shape is Square
 }
 ```
 
@@ -78,14 +81,20 @@ pattern นี้อยู่ทุกที่: Redux action, API response, sta
 นี่คือของรางวัล เพิ่ม branch `default` ที่ assign value เข้า `never` แล้ว compiler จะ error ในวันที่มีคนเพิ่ม union member ใหม่แล้วลืม handle:
 
 ```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "rect"; width: number; height: number };
+
 function area(s: Shape): number {
   switch (s.kind) {
     case "circle": return Math.PI * s.radius ** 2;
     case "square": return s.side ** 2;
     case "rect":   return s.width * s.height;
     default:
-      const _exhaustive: never = s; // ❌ error ถ้ามี kind ใหม่ที่ยังไม่ handle
+      const _exhaustive: never = s; // compiles now — every member is handled
       return _exhaustive;
+      // add a new Shape member and this line starts erroring, pointing at the gap
   }
 }
 ```
@@ -132,15 +141,19 @@ function use(v: string | null) {
 guard ง่าย ๆ ไม่ต้องเขียน `x is T` เองอีกแล้ว เมื่อ function return boolean ที่ *เกี่ยวกับ* parameter ของมัน TypeScript จะ infer predicate ให้:
 
 ```ts
+interface Bird { name: string }
+declare const countries: string[];
+declare const nationalBirds: Map<string, Bird>;
+
 function isBirdReal(bird: Bird | undefined) {
   return bird !== undefined;
 }
-// infer ได้: (bird: Bird | undefined) => bird is Bird
+// inferred: (bird: Bird | undefined) => bird is Bird
 
 const birds = countries
   .map((c) => nationalBirds.get(c))
   .filter((b) => b !== undefined);
-//    ^? Bird[]   — ก่อน 5.5 ได้ (Bird | undefined)[]
+//    ^? Bird[]   — was (Bird | undefined)[] before 5.5
 ```
 
 compiler จะ infer predicate ก็ต่อเมื่อครบทั้งสี่ข้อ: function ไม่มี return-type annotation, มี `return` เดียว (และไม่มี implicit return `undefined`), boolean ที่ return ผูกกับ narrowing check บน parameter และ parameter ไม่ถูก assign ใหม่ อะไรที่ซับซ้อนกว่านั้น — หลาย return, check บน property ของตัวแปรที่ mutable — ยังต้องเขียน `x is T` เอง
@@ -152,6 +165,8 @@ compiler จะ infer predicate ก็ต่อเมื่อครบทั้
 - **`switch (true)` (5.3)** แต่ละ `case` expression narrow เหมือนเป็น `if`:
 
   ```ts
+  declare const x: unknown;
+
   switch (true) {
     case typeof x === "string": x.toUpperCase(); break;
     case x instanceof Date:     x.getTime();     break;
@@ -180,9 +195,13 @@ compiler จะ infer predicate ก็ต่อเมื่อครบทั้
 อีกด้านของ narrowing: เงื่อนไขที่ *ไม่มีทาง* narrow ได้แทบจะเป็น bug เสมอ และ 5.6 ทำให้หลายกรณีเป็น error regex หรือ arrow function เปล่า ๆ ใน `if` เป็น truthy ตลอด; `??` ที่ฝั่งซ้ายไม่มีทาง nullish คือ unreachable:
 
 ```ts
-if (/0x[0-9a-f]/) { }        // ❌ expression แบบนี้ truthy เสมอ
-if (x => 0) { }              // ❌ (คุณตั้งใจจะเขียน x >= 0)
-return value < max ?? 100;   // ❌ ฝั่งขวาของ ?? unreachable
+// @expect-error TS2872 TS2869
+if (/0x[0-9a-f]/) { }             // ❌ this kind of expression is always truthy
+if ((x: number) => 0) { }         // ❌ (you meant x >= 0) — an arrow function is always truthy too
+
+function f(value: number, max: number) {
+  return value < max ?? 100;      // ❌ right operand of ?? is unreachable
+}
 ```
 
 literal `true`, `false`, `0` และ `1` ยังใช้ได้ (`while (true)` เป็นสำนวนปกติ) regex *literal* ก็ถูกตรวจ syntax ตั้งแต่ 5.5 ด้วย วงเล็บไม่ครบหรือ backreference ไปยัง group ที่ไม่มีจึงเป็น compile error ไม่ใช่เซอร์ไพรส์ตอน runtime

@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 A **literal type** is a type whose only value is a single specific literal. `"GET"` is a type; the only value assignable to it is the string `"GET"`. Same for `42`, `true`, and so on.
 
 ```ts
+// @expect-error TS2322
 let method: "GET" = "GET";
 method = "POST"; // ❌ Type '"POST"' is not assignable to type '"GET"'.
 ```
@@ -40,6 +41,7 @@ let   b = "GET"; // type: string   (widened — b is reassignable)
 The same widening happens to **object properties**, because object properties are mutable by default:
 
 ```ts
+// @expect-error TS2345
 const config = { method: "GET" };
 // type: { method: string }  — NOT { method: "GET" }
 
@@ -54,6 +56,8 @@ Even though `config` is a `const`, its `method` property can be reassigned (`con
 A **const assertion** (`as const`) tells the compiler "treat this value as deeply immutable, and keep every literal narrow."
 
 ```ts
+function send(m: "GET" | "POST") {}
+
 const config = { method: "GET" } as const;
 // type: { readonly method: "GET" }
 
@@ -94,6 +98,7 @@ Without `as const`, `ROUTES` would be `{ home: string; profile: string; settings
 `as const` freezes the literals but gives you no check that the object matches a contract. An annotation gives you the check but *replaces* the inferred type with the annotation. `satisfies` does the check and keeps the narrow inferred type:
 
 ```ts
+// @expect-error TS2339
 type Theme = Record<string, string | [number, number, number]>;
 
 const theme = {
