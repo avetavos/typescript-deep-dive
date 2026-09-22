@@ -312,6 +312,17 @@ for (const enPath of files) {
     });
   }
 
+  // 7. every fenced ```ts block is byte-identical EN vs TH (fences ARE the
+  //    code in this course; TS Playground/verify-fences run the EN copy only)
+  {
+    const enF = fencedTsBlocks(enSrc), thF = fencedTsBlocks(thSrc);
+    if (enF.length !== thF.length) {
+      report(`${enPath}: ts fence count EN=${enF.length} TH=${thF.length}`);
+    } else {
+      enF.forEach((b, i) => { if (b !== thF[i]) report(`${enPath}: ts fence #${i} differs EN vs TH`); });
+    }
+  }
+
   // 6. no Thai characters inside a fenced ```ts block or code literal in TH file
   fencedTsBlocks(thSrc).forEach((block, i) => {
     if (THAI_RE.test(block)) {
