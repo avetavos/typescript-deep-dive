@@ -32,7 +32,7 @@ type UserKey = keyof User;
 ```ts
 type Dict = { [key: string]: number };
 type DictKey = keyof Dict;
-//   ^? string | number   (JS object key เข้าถึงด้วย number ได้ด้วย)
+//   ^? string | number   (JS object keys can be accessed by number too)
 ```
 
 ## Indexed access: `T[K]` lookup value type

@@ -95,7 +95,7 @@ config.port; // typed from the file; named imports are an error
 
 ```ts
 const routes = { home: "/", user: "/users/:id" } satisfies Record<string, `/${string}`>;
-routes.home; // ยังเป็น literal "/" — ไม่ถูกขยายเป็น string
+routes.home; // still the literal "/" — not widened to string
 ```
 
 **วันที่** TypeScript มี type ของ **Temporal** API อยู่ใน library `esnext` (`lib.esnext.temporal.d.ts` — ยังไม่ถูกรวมเข้า `es2025` ตรวจสอบแล้วกับ lib file จริงของเวอร์ชัน 7.0.2 ที่ติดตั้งอยู่) เมื่อ boundary ส่ง ISO timestamp มาให้ `Temporal.Instant.from(iso)` ให้ค่าที่ immutable และระบุ timezone ชัดเจน — เป็น type ภายในที่ดีกว่า `Date` ที่ mutable มาก และคาดว่า Node 26 จะเปิด Temporal เป็นค่าเริ่มต้น

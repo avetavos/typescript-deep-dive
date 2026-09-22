@@ -17,9 +17,9 @@ union มีประโยชน์ก็เพราะคุณ **narrow** �
 ```ts
 function printId(id: string | number) {
   if (typeof id === "string") {
-    id.toUpperCase(); // ✅ ตรงนี้ id เป็น string
+    id.toUpperCase(); // ✅ here id is string
   } else {
-    id.toFixed(2);    // ✅ ตรงนี้ id เป็น number
+    id.toFixed(2);    // ✅ here id is number
   }
 }
 ```
@@ -60,7 +60,7 @@ type Shape =
 
 function area(s: Shape): number {
   switch (s.kind) {
-    case "circle": return Math.PI * s.radius ** 2; // s เป็น member circle
+    case "circle": return Math.PI * s.radius ** 2; // s is the circle member
     case "square": return s.side ** 2;
     case "rect":   return s.width * s.height;
   }
@@ -112,7 +112,7 @@ function isString(x: unknown): x is string {
 
 function handle(v: unknown) {
   if (isString(v)) {
-    v.toUpperCase(); // ✅ v ถูก narrow เป็น string ด้วย guard
+    v.toUpperCase(); // ✅ v narrowed to string by the guard
   }
 }
 ```
@@ -130,7 +130,7 @@ function assert(cond: unknown, msg: string): asserts cond {
 
 function use(v: string | null) {
   assert(v !== null, "v must be set");
-  v.toUpperCase(); // ✅ v เป็น string ตั้งแต่ตรงนี้ไป — assert ตัด null ออก
+  v.toUpperCase(); // ✅ v is string from here on — the assert removed null
 }
 ```
 
@@ -178,7 +178,7 @@ compiler จะ infer predicate ก็ต่อเมื่อครบทั้
   ```ts
   function getUrls(url: string | URL, names: string[]) {
     if (typeof url === "string") url = new URL(url);
-    return names.map((n) => new URL(n, url)); // url: URL — ไม่ต้อง cast
+    return names.map((n) => new URL(n, url)); // url: URL — no cast needed
   }
   ```
 

@@ -34,7 +34,7 @@ type User = { profile?: { avatar?: string } };
 
 function avatar(u: User) {
   const url = u.profile?.avatar; // type: string | undefined
-  return url ?? "default.png";   // type: string  (?? ให้ fallback มา)
+  return url ?? "default.png";   // type: string  (?? supplied a fallback)
 }
 ```
 
@@ -73,8 +73,8 @@ function limit(value: number, max?: number) {
 `!` แบบ postfix บอก compiler ว่า "เชื่อฉัน อันนี้ไม่ null":
 
 ```ts
-const el = document.getElementById("app")!; // assert ว่าไม่ null
-el.innerHTML = "hi"; // ไม่ error — แต่ crash ถ้า #app ไม่มีอยู่
+const el = document.getElementById("app")!; // asserts non-null
+el.innerHTML = "hi"; // no error — but crashes if #app doesn't exist
 ```
 
 `!` **ลบ** check จริงทิ้งโดยไม่มีการ verify ตอน runtime เลย บางครั้งคุณรู้มากกว่า compiler จริง ๆ — แต่ทุก `!` คือจุดที่คุณ override safety net ไว้ และเป็นจุดที่การเปลี่ยนแปลงในอนาคตทำให้พังเงียบ ๆ ได้ เลือก check จริง (`if (!el) throw ...`) ที่ narrow อย่างซื่อสัตย์ดีกว่า เก็บ `!` ไว้สำหรับเคสที่พิสูจน์ได้
@@ -117,7 +117,7 @@ function area(s: Shape): number {
     case "circle": return Math.PI * s.r ** 2;
     case "square": return s.side ** 2;
     default:
-      const _exhaustive: never = s; // ✅ s เป็น never ตรงนี้ — ครบทุกเคสแล้ว
+      const _exhaustive: never = s; // ✅ s is never here — all cases handled
       return _exhaustive;
   }
 }

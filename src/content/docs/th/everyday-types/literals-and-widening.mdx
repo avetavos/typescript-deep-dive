@@ -35,7 +35,7 @@ TypeScript จะ **widen** literal ไปเป็น type ทั่วไป�
 
 ```ts
 const a = "GET"; // type: "GET"
-let   b = "GET"; // type: string   (widen — b reassign ได้)
+let   b = "GET"; // type: string   (widened — b is reassignable)
 ```
 
 widening แบบเดียวกันเกิดกับ **property ของ object** ด้วย เพราะ property ของ object แก้ค่าได้โดย default:

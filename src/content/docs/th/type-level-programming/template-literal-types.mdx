@@ -42,7 +42,7 @@ TypeScript มาพร้อม type built-in 4 ตัวที่ transform st
 type Loud = Uppercase<"hello">;      // "HELLO"
 type Cap = Capitalize<"name">;        // "Name"
 
-// รวมกับ template เพื่อสร้างชื่อ event handler
+// Combine with a template to build event handler names
 type Handler<E extends string> = `on${Capitalize<E>}`;
 type ClickHandler = Handler<"click">; // "onClick"
 ```
@@ -57,14 +57,14 @@ export const distDiagram = `flowchart LR
 พลังจริง ๆ มาเมื่อคุณรวม template literal กับ conditional type และ `infer`: คุณ **destructure string type** ได้ โดย capture ส่วนหนึ่งของตัวเองเข้าไปใน type variable ใหม่
 
 ```ts
-// capture ชื่อ event หลัง prefix "on"
+// Capture the event name after the "on" prefix
 type EventName<T> = T extends `on${infer E}` ? E : never;
 
 type E1 = EventName<"onClick">; // "Click"
 type E2 = EventName<"onHover">; // "Hover"
-type E3 = EventName<"click">;   // never — ไม่มี prefix "on"
+type E3 = EventName<"click">;   // never — no "on" prefix
 
-// แยก route เป็นส่วน ๆ
+// Split a route into its parts
 type Method<T> = T extends `${infer M} ${string}` ? M : never;
 type M = Method<"GET /users">; // "GET"
 ```
@@ -81,7 +81,7 @@ type HeadTail<S extends string> =
 
 type R = HeadTail<"😀abc">;
 //   ^? TypeScript 7:  ["😀", "abc"]
-//      TypeScript 6:  ["\ud83d", "\ude00abc"]  — surrogate pair ถูกตัดครึ่ง
+//      TypeScript 6:  ["\ud83d", "\ude00abc"]  — a surrogate pair cut in half
 ```
 
 recursive string type ทุกตัวที่ลอกทีละตัวอักษร — `Split`, `Reverse`, ตัวนับจำนวนอักษร — ตอนนี้เห็นตัวอักษรเต็มตัว ซึ่งเกือบทุกกรณีคือสิ่งที่คุณต้องการอยู่แล้ว แต่มันเป็น **breaking change** ถ้า type ของคุณพึ่งพาการนับแบบเดิม: type "length" ระดับ type ที่เอาไปเทียบกับ `.length` ตอน runtime (ซึ่งยังนับ code unit) จะให้ค่าไม่ตรงกันกับ `"😀"` ถ้าคุณดูแล type แบบนี้อยู่ ทดสอบด้วย input นอก BMP ตอน upgrade

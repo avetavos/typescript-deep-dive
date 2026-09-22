@@ -35,7 +35,7 @@ const bad: Json = { fn: () => 1 }; // ❌ functions are not Json
 รูปแบบที่ทรงพลังกว่าคือการ recurse บน **tuple type** ลอกทีละ element ด้วย `infer` — เทียบเท่าการประมวลผล list แบบ head/tail ที่ระดับ type
 
 ```ts
-// reverse tuple type
+// Reverse a tuple type
 type Reverse<T extends unknown[]> =
   T extends [infer Head, ...infer Rest]
     ? [...Reverse<Rest>, Head]
@@ -44,7 +44,7 @@ type Reverse<T extends unknown[]> =
 type R = Reverse<[1, 2, 3]>;
 //   ^? [3, 2, 1]
 
-// ความยาวของ tuple
+// Length of a tuple
 type Length<T extends unknown[]> = T["length"];
 type L = Length<[1, 2, 3]>; // 3
 ```

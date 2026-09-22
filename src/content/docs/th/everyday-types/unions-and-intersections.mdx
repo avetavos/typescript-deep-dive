@@ -18,7 +18,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 type Id = string | number;
 
 let id: Id = "abc";
-id = 123; // ✅ ทั้งคู่เป็นสมาชิกของ union
+id = 123; // ✅ both are members of the union
 ```
 
 จุดที่ต้องระวัง: ระหว่างที่คุณถือ union อยู่ คุณแตะได้แค่ member ที่ **ทุก** branch มีร่วมกัน เพราะ compiler ยังไม่รู้ว่าคุณถือตัวไหน
@@ -43,7 +43,7 @@ type WithId = { id: string };
 type WithTimestamps = { createdAt: Date; updatedAt: Date };
 
 type Entity = WithId & WithTimestamps;
-// ต้องมี id และ createdAt และ updatedAt
+// must have id AND createdAt AND updatedAt
 
 const e: Entity = { id: "1", createdAt: new Date(), updatedAt: new Date() };
 ```
@@ -77,7 +77,7 @@ export const setDiagram = `flowchart TB
 type A = { kind: "a"; value: number };
 type B = { kind: "b"; value: string };
 type Both = A & B;
-// kind: "a" & "b" → never; type นี้สร้างจริงไม่ได้
+// kind: "a" & "b" → never; this type is effectively unconstructable
 ```
 
 ตัวสุดท้ายเป็นสัญญาณ: เวลาคุณอยากได้ "หนึ่งใน object shape พวกนี้" คุณเกือบทุกครั้งต้องการ **union** (`A | B`) ที่มี discriminant field ร่วมกัน — ไม่ใช่ intersection นั่นคือ discriminated-union pattern ในบท narrowing

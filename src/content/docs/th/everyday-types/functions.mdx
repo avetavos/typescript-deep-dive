@@ -18,14 +18,14 @@ function type อธิบาย parameter และ return type เขียน
 type BinaryOp = (a: number, b: number) => number;
 
 const add: BinaryOp = (a, b) => a + b;
-// a และ b ถูก infer เป็น number จาก context — ไม่ต้อง annotate
+// a and b are inferred as number from the context — no annotations needed
 ```
 
 parameter รองรับ optional (`?`), default value และ rest:
 
 ```ts
 function make(name: string, count = 1, ...tags: string[]): void {
-  // count default เป็น 1; tags เก็บที่เหลือเข้า string[]
+  // count defaults to 1; tags collects the rest into string[]
 }
 ```
 
@@ -49,7 +49,7 @@ len([1, 2, 3]); // ✅ 3
 overload ทรงพลังแต่ใช้เกินง่าย เมื่อ signature ต่างกันแค่ที่ type ของ parameter — ไม่ใช่ที่ *ความสัมพันธ์* ระหว่าง parameter กับ return — **union parameter** ตัวเดียวเรียบง่ายและชัดกว่า:
 
 ```ts
-// เรียบง่ายกว่า overload สองตัว:
+// Simpler than two overloads:
 function len(x: string | unknown[]): number {
   return x.length;
 }
@@ -65,7 +65,7 @@ function len(x: string | unknown[]): number {
 interface Button { label: string; }
 
 function handleClick(this: Button, event: Event): void {
-  console.log(this.label); // this เป็น Button
+  console.log(this.label); // this is typed as Button
 }
 ```
 
@@ -78,7 +78,7 @@ function type ที่ return `void` **ไม่ได้** แปลว่า 
 ```ts
 type Callback = () => void;
 
-const cb: Callback = () => 42; // ✅ ได้! ค่า 42 แค่ถูกเมิน
+const cb: Callback = () => 42; // ✅ allowed! the 42 is just ignored
 ```
 
 <Mermaid title="void แปลว่า return ถูกเมิน ไม่ใช่ห้าม return" code={voidDiagram} />

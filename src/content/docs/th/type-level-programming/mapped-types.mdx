@@ -54,17 +54,17 @@ type UserGetters = Getters<User>;
 mapped type เปลี่ยน **modifier** ของแต่ละ property ได้ด้วย คุณเพิ่ม `readonly` หรือ `?` ด้วยการเขียนลงไปตรง ๆ และ *ลบ* ด้วย prefix `-`
 
 ```ts
-// ทำให้ทุก property เป็น optional (นี่คือวิธีที่ Partial ทำงาน)
+// Make every property optional (this is how Partial works)
 type MyPartial<T> = {
   [K in keyof T]?: T[K];
 };
 
-// ทำให้ทุก property เป็น readonly (นี่คือ Readonly)
+// Make every property readonly (this is Readonly)
 type MyReadonly<T> = {
   readonly [K in keyof T]: T[K];
 };
 
-// ถอด optional และ readonly ออกจากทุก property
+// Strip optional AND readonly off every property
 type Concrete<T> = {
   -readonly [K in keyof T]-?: T[K];
 };
@@ -83,7 +83,7 @@ export const mapDiagram = `flowchart LR
 feature ที่ใหม่กว่าให้คุณ **rename หรือ filter** key ระหว่าง map ด้วย clause `as` นี่คือวิธีสร้างอย่าง type "getters" ที่มีชื่อขึ้นต้น `get` หรือ drop key ที่ value type ไม่ต้องการ:
 
 ```ts
-// rename แต่ละ key เป็น get<Key>
+// Rename each key to get<Key>
 type Getters2<T> = {
   [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K];
 };
@@ -91,7 +91,7 @@ type Getters2<T> = {
 type UG = Getters2<{ name: string }>;
 //   ^? { getName: () => string }
 
-// filter: เก็บเฉพาะ property ที่ value เป็น string (remap ตัวที่ไม่เอาเป็น never)
+// Filter: keep only string-valued properties (remap unwanted keys to never)
 type StringProps<T> = {
   [K in keyof T as T[K] extends string ? K : never]: T[K];
 };

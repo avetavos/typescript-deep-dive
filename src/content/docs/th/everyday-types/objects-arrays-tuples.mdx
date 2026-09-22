@@ -16,7 +16,7 @@ object type อธิบาย shape ด้วยการ list property modifie
 
 ```ts
 interface User {
-  readonly id: string;   // reassign ไม่ได้หลังสร้าง
+  readonly id: string;   // can't be reassigned after creation
   name: string;          // required
   email?: string;        // optional — string | undefined
 }
@@ -50,7 +50,7 @@ interface Scores {
 }
 
 const s: Scores = { ada: 10, alan: 12 };
-s.grace = 9; // ✅ key เป็น string ใด ๆ, value เป็น number
+s.grace = 9; // ✅ any string key, number value
 ```
 
 ราคาที่ต้องจ่ายคือความซื่อสัตย์เรื่องการไม่มีค่า: `s.someone` มี type `number` แต่จริง ๆ เป็น `undefined` ตอน runtime ด้วย option `noUncheckedIndexedAccess` TypeScript จะทำให้เรื่องนี้เป็นจริง โดย type ทุก index access เป็น `number | undefined` — เป็น setting ที่แนะนำอย่างยิ่ง
@@ -60,9 +60,9 @@ s.grace = 9; // ✅ key เป็น string ใด ๆ, value เป็น numbe
 **array** คือ list ที่ homogeneous และยาวเท่าไรก็ได้: `number[]` คือ "number กี่ตัวก็ได้" **tuple** คือ list ความยาวคงที่ที่แต่ละตำแหน่งมี type ของตัวเอง:
 
 ```ts
-let list: number[] = [1, 2, 3, 4];         // ยาวเท่าไรก็ได้ เป็น number หมด
-let point: [number, number] = [10, 20];    // number สองตัวพอดี
-let pair: [string, number] = ["age", 36];  // ตำแหน่ง 0 string, ตำแหน่ง 1 number
+let list: number[] = [1, 2, 3, 4];         // any length, all number
+let point: [number, number] = [10, 20];    // exactly two numbers
+let pair: [string, number] = ["age", 36];  // position 0 string, position 1 number
 ```
 
 tuple ขับเคลื่อน pattern อย่าง return ของ `useState` ใน React (`[value, setter]`) และพิกัดแบบมีชื่อกลาย ๆ tuple ยังรองรับ **label** (เป็น documentation ไม่มีผล runtime) และ rest element:
@@ -86,7 +86,7 @@ export const arrTupDiagram = `flowchart TB
 const rgb = [255, 128, 0] as const;
 // type: readonly [255, 128, 0]
 
-function paint(color: readonly number[]) { /* mutate color ไม่ได้ */ }
+function paint(color: readonly number[]) { /* can't mutate color */ }
 ```
 
 การเลือกใช้ `readonly` array parameter เป็นนิสัยราคาถูกที่ได้ค่ามาก: กันบั๊ก mutate โดยไม่ตั้งใจทั้งชุด และสื่อเรื่อง ownership
