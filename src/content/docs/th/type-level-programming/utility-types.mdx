@@ -24,52 +24,71 @@ TypeScript มี standard library ของ **utility type** มาให้ �
 | `Record<K, V>` | object ที่ key เป็น `K`, value เป็น `V` | mapped type บน `K` |
 | `Exclude<T, U>` | ลบ `U` ออกจาก union `T` | distributive conditional |
 | `Extract<T, U>` | เก็บเฉพาะ `U` จาก union `T` | distributive conditional |
-| `NonNullable<T>` | ลบ `null`/`undefined` | conditional type |
+| `NonNullable<T>` | ลบ `null`/`undefined` | intersection trick (`T & {}`) — ดูด้านล่าง |
 | `ReturnType<F>` | return type ของ `F` | conditional กับ `infer` |
 | `Parameters<F>` | tuple ของ parameter ของ `F` | conditional กับ `infer` |
 | `Awaited<T>` | unwrap Promise | recursive conditional กับ `infer` |
+
+ไม่ใช่ทุกตัวที่เป็น primitive จริง ๆ ทั้งสาม (mapped type, distributive conditional, conditional กับ `infer`):
+
+| Utility | ทำไมไม่ใช่ primitive |
+|---------|----------------------------------|
+| `NonNullable<T>` | เป็น **intersection trick** (`T & {}`) ไม่ใช่ conditional type — ดูด้านล่าง |
+| `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` | เป็น **compiler intrinsic** ที่ไม่มีนิยามระดับ TypeScript เลย |
 
 ## ตระกูล mapped-type
 
 `Partial`, `Required`, `Readonly`, `Pick` และ `Record` ล้วนเป็น mapped type บรรทัดเดียว:
 
 ```ts
-type Partial<T>  = { [K in keyof T]?: T[K] };
-type Required<T> = { [K in keyof T]-?: T[K] };
-type Readonly<T> = { readonly [K in keyof T]: T[K] };
-type Pick<T, K extends keyof T> = { [P in K]: T[P] };
-type Record<K extends keyof any, V> = { [P in K]: V };
+type MyPartial<T>  = { [K in keyof T]?: T[K] };
+type MyRequired<T> = { [K in keyof T]-?: T[K] };
+type MyReadonly<T> = { readonly [K in keyof T]: T[K] };
+type MyPick<T, K extends keyof T> = { [P in K]: T[P] };
+type MyRecord<K extends keyof any, V> = { [P in K]: V };
 ```
 
-ไม่มีอะไรพิสดาร — loop บน key บางทีเปลี่ยน modifier บางที lookup `T[K]` พอเห็นแบบนี้ `Pick<User, "id" | "name">` ก็ชัดว่าคือ "วนซ้ำสอง key นั้น copy value type ของตัวเอง"
+ไม่มีอะไรพิสดาร — loop บน key บางทีเปลี่ยน modifier บางที lookup `T[K]` พอเห็นแบบนี้ `Pick<User, "id" | "name">` ก็ชัดว่าคือ "วนซ้ำสอง key นั้น copy value type ของตัวเอง" (lib จริงชื่อ `Partial`, `Required` ฯลฯ — ที่เปลี่ยนเป็น `My…` ในนี้เพื่อให้ fence นี้ compile เดี่ยว ๆ ได้โดยไม่ชนกับ global ของ TypeScript เอง)
 
 ## ตระกูล distributive-conditional
 
-`Exclude`, `Extract` และ `NonNullable` ทำงานบน **union** ด้วย conditional type ที่ distribute บนแต่ละ member:
+`Exclude` และ `Extract` ทำงานบน **union** ด้วย conditional type ที่ distribute บนแต่ละ member:
 
 ```ts
-type Exclude<T, U> = T extends U ? never : T;
-type Extract<T, U> = T extends U ? T : never;
-type NonNullable<T> = T extends null | undefined ? never : T;
+type MyExclude<T, U> = T extends U ? never : T;
+type MyExtract<T, U> = T extends U ? T : never;
 
-type A = Exclude<"a" | "b" | "c", "b">; // "a" | "c"
+type A = MyExclude<"a" | "b" | "c", "b">; // "a" | "c"
 ```
 
 เมื่อ type ที่ถูกเช็คเป็น naked type parameter และคุณส่ง union เข้าไป conditional จะรัน **ทีละ member** แล้ว union ผลลัพธ์ ดังนั้น `Exclude` map แต่ละ member เป็น `never` (drop) หรือตัวเอง (เก็บ) — และ `never` หายไปจาก union `Omit` จึงตกมาเป็น `Pick<T, Exclude<keyof T, K>>`
+
+## `NonNullable`: intersection trick ไม่ใช่ conditional
+
+`NonNullable` ดูเหมือนจะอยู่ตระกูลข้างบน แต่ตั้งแต่ TypeScript 4.8 นิยามจริงใน lib เป็น intersection ธรรมดา ไม่ใช่ conditional type:
+
+```ts
+type MyNonNullable<T> = T & {};
+
+type A = MyNonNullable<string | null | undefined>; // string
+type B = MyNonNullable<number | null>;              // number
+```
+
+`null` กับ `undefined` ไม่ assignable เข้า empty object type `{}` ดังนั้น intersect แต่ละ member ของ union กับ `{}` จะตัดสอง member นี้ทิ้ง ส่วน member อื่นแทบไม่เปลี่ยน — intersection distribute บน union เหมือนการคูณ distribute บนการบวก มันอ่านเหมือน "ลบ `null`/`undefined`" แต่กลไกคือ **intersection** ไม่ใช่ `T extends null | undefined ? never : T` (ซึ่งก็ใช้ได้เหมือนกัน แต่ไม่ใช่สิ่งที่ standard library ใช้จริง)
 
 ## ตระกูล `infer`
 
 `ReturnType`, `Parameters` และ `Awaited` **capture** type ออกมาจาก structure ด้วย `infer`:
 
 ```ts
-type ReturnType<F> = F extends (...args: any[]) => infer R ? R : never;
-type Parameters<F> = F extends (...args: infer P) => any ? P : never;
+type MyReturnType<F> = F extends (...args: any) => infer R ? R : any;
+type MyParameters<F> = F extends (...args: infer P) => any ? P : never;
 
-type R = ReturnType<() => number>;        // number
-type P = Parameters<(a: string, b: number) => void>; // [string, number]
+type R = MyReturnType<() => number>;        // number
+type P = MyParameters<(a: string, b: number) => void>; // [string, number]
 ```
 
-`infer R` match ตำแหน่ง return ของ function แล้ว bind เข้า `R`; `infer P` match parameter list ทั้งหมดเป็น tuple `Awaited` เพิ่ม recursion เพื่อลอก promise ที่ซ้อนกัน
+`infer R` match ตำแหน่ง return ของ function แล้ว bind เข้า `R`; `infer P` match parameter list ทั้งหมดเป็น tuple สังเกตว่า fallback ของสองตัวต่างกัน: `ReturnType` fallback เป็น `any` เมื่อ `F` ไม่ใช่ function (เรียกผลลัพธ์แล้วไม่เพิ่ม error ใหม่) ส่วน `Parameters` fallback เป็น `never` `Awaited` เพิ่ม recursion เพื่อลอก promise ที่ซ้อนกัน
 
 ## built-in รุ่นใหม่ที่ควรรู้
 
@@ -80,10 +99,11 @@ type P = Parameters<(a: string, b: number) => void>; // [string, number]
 - `NoInfer<T>` (5.4) — intrinsic ที่กันไม่ให้ตำแหน่งนั้นมีส่วนใน inference เพื่อให้ argument ตัวหนึ่งถูก *เช็คกับ* type parameter โดยไม่ *ขยาย* มัน รายละเอียดอยู่ใน [Inference and infer](/typescript/th/generics/inference-and-infer/)
 
 ```ts
+// @expect-error TS2322
 function createFSM<S extends string>(config: { states: S[]; initial: NoInfer<S> }) {}
 
 createFSM({ states: ["idle", "busy"], initial: "idle" });  // ✅ S = "idle" | "busy"
-createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" assign ให้ "idle" | "busy" ไม่ได้
+createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" is not assignable to "idle" | "busy"
 ```
 
 ถ้าไม่มี `NoInfer` `initial: "bogus"` จะแค่ขยาย `S` เป็น `"idle" | "busy" | "bogus"` แล้ว compile ผ่านเฉย ๆ
@@ -92,11 +112,12 @@ createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" assign
 
 export const utilDiagram = `flowchart TB
   mapped["Mapped types"] --> f1["Partial, Required, Readonly, Pick, Record"]
-  cond["Distributive conditionals"] --> f2["Exclude, Extract, NonNullable, Omit"]
-  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
+  cond["Distributive conditionals"] --> f2["Exclude, Extract, Omit"]
+  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]
+  trick["Intersection trick (T & {})"] --> f4["NonNullable"]`;
 
 <Callout title="สรุปหนึ่งบรรทัด">
-utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract`, `NonNullable` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับทั้ง 5 เทคนิค
+utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise `NonNullable` ดูเหมือนจะอยู่กลุ่ม conditional แต่จริง ๆ เป็น **intersection trick** แยกต่างหาก (`T & {}`) การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับเทคนิคเหล่านี้ทั้งหมด
 </Callout>
 
 export const quizUtility = [
@@ -124,7 +145,7 @@ export const quizUtility = [
     q: '`ReturnType<F>` ดึง return type อย่างไร?',
     options: [
       'รัน function',
-      'conditional type กับ `infer R` ที่ตำแหน่ง return: `F extends (...a: any[]) => infer R ? R : never`',
+      'conditional type กับ `infer R` ที่ตำแหน่ง return — โดยพื้นฐานคือ `F extends (...args: any) => infer R ? R : any`',
       'อ่าน runtime property',
       'mapped type บน parameter',
     ],

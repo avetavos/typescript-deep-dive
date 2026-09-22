@@ -2,7 +2,7 @@
 title: 'Mapped Types'
 description: 'Iterate over a type keys to transform it — mapping modifiers, adding and removing readonly and optional, and building Partial and Readonly from scratch.'
 sidebar:
-  order: 2
+  order: 3
 ---
 
 import Mermaid from '../../../../components/Mermaid.astro';
@@ -37,6 +37,8 @@ type Stringify = {
 Inside the loop, `T[K]` (indexed access) gives you the original value type — so you can transform it rather than replace it:
 
 ```ts
+interface User { id: number; name: string; }
+
 type Getters<T> = {
   [K in keyof T]: () => T[K];
 };

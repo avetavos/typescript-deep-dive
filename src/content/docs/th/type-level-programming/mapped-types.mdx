@@ -2,7 +2,7 @@
 title: 'Mapped Types'
 description: 'วนซ้ำ key ของ type เพื่อ transform แต่ละ property — mapping modifier, เพิ่มและลบ readonly กับ optional และสร้าง Partial กับ Readonly เอง'
 sidebar:
-  order: 2
+  order: 3
 ---
 
 import Mermaid from '../../../../components/Mermaid.astro';
@@ -37,6 +37,8 @@ type Stringify = {
 ภายใน loop `T[K]` (indexed access) ให้ value type เดิม — คุณจึง transform แทนที่จะแทนที่ทั้งหมดได้:
 
 ```ts
+interface User { id: number; name: string; }
+
 type Getters<T> = {
   [K in keyof T]: () => T[K];
 };

@@ -67,13 +67,18 @@ Node 22.6+ (default since 23.6, and in every Node 24 LTS) runs `node app.ts` dir
 ```ts
 // with erasableSyntaxOnly
 class Point {
-  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit
+  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit (TS1294)
 }
 enum Color { Red, Green }                             // ❌ enums need emit
 
-class Point2 { constructor(readonly x: number) {} }   // ✅ readonly is erasable
+class Point2 {
+  readonly x: number;                    // ✅ an ordinary field assignment instead —
+  constructor(x: number) { this.x = x; } //    readonly on a parameter property still needs emit too
+}
 const Color2 = { Red: "red", Green: "green" } as const; // ✅ a const object instead
 ```
+
+Every modifier on a parameter — `public`, `private`, `readonly` — makes it a **parameter property**, and parameter properties always need `this.x = x` emitted for you; none of them are erasable. `constructor(readonly x: number) {}` still fails with `TS1294` under `erasableSyntaxOnly`, and Node's `--experimental-strip-types` rejects it too (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in strip-only mode`) — the fix is always to write the field and the assignment out by hand, as `Point2` does above.
 
 Pair it with `rewriteRelativeImportExtensions` and you can develop against `.ts` files in place and still emit a clean `.js` package with `tsc` for publishing.
 
@@ -82,6 +87,7 @@ Pair it with `rewriteRelativeImportExtensions` and you can develop against `.ts`
 Because bundlers and type-strippers work **one file at a time**, they cannot see types from other files. A few TypeScript constructs are ambiguous under single-file transpilation — most importantly, re-exporting a type looks identical to re-exporting a value. `isolatedModules: true` makes `tsc` flag anything a single-file transpiler could get wrong, so your code stays compatible with esbuild, swc, and Node's stripper.
 
 ```ts
+// @skip-verify illustrative — "./user" is not a real module
 // with isolatedModules, tsc forces you to be explicit here:
 export type { User } from "./user"; // ✅ clearly a type re-export
 export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
@@ -92,6 +98,7 @@ export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
 The fix above is part of a broader feature: **type-only imports and exports**. Marking an import as type-only tells the compiler it exists purely for type information and must be erased — never emitted as a runtime import.
 
 ```ts
+// @skip-verify illustrative — "./user" and "./db" are not real modules
 import type { User } from "./user";     // erased entirely at emit
 import { type User, save } from "./db"; // User erased, save kept
 ```
@@ -103,6 +110,7 @@ import { type User, save } from "./db"; // User erased, save kept
 `noEmit` is "check, don't emit". Since 5.6 there is the mirror image: **`noCheck`** is "emit, don't check" — `tsc` runs only the syntactic passes it needs to produce output. On its own it is a slower esbuild, but combined with **`isolatedDeclarations`** (5.5) it becomes useful: if every export carries an explicit type, `.d.ts` files can be generated per file without the checker, which means declaration emit can run in parallel with type-checking, or be done by a bundler plugin entirely.
 
 ```ts
+// @skip-verify illustrative before/after pair — not meant to compile as one program
 // with isolatedDeclarations
 export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
 export function parse(input: string): unknown { return JSON.parse(input); } // ✅
@@ -121,7 +129,7 @@ In a large repo with several packages, type-checking everything from scratch on 
 }
 ```
 
-With `composite: true`, `tsc --build` checks each referenced project once, caches the result in `.tsbuildinfo` (always written since 5.6), and only rechecks what changed. Since 5.6 a build **continues past errors** in an upstream project so you see every failure in one run — pass `--stopOnBuildErrors` for the old fail-fast behaviour — and TypeScript 7 checks independent projects concurrently with `--builders`. It turns an O(whole-repo) check into an incremental, parallel one.
+With `composite: true`, `tsc --build` checks each referenced project once, caches the result in `.tsbuildinfo` (always written since 5.6), and only rechecks what changed. Since 5.6 a build **continues past errors** in an upstream project so you see every failure in one run — pass `--stopBuildOnErrors` for the old fail-fast behaviour — and TypeScript 7 checks independent projects concurrently with `--builders`. It turns an O(whole-repo) check into an incremental, parallel one.
 
 <Callout title="The one-line takeaway">
 Let a bundler emit and let `tsc` check — and with TypeScript 7's native, parallel compiler (`--checkers`, `--builders`, a native watcher) the check is 8–12× faster than a year ago. Run `.ts` directly in Node by keeping to erasable syntax (`erasableSyntaxOnly`), stay single-file-safe with `isolatedModules` and `verbatimModuleSyntax`, use `noCheck` + `isolatedDeclarations` when you want declarations without the checker, and use project references so `tsc --build` is incremental in a monorepo. No programmatic API ships in 7.0 — tools that need one use `@typescript/typescript6` until 7.1.

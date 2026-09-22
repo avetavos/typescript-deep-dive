@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 Recursion at the type level looks exactly like recursion in code: a type alias that mentions itself. The classic example is a JSON value — data nested to any depth:
 
 ```ts
+// @expect-error TS2322
 type Json =
   | string
   | number
@@ -60,22 +61,32 @@ export const recDiagram = `flowchart LR
 
 ## The instantiation-depth limit
 
-Type-level recursion is not unbounded. The compiler caps recursive instantiation to protect itself from infinite loops, and you will hit the ceiling on large inputs:
+Type-level recursion is not unbounded. The compiler caps recursive instantiation to protect itself from infinite loops, and you will hit the ceiling on large inputs. Naive recursion — where the recursive call sits *inside* another type constructor, like the array spread below — caps out in the high 40s:
 
 ```ts
-// Error on deep recursion:
-// "Type instantiation is excessively deep and possibly infinite."
+// @expect-error TS2589
+type NaiveDepth<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : [unknown, ...NaiveDepth<N, [...Acc, unknown]>];
+
+type Ok = NaiveDepth<47>;      // compiles
+type TooDeep = NaiveDepth<48>; // "Type instantiation is excessively deep and possibly infinite."
 ```
 
-The historical limit was around **50** levels of naive recursion, later relaxed for **tail-recursive** conditional types (where the recursive call is the entire result), which can go much deeper — roughly a few thousand. Writing a recursion tail-recursively (accumulate into an extra type parameter, return it at the base case) is the standard trick to push the limit:
+Writing the recursion **tail-recursively** — the recursive call is the *entire* result, with an accumulator parameter carrying the answer — lets the compiler optimize it and pushes the ceiling much further, to exactly **1000**:
 
 ```ts
+// @expect-error TS2589
 // Tail-recursive: accumulate results, so the compiler can optimize it
 type BuildTuple<N extends number, Acc extends unknown[] = []> =
   Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
+
+type Ok999 = BuildTuple<999>;     // compiles — 999 levels deep
+type TooDeep1000 = BuildTuple<1000>; // "Type instantiation is excessively deep and possibly infinite."
 ```
 
 Two compiler-side changes matter here. TypeScript 5.9 started **caching intermediate instantiations** when it substitutes type arguments, which made many "excessively deep" errors in libraries such as Zod and tRPC disappear without touching their types. And TypeScript 7 always uses **stable type ordering** (the `--stableTypeOrdering` flag introduced in 6.0 is now permanent), so a deep recursive type produces the same result — and the same error text — no matter which order files were checked in. A recursion that only failed "on some machines" was usually this.
+
+Both ceilings above (47/48 naive, 999/1000 tail-recursive) are exact boundaries measured on this exact compiler — not "roughly," and not guaranteed to stay identical across future releases, but a useful sense of scale: tail recursion buys you roughly **20×** more depth than naive recursion.
 
 ## Knowing when to stop
 
@@ -88,7 +99,7 @@ Recursive types are the sharpest tool in the type-level box, and the easiest to 
 The best type-level engineers write *less* of it than they could, reserving recursion for the few cases — deep key paths, precise builder APIs — where it genuinely earns its keep.
 
 <Callout title="The one-line takeaway">
-Types can reference themselves: recursive **aliases** describe deep data (a `Json` type), and recursion over **tuples** with `[infer Head, ...infer Rest]` processes lists one element at a time. The compiler caps recursion depth (roughly 50 naive, far more for **tail-recursive** conditionals that accumulate into a parameter). Recursion is powerful and hard to read — reach for it only when a simpler type or a runtime check will not do.
+Types can reference themselves: recursive **aliases** describe deep data (a `Json` type), and recursion over **tuples** with `[infer Head, ...infer Rest]` processes lists one element at a time. The compiler caps recursion depth — measured at 47/48 for naive recursion, 999/1000 for **tail-recursive** conditionals that accumulate into a parameter. Recursion is powerful and hard to read — reach for it only when a simpler type or a runtime check will not do.
 </Callout>
 
 export const quizRecursive = [

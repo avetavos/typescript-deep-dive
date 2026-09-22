@@ -2,7 +2,7 @@
 title: 'keyof & Indexed Access'
 description: 'keyof เพื่อเอา type ของ key และ T[K] เพื่อ lookup value type — สอง lookup ที่เป็นพลังของ mapped type และ utility type ส่วนใหญ่'
 sidebar:
-  order: 3
+  order: 2
 ---
 
 import Mermaid from '../../../../components/Mermaid.astro';
@@ -55,6 +55,11 @@ type NameType = User["name"];
 index ด้วย **union** ของ key เพื่อเอา union ของ value type ก็ได้:
 
 ```ts
+interface User {
+  id: number;
+  name: string;
+}
+
 type Values = User[keyof User];
 //   ^? number | string
 ```
@@ -91,7 +96,12 @@ type First = (typeof tuple)[0];
 แทบทุก utility type สร้างจาก `keyof` + indexed access + mapped type:
 
 ```ts
-// Pick เขียนเอง — วนซ้ำ key ที่เลือก, lookup value type แต่ละตัว
+interface User {
+  id: number;
+  name: string;
+}
+
+// Pick, from scratch — iterate chosen keys, look up each value type
 type MyPick<T, K extends keyof T> = {
   [P in K]: T[P];
 };

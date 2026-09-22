@@ -32,7 +32,7 @@ export const resolveDiagram = `flowchart TB
   bundled --> bundler["moduleResolution: bundler\nlets the bundler resolve"]`;
 
 - **`nodenext`** — จำลอง Node ปัจจุบันแบบเป๊ะ: อ่าน `"type": "module"` ใน `package.json`, เคารพ field `"exports"` และบังคับกฎ ESM (รวมถึงต้องเขียน file extension ใน relative import: `import "./util.js"`) การตั้ง `module: nodenext` implies resolution ที่ตรงกันให้เลย ส่วน `node16` คือไอเดียเดียวกันที่แช่แข็งไว้ที่ Node 16
-- **`node18` (5.8) / `node20` (5.9)** — snapshot แบบ stable ของ `nodenext` สำหรับทีมที่ pin Node ไว้สายใดสายหนึ่ง `nodenext` ขยับตาม Node ส่วน `node20` จะไม่เปลี่ยนใต้เท้าคุณ และ implies `target: es2023` ความต่างที่สำคัญที่สุด: `node18` ยังยอมรับ syntax `assert` ของ import ที่ deprecated แล้ว และห้าม `require()` ของ ESM; `node20` กับ `nodenext` กลับกัน
+- **`node18` (5.8) / `node20` (5.9)** — snapshot แบบ stable ของ `nodenext` สำหรับทีมที่ pin Node ไว้สายใดสายหนึ่ง `nodenext` ขยับตาม Node ส่วน `node20` จะไม่เปลี่ยนใต้เท้าคุณ `module` ไม่เคยตั้ง `target` ให้เอง — `tsc --showConfig --module node20` ไม่มี key `target` โผล่มาเลย และ code ที่ใช้ ES2025 API (พร้อม `lib` ที่ตั้งไว้ให้เข้ากัน) compile ผ่านสบายภายใต้ `module: node20` ที่ target default ของ compiler เลือก `target` แยกต่างหาก ตาม runtime ของคุณรองรับจริง ๆ ความต่างที่สำคัญที่สุดระหว่าง `node18` กับ `node20`: `node18` ยังยอมรับ syntax `assert` ของ import ที่ deprecated แล้ว และห้าม `require()` ของ ESM; `node20` กับ `nodenext` กลับกัน
 - **`bundler`** — สำหรับ code ที่ผ่าน Vite, esbuild, Rolldown หรือ webpack โหมดนี้ผ่อนเรื่อง extension และปล่อยให้ bundler จัดการการหาไฟล์จริง ให้ตรงกับพฤติกรรมของเครื่องมือเหล่านั้น ตั้งแต่ 6.0 จับคู่กับ `module: commonjs` ได้ด้วย นอกจาก `esnext`/`preserve` ซึ่งเปิดทางให้โปรเจกต์ CJS migrate ได้
 
 algorithm `node` / `node10` แบบเก่าและ `classic` **หายไปแล้ว** ใน TypeScript 7 (deprecated ใน 6.0) ทั้งคู่เกิดก่อน `"exports"` และ `"type"` ของ package จึงอธิบาย Node ที่ไม่มีอยู่แล้ว
@@ -44,6 +44,7 @@ mental model สำคัญ: **`moduleResolution` ควรอธิบาย�
 ภายใต้ `nodenext` native ESM ต้องมี extension ใน import และ — น่าสับสน — คุณเขียน extension `.js` แม้ไฟล์บน disk จะเป็น `.ts`:
 
 ```ts
+// @skip-verify illustrative — "./util(.js)" is not a real module
 // util.ts exists on disk, but the emitted import must point at the emitted .js
 import { helper } from "./util.js"; // ✅ correct under nodenext ESM
 import { helper } from "./util";    // ❌ ESM needs the extension
@@ -54,6 +55,7 @@ import { helper } from "./util";    // ❌ ESM needs the extension
 ตั้งแต่ 5.7 มีทางออก เปิด `rewriteRelativeImportExtensions: true` แล้วคุณเขียน extension จริงได้ และ `tsc` จะ rewrite ให้ตอน emit — เฉพาะ path แบบ *relative* ที่ลงท้ายด้วย extension ของ TypeScript เท่านั้น:
 
 ```ts
+// @skip-verify illustrative — none of these modules exist on disk
 import { helper } from "./util.ts";      // emitted as "./util.js"
 import { x } from "../lib/thing.mts";    // emitted as "../lib/thing.mjs"
 import pkg from "some-package/file.ts";  // not relative — left alone
@@ -73,6 +75,7 @@ feature ของ Node สองอย่างที่ `nodenext` จำลอ
 keyword `asserts` ของ import assertion ถูก deprecate แล้ว มาตรฐานคือ `with` และภายใต้ `nodenext` การ import JSON *ต้อง* มีมันและ *ต้อง* เป็น default import:
 
 ```ts
+// @skip-verify illustrative — "./config.json" is not a real module
 import config from "./config.json" with { type: "json" }; // ✅
 import { port } from "./config.json" with { type: "json" }; // ❌ no named exports from JSON
 import config from "./config.json" assert { type: "json" }; // ❌ deprecated syntax
@@ -81,8 +84,10 @@ import config from "./config.json" assert { type: "json" }; // ❌ deprecated sy
 TypeScript 5.9 ยัง type **`import defer`** ซึ่งเป็น ECMAScript proposal สำหรับการ evaluate module แบบ lazy module ถูก link แต่ไม่ถูก *รัน* จนกว่าคุณจะแตะ export ครั้งแรก — มีประโยชน์กับ initialisation ที่แพงและใช้แค่บางครั้ง:
 
 ```ts
+// @skip-verify illustrative — "./heavy-feature.js" is not a real module
 import defer * as heavy from "./heavy-feature.js";
 
+declare const flag: boolean;
 if (flag) {
   heavy.run(); // the module body executes here, not at startup
 }

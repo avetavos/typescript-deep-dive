@@ -10,6 +10,8 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
+**Prerequisite:** this module builds on [Conditional Types](/typescript/en/generics/conditional-types/) and [Inference and infer](/typescript/en/generics/inference-and-infer/) — read those first if you have not, since every lesson here assumes you already know what a conditional type and `infer` are.
+
 ## Types are a language
 
 So far types have *described* data. In this module they start to *compute* over it. Given one type you can derive another: make every field optional, pick a subset of keys, extract the return type of a function, or parse a string into a union — all at the type level, evaluated by the compiler before your code runs.

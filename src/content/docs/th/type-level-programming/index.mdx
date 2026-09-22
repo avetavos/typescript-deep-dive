@@ -10,6 +10,8 @@ import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
+**Prerequisite:** โมดูลนี้ต่อยอดจาก [Conditional Types](/typescript/th/generics/conditional-types/) และ [Inference and infer](/typescript/th/generics/inference-and-infer/) — อ่านสองบทนั้นก่อนถ้ายังไม่ได้อ่าน เพราะทุกบทในนี้ถือว่าคุณรู้แล้วว่า conditional type กับ `infer` คืออะไร
+
 ## type คือภาษาหนึ่ง
 
 ที่ผ่านมา type ทำหน้าที่ *อธิบาย* ข้อมูล ในโมดูลนี้ type จะเริ่ม *คำนวณ* จากข้อมูลนั้น จาก type หนึ่งคุณ derive อีก type ออกมาได้ — ทำให้ทุก field เป็น optional, pick key แค่บางส่วน, ดึง return type ของ function ออกมา หรือ parse string ให้เป็น union — ทั้งหมดที่ระดับ type โดย compiler ประเมินก่อน code รัน

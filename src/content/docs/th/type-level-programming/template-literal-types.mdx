@@ -15,10 +15,11 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 template literal type หน้าตาเหมือน template string ของ JavaScript แต่สร้าง **type** คุณ interpolate type อื่นเข้าไปใน type ที่มีรูปเป็น string
 
 ```ts
+// @expect-error TS2322
 type Greeting = `Hello, ${string}`;
 
 const a: Greeting = "Hello, Ada"; // ✅
-const b: Greeting = "Hi, Ada";    // ❌ ต้องขึ้นต้นด้วย "Hello, "
+const b: Greeting = "Hi, Ada";    // ❌ must start with "Hello, "
 ```
 
 interpolate union ของ literal เข้าไป แล้ว template จะ **distribute** บน union นั้น — สร้างทุกการผสมออกมาเป็น union ของ literal type:

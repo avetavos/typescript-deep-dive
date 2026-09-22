@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 recursion ที่ระดับ type หน้าตาเหมือน recursion ใน code เป๊ะ: type alias ที่พูดถึงตัวเอง ตัวอย่างคลาสสิกคือ JSON value — ข้อมูลที่ซ้อนลึกได้ทุกระดับ
 
 ```ts
+// @expect-error TS2322
 type Json =
   | string
   | number
@@ -24,7 +25,7 @@ type Json =
   | { [key: string]: Json };
 
 const ok: Json = { name: "Ada", tags: ["x", "y"], meta: { n: 1 } }; // ✅
-const bad: Json = { fn: () => 1 }; // ❌ function ไม่ใช่ Json
+const bad: Json = { fn: () => 1 }; // ❌ functions are not Json
 ```
 
 `Json` ปรากฏในนิยามของตัวเองสองที่ — ข้างใน array และข้างใน object — นั่นคือสิ่งที่ทำให้ `Json` อธิบายข้อมูลที่ลึกได้ไม่จำกัด recursive alias แบบนี้เจอบ่อยและ idiomatic เต็มที่
@@ -60,22 +61,32 @@ export const recDiagram = `flowchart LR
 
 ## instantiation-depth limit
 
-type-level recursion ไม่ได้ไม่จำกัด compiler จำกัด recursive instantiation เพื่อป้องกันตัวเองจาก loop ไม่รู้จบ และคุณจะชนเพดานเมื่อ input ใหญ่:
+type-level recursion ไม่ได้ไม่จำกัด compiler จำกัด recursive instantiation เพื่อป้องกันตัวเองจาก loop ไม่รู้จบ และคุณจะชนเพดานเมื่อ input ใหญ่ recursion แบบตรงไปตรงมา — ที่ recursive call อยู่ *ข้างใน* type constructor อีกตัว อย่าง array spread ด้านล่าง — ชนเพดานแถว ๆ เลข 40 ปลาย ๆ:
 
 ```ts
-// error เมื่อ recursion ลึกเกิน:
-// "Type instantiation is excessively deep and possibly infinite."
+// @expect-error TS2589
+type NaiveDepth<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : [unknown, ...NaiveDepth<N, [...Acc, unknown]>];
+
+type Ok = NaiveDepth<47>;      // compiles
+type TooDeep = NaiveDepth<48>; // "Type instantiation is excessively deep and possibly infinite."
 ```
 
-limit เดิมอยู่ราว **50** ระดับสำหรับ recursion แบบตรงไปตรงมา ต่อมาผ่อนให้ **tail-recursive** conditional type (ที่ recursive call เป็นผลลัพธ์ทั้งหมด) ไปได้ลึกกว่ามาก — ราวหลักพัน การเขียน recursion แบบ tail-recursive (สะสมเข้า type parameter เพิ่มอีกตัว แล้วคืนค่าที่ base case) คือทริกมาตรฐานในการดันเพดาน:
+การเขียน recursion แบบ **tail-recursive** — recursive call เป็นผลลัพธ์ *ทั้งหมด* โดยมี accumulator parameter ถือคำตอบไว้ — ให้ compiler optimize ได้และดันเพดานไปได้ไกลกว่ามาก คือพอดี **1000**:
 
 ```ts
-// tail-recursive: สะสมผลลัพธ์ เพื่อให้ compiler optimize ได้
+// @expect-error TS2589
+// Tail-recursive: accumulate results, so the compiler can optimize it
 type BuildTuple<N extends number, Acc extends unknown[] = []> =
   Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
+
+type Ok999 = BuildTuple<999>;     // compiles — 999 levels deep
+type TooDeep1000 = BuildTuple<1000>; // "Type instantiation is excessively deep and possibly infinite."
 ```
 
 มีสองการเปลี่ยนแปลงฝั่ง compiler ที่เกี่ยวตรงนี้ TypeScript 5.9 เริ่ม **cache instantiation ระหว่างทาง** ตอนแทน type argument ทำให้ error "excessively deep" จำนวนมากใน library อย่าง Zod และ tRPC หายไปโดยไม่ต้องแตะ type ของพวกมันเลย และ TypeScript 7 ใช้ **stable type ordering** เสมอ (flag `--stableTypeOrdering` ที่มาใน 6.0 กลายเป็นค่าถาวร) ดังนั้น recursive type ลึก ๆ จะให้ผลเดิม — และ error ข้อความเดิม — ไม่ว่าไฟล์จะถูกเช็คตามลำดับไหน recursion ที่ "พังเฉพาะบางเครื่อง" ส่วนใหญ่คือเรื่องนี้
+
+ทั้งสองเพดานข้างบน (47/48 แบบตรงไปตรงมา, 999/1000 แบบ tail-recursive) เป็นขอบเขตจริงที่วัดบน compiler ตัวนี้เป๊ะ ๆ — ไม่ใช่ "ราว ๆ" และไม่การันตีว่าจะเหมือนเดิมในเวอร์ชันถัดไป แต่ให้ sense of scale ที่มีประโยชน์: tail recursion ให้ความลึกมากกว่าประมาณ **20 เท่า** ของ naive recursion
 
 ## รู้ว่าเมื่อไรควรหยุด
 
@@ -88,7 +99,7 @@ recursive type คือเครื่องมือที่คมที่�
 engineer ระดับ type-level ที่เก่งที่สุดเขียน recursion *น้อยกว่า* ที่ทำได้ เก็บ recursion ไว้ใช้กับไม่กี่กรณี — deep key path, builder API ที่แม่นยำ — ที่คุ้มค่าจริง
 
 <Callout title="สรุปหนึ่งบรรทัด">
-type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`) และ recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element compiler จำกัดความลึกของ recursion (ราว 50 แบบตรง ๆ, ลึกกว่ามากสำหรับ **tail-recursive** conditional ที่สะสมเข้า parameter) recursion ทรงพลังและอ่านยาก — หยิบมาใช้เฉพาะเมื่อ type ที่ง่ายกว่าหรือ runtime check ใช้แทนไม่ได้จริง ๆ
+type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`) และ recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element compiler จำกัดความลึกของ recursion — วัดได้ 47/48 สำหรับแบบตรงไปตรงมา, 999/1000 สำหรับ **tail-recursive** conditional ที่สะสมเข้า parameter recursion ทรงพลังและอ่านยาก — หยิบมาใช้เฉพาะเมื่อ type ที่ง่ายกว่าหรือ runtime check ใช้แทนไม่ได้จริง ๆ
 </Callout>
 
 export const quizRecursive = [

@@ -23,37 +23,65 @@ For a decade, an empty `tsconfig.json` meant a *lax* compiler: no `strict`, Comm
 | `noUncheckedSideEffectImports` | `false` | `true` |
 | `libReplacement` | `true` | `false` |
 
-Two of these bite real projects on upgrade. `types: []` means `@types/node` is no longer picked up just because it is installed — write `"types": ["node"]` (or `["*"]` to restore the old behavior). `rootDir: "."` means a `src/` layout emits into `dist/src/` unless you set `"rootDir": "./src"` explicitly.
+Two of these bite real projects on upgrade. `types: []` means `@types/node` is no longer picked up just because it is installed — write `"types": ["node"]` (or `["*"]` to restore the old behavior). `rootDir: "."` means a `src/` layout emits into `dist/src/` unless you set `"rootDir": "./src"` explicitly — and this is not silent: with `outDir` set but `rootDir` left at its default, `tsc` stops with a hard error, **and still writes the file to the nested path**:
+
+```
+error TS5011: The common source directory of 'tsconfig.json' is './src'. The 'rootDir' setting must
+be explicitly set to this or another path to adjust your output's file layout.
+```
 
 ## What `tsc --init` writes today
 
-Since 5.9, `tsc --init` generates a short, opinionated file instead of a wall of commented-out options. It is a good starting point for a Node or library project:
+`tsc --init` generates a short, opinionated file instead of a wall of commented-out options. This is the real output of TypeScript 7.0.2's `tsc --init` (comments trimmed, but the commented-out `rootDir`/`outDir` lines are exactly as generated):
 
 ```json
 {
+  // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    "rootDir": "./src",
-    "outDir": "./dist",
+    // File Layout
+    // "rootDir": "./src",
+    // "outDir": "./dist",
+
+    // Environment Settings
+    // See also https://aka.ms/tsconfig/module
     "module": "nodenext",
     "target": "esnext",
     "types": [],
+    // For nodejs:
+    // "lib": ["esnext"],
+    // "types": ["node"],
+    // and npm install -D @types/node
+
+    // Other Outputs
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
+
+    // Stricter Typechecking Options
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+
+    // Style Options
+    // "noImplicitReturns": true,
+    // "noImplicitOverride": true,
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+    // "noFallthroughCasesInSwitch": true,
+    // "noPropertyAccessFromIndexSignature": true,
+
+    // Recommended Options
     "strict": true,
     "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
-    "skipLibCheck": true
+    "skipLibCheck": true,
   }
 }
 ```
 
-Several lines here are now redundant with the defaults (`strict`, `noUncheckedSideEffectImports`) — the generator keeps them explicit so the file documents itself. Everything else in this lesson explains why these particular lines are the ones worth writing.
+Notice `rootDir` and `outDir` are generated **commented out** — `tsc --init` shows you the shape but does not guess your layout, which is exactly the `rootDir` gotcha covered below. `verbatimModuleSyntax` and `isolatedModules` are covered in [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/); several other lines here are now redundant with the defaults (`strict`, `noUncheckedSideEffectImports`) — the generator keeps them explicit so the file documents itself.
 
 ## What `strict` actually turns on
 
@@ -68,6 +96,7 @@ Several lines here are now redundant with the defaults (`strict`, `noUncheckedSi
 | `strictPropertyInitialization` | Class fields must be assigned in the constructor (or marked optional) |
 | `useUnknownInCatchVariables` | `catch (e)` gives you `unknown`, not `any`, forcing you to narrow |
 | `strictBuiltinIteratorReturn` | Built-in iterators return `undefined` when done, not `any` (5.6) |
+| `noImplicitThis` | A `this` that would fall back to `any` (e.g. in a plain function used as a method) becomes an error |
 | `alwaysStrict` | Parses in strict mode and emits `"use strict"` — can no longer be turned off |
 
 The headline is `strictNullChecks`. Without it, `string` secretly includes `null` and `undefined`, and the compiler cannot warn you about the single most common runtime crash in JavaScript. With it, `null` and `undefined` are their own types that you must handle deliberately.

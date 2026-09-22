@@ -32,7 +32,7 @@ export const resolveDiagram = `flowchart TB
   bundled --> bundler["moduleResolution: bundler\nlets the bundler resolve"]`;
 
 - **`nodenext`** — models the current Node exactly: it reads `"type": "module"` in `package.json`, honors the `"exports"` field, and enforces ESM rules (including that you write file extensions in relative imports: `import "./util.js"`). Setting `module: nodenext` implies the matching resolution. `node16` is the same idea frozen at Node 16.
-- **`node18` (5.8) / `node20` (5.9)** — stable snapshots of `nodenext` for teams pinned to a Node line. `nodenext` moves as Node moves; `node20` will not change under you, and it implies `target: es2023`. The difference that matters most: `node18` still allows the deprecated `assert` import syntax and forbids `require()` of ESM; `node20` and `nodenext` are the other way round.
+- **`node18` (5.8) / `node20` (5.9)** — stable snapshots of `nodenext` for teams pinned to a Node line. `nodenext` moves as Node moves; `node20` will not change under you. `module` never sets `target` on its own — `tsc --showConfig --module node20` shows no `target` key at all, and code using ES2025 APIs (with `lib` set accordingly) compiles fine under `module: node20` at the compiler's default target. Pick `target` independently, based on what your runtime supports. The difference that matters most between `node18` and `node20`: `node18` still allows the deprecated `assert` import syntax and forbids `require()` of ESM; `node20` and `nodenext` are the other way round.
 - **`bundler`** — for code that goes through Vite, esbuild, Rolldown, or webpack. It relaxes the extension requirement and lets the bundler handle the actual file lookup, matching how those tools behave. Since 6.0 you may pair it with `module: commonjs` as well as `esnext`/`preserve`, which gives CJS projects a migration path.
 
 The legacy `node` / `node10` algorithm and `classic` are **gone** in TypeScript 7 (deprecated in 6.0). They predate `"exports"` and package `"type"`, so they described a Node that no longer exists.
@@ -44,6 +44,7 @@ The key mental model: **`moduleResolution` should describe how your code is *act
 Under `nodenext`, native ESM requires the extension in the import, and — confusingly — you write the `.js` extension even though the file on disk is `.ts`:
 
 ```ts
+// @skip-verify illustrative — "./util(.js)" is not a real module
 // util.ts exists on disk, but the emitted import must point at the emitted .js
 import { helper } from "./util.js"; // ✅ correct under nodenext ESM
 import { helper } from "./util";    // ❌ ESM needs the extension
@@ -54,6 +55,7 @@ This trips up everyone once. The reason: `tsc` does not rewrite your import path
 Since 5.7 there is an escape hatch. With `rewriteRelativeImportExtensions: true` you write the real extension and `tsc` rewrites it on emit — only for *relative* paths that end in a TypeScript extension:
 
 ```ts
+// @skip-verify illustrative — none of these modules exist on disk
 import { helper } from "./util.ts";      // emitted as "./util.js"
 import { x } from "../lib/thing.mts";    // emitted as "../lib/thing.mjs"
 import pkg from "some-package/file.ts";  // not relative — left alone
@@ -73,6 +75,7 @@ Two Node features that `nodenext` models:
 The `asserts` keyword for import assertions is deprecated; the standard is `with`, and under `nodenext` a JSON import *must* carry it and *must* be a default import:
 
 ```ts
+// @skip-verify illustrative — "./config.json" is not a real module
 import config from "./config.json" with { type: "json" }; // ✅
 import { port } from "./config.json" with { type: "json" }; // ❌ no named exports from JSON
 import config from "./config.json" assert { type: "json" }; // ❌ deprecated syntax
@@ -81,8 +84,10 @@ import config from "./config.json" assert { type: "json" }; // ❌ deprecated sy
 TypeScript 5.9 also types **`import defer`**, the ECMAScript proposal for lazy module evaluation. The module is linked but not *run* until you first touch an export — useful for expensive initialisation you only sometimes need:
 
 ```ts
+// @skip-verify illustrative — "./heavy-feature.js" is not a real module
 import defer * as heavy from "./heavy-feature.js";
 
+declare const flag: boolean;
 if (flag) {
   heavy.run(); // the module body executes here, not at startup
 }

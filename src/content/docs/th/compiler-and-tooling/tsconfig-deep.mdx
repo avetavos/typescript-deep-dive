@@ -23,37 +23,65 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | `noUncheckedSideEffectImports` | `false` | `true` |
 | `libReplacement` | `true` | `false` |
 
-สองตัวในนี้กัดโปรเจกต์จริงตอน upgrade `types: []` แปลว่า `@types/node` ไม่ถูกหยิบมาใช้แค่เพราะ install ไว้ — ต้องเขียน `"types": ["node"]` (หรือ `["*"]` ถ้าอยากได้พฤติกรรมเดิม) ส่วน `rootDir: "."` แปลว่า layout แบบ `src/` จะ emit ไปที่ `dist/src/` ถ้าไม่ตั้ง `"rootDir": "./src"` ให้ชัด
+สองตัวในนี้กัดโปรเจกต์จริงตอน upgrade `types: []` แปลว่า `@types/node` ไม่ถูกหยิบมาใช้แค่เพราะ install ไว้ — ต้องเขียน `"types": ["node"]` (หรือ `["*"]` ถ้าอยากได้พฤติกรรมเดิม) ส่วน `rootDir: "."` แปลว่า layout แบบ `src/` จะ emit ไปที่ `dist/src/` ถ้าไม่ตั้ง `"rootDir": "./src"` ให้ชัด — และเรื่องนี้ไม่เงียบ: ถ้าตั้ง `outDir` ไว้แต่ปล่อย `rootDir` เป็น default `tsc` จะหยุดด้วย hard error **และยังเขียนไฟล์ไปที่ path ที่ซ้อนอยู่ดี**:
+
+```
+error TS5011: The common source directory of 'tsconfig.json' is './src'. The 'rootDir' setting must
+be explicitly set to this or another path to adjust your output's file layout.
+```
 
 ## `tsc --init` เขียนอะไรให้ตอนนี้
 
-ตั้งแต่ 5.9 `tsc --init` generate ไฟล์สั้น ๆ ที่มีความเห็นชัดเจน แทนกำแพง option ที่ comment ไว้ เป็นจุดเริ่มที่ดีสำหรับโปรเจกต์ Node หรือ library:
+`tsc --init` generate ไฟล์สั้น ๆ ที่มีความเห็นชัดเจน แทนกำแพง option ที่ comment ไว้ นี่คือ output จริงของ `tsc --init` บน TypeScript 7.0.2 (ตัด comment ยาวบางส่วนออก แต่บรรทัด `rootDir`/`outDir` ที่ถูก comment ไว้คือของจริงเป๊ะ):
 
 ```json
 {
+  // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
-    "rootDir": "./src",
-    "outDir": "./dist",
+    // File Layout
+    // "rootDir": "./src",
+    // "outDir": "./dist",
+
+    // Environment Settings
+    // See also https://aka.ms/tsconfig/module
     "module": "nodenext",
     "target": "esnext",
     "types": [],
+    // For nodejs:
+    // "lib": ["esnext"],
+    // "types": ["node"],
+    // and npm install -D @types/node
+
+    // Other Outputs
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
+
+    // Stricter Typechecking Options
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+
+    // Style Options
+    // "noImplicitReturns": true,
+    // "noImplicitOverride": true,
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+    // "noFallthroughCasesInSwitch": true,
+    // "noPropertyAccessFromIndexSignature": true,
+
+    // Recommended Options
     "strict": true,
     "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
-    "skipLibCheck": true
+    "skipLibCheck": true,
   }
 }
 ```
 
-หลายบรรทัดในนี้ซ้ำกับ default อยู่แล้ว (`strict`, `noUncheckedSideEffectImports`) — generator ตั้งใจเขียนให้ชัดเพื่อให้ไฟล์อธิบายตัวเองได้ ที่เหลือของบทนี้อธิบายว่าทำไมบรรทัดเหล่านี้ถึงเป็นบรรทัดที่คุ้มค่าจะเขียน
+สังเกตว่า `rootDir` กับ `outDir` ถูก generate มาแบบ **comment ทิ้งไว้** — `tsc --init` ให้เห็น shape แต่ไม่เดา layout ให้ ซึ่งก็คือ gotcha ของ `rootDir` ที่คุยไว้ข้างบนพอดี `verbatimModuleSyntax` กับ `isolatedModules` อธิบายอยู่ใน [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/); หลายบรรทัดในนี้ซ้ำกับ default อยู่แล้ว (`strict`, `noUncheckedSideEffectImports`) — generator ตั้งใจเขียนให้ชัดเพื่อให้ไฟล์อธิบายตัวเองได้
 
 ## `strict` เปิดอะไรให้จริง ๆ
 
@@ -68,6 +96,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 | `strictPropertyInitialization` | field ของ class ต้องถูก assign ใน constructor (หรือ mark เป็น optional) |
 | `useUnknownInCatchVariables` | `catch (e)` ให้ `unknown` ไม่ใช่ `any` บังคับให้คุณ narrow |
 | `strictBuiltinIteratorReturn` | iterator built-in return `undefined` ตอนจบ ไม่ใช่ `any` (5.6) |
+| `noImplicitThis` | `this` ที่จะ fall back เป็น `any` (เช่นใน plain function ที่ใช้เป็น method) กลายเป็น error |
 | `alwaysStrict` | parse ใน strict mode และ emit `"use strict"` — ปิดไม่ได้อีกแล้ว |
 
 พระเอกคือ `strictNullChecks` ถ้าไม่เปิด `string` จะแอบรวม `null` และ `undefined` ไว้ด้วย และ compiler เตือนคุณเรื่อง runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย พอเปิดแล้ว `null` และ `undefined` กลายเป็น type ของตัวเองที่คุณต้องจัดการอย่างตั้งใจ

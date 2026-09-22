@@ -67,13 +67,18 @@ Node 22.6+ (เป็น default ตั้งแต่ 23.6 และในท�
 ```ts
 // with erasableSyntaxOnly
 class Point {
-  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit
+  constructor(public x: number, public y: number) {} // ❌ parameter properties need emit (TS1294)
 }
 enum Color { Red, Green }                             // ❌ enums need emit
 
-class Point2 { constructor(readonly x: number) {} }   // ✅ readonly is erasable
+class Point2 {
+  readonly x: number;                    // ✅ an ordinary field assignment instead —
+  constructor(x: number) { this.x = x; } //    readonly on a parameter property still needs emit too
+}
 const Color2 = { Red: "red", Green: "green" } as const; // ✅ a const object instead
 ```
+
+modifier ไหนก็ตามที่ใส่บน parameter — `public`, `private`, `readonly` — ทำให้มันเป็น **parameter property** และ parameter property ต้อง emit `this.x = x` ให้เสมอ ไม่มีตัวไหน erasable เลย `constructor(readonly x: number) {}` ยังพัง `TS1294` อยู่ดีภายใต้ `erasableSyntaxOnly` และ Node `--experimental-strip-types` ก็ปฏิเสธด้วย (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX: TypeScript parameter property is not supported in strip-only mode`) — ทางแก้คือเขียน field กับการ assign เองเสมอ อย่างที่ `Point2` ทำข้างบน
 
 จับคู่กับ `rewriteRelativeImportExtensions` แล้วคุณ develop กับไฟล์ `.ts` ตรง ๆ ได้ และยัง emit package `.js` สะอาด ๆ ด้วย `tsc` เพื่อ publish
 
@@ -82,6 +87,7 @@ const Color2 = { Red: "red", Green: "green" } as const; // ✅ a const object in
 เพราะ bundler และ type-stripper ทำงาน **ทีละไฟล์** จึงมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild, swc และ stripper ของ Node
 
 ```ts
+// @skip-verify illustrative — "./user" is not a real module
 // with isolatedModules, tsc forces you to be explicit here:
 export type { User } from "./user"; // ✅ clearly a type re-export
 export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
@@ -92,6 +98,7 @@ export { User } from "./user";      // ❌ ambiguous: is User a type or a value?
 การแก้ข้างบนเป็นส่วนหนึ่งของ feature ที่กว้างกว่า: **type-only import และ export** การ mark import เป็น type-only บอก compiler ว่ามีอยู่เพื่อ type information ล้วน ๆ และต้องถูก erase — ไม่ emit เป็น runtime import เด็ดขาด
 
 ```ts
+// @skip-verify illustrative — "./user" and "./db" are not real modules
 import type { User } from "./user";     // erased entirely at emit
 import { type User, save } from "./db"; // User erased, save kept
 ```
@@ -103,6 +110,7 @@ import { type User, save } from "./db"; // User erased, save kept
 `noEmit` คือ "check แต่ไม่ emit" ตั้งแต่ 5.6 มีภาพสะท้อนของมัน: **`noCheck`** คือ "emit แต่ไม่ check" — `tsc` รันเฉพาะ pass ระดับ syntax ที่ต้องใช้ผลิต output ตัวมันเองเป็นแค่ esbuild ที่ช้ากว่า แต่พอรวมกับ **`isolatedDeclarations`** (5.5) มันมีประโยชน์ขึ้นมา: ถ้าทุก export มี type ระบุชัด ไฟล์ `.d.ts` จะถูก generate ทีละไฟล์ได้โดยไม่ต้องใช้ checker ซึ่งแปลว่า declaration emit รันขนานกับ type-checking ได้ หรือให้ bundler plugin ทำทั้งหมดก็ได้
 
 ```ts
+// @skip-verify illustrative before/after pair — not meant to compile as one program
 // with isolatedDeclarations
 export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
 export function parse(input: string): unknown { return JSON.parse(input); } // ✅
@@ -121,7 +129,7 @@ export function parse(input: string): unknown { return JSON.parse(input); } // �
 }
 ```
 
-เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ใน `.tsbuildinfo` (เขียนเสมอตั้งแต่ 5.6) และ recheck เฉพาะสิ่งที่เปลี่ยน ตั้งแต่ 5.6 การ build **เดินต่อแม้เจอ error** ในโปรเจกต์ upstream เพื่อให้คุณเห็นทุก failure ในการรันเดียว — ใส่ `--stopOnBuildErrors` ถ้าอยากได้พฤติกรรม fail-fast แบบเดิม — และ TypeScript 7 check โปรเจกต์ที่เป็นอิสระต่อกันพร้อมกันด้วย `--builders` วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental และขนาน
+เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ใน `.tsbuildinfo` (เขียนเสมอตั้งแต่ 5.6) และ recheck เฉพาะสิ่งที่เปลี่ยน ตั้งแต่ 5.6 การ build **เดินต่อแม้เจอ error** ในโปรเจกต์ upstream เพื่อให้คุณเห็นทุก failure ในการรันเดียว — ใส่ `--stopBuildOnErrors` ถ้าอยากได้พฤติกรรม fail-fast แบบเดิม — และ TypeScript 7 check โปรเจกต์ที่เป็นอิสระต่อกันพร้อมกันด้วย `--builders` วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental และขนาน
 
 <Callout title="สรุปหนึ่งบรรทัด">
 ให้ bundler emit และให้ `tsc` check — และด้วย native compiler แบบขนานของ TypeScript 7 (`--checkers`, `--builders`, native watcher) การ check เร็วกว่าปีที่แล้ว 8–12 เท่า รัน `.ts` ตรง ๆ ใน Node ได้โดยยึด syntax ที่ erase ได้ (`erasableSyntaxOnly`), รักษาความปลอดภัยแบบ single-file ด้วย `isolatedModules` และ `verbatimModuleSyntax`, ใช้ `noCheck` + `isolatedDeclarations` เมื่ออยากได้ declaration โดยไม่ผ่าน checker และใช้ project references ให้ `tsc --build` เป็น incremental ใน monorepo 7.0 ไม่มี programmatic API — เครื่องมือที่ต้องใช้ให้ใช้ `@typescript/typescript6` จนกว่า 7.1 จะมา

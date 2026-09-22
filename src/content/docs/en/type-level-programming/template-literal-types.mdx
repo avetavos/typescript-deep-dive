@@ -15,6 +15,7 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 Template literal types look like JavaScript template strings, but they build **types**. You interpolate other types into a string-shaped type:
 
 ```ts
+// @expect-error TS2322
 type Greeting = `Hello, ${string}`;
 
 const a: Greeting = "Hello, Ada"; // ✅

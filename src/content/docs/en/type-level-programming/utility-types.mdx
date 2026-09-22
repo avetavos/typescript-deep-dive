@@ -24,52 +24,71 @@ TypeScript ships a standard library of **utility types**. By now you have seen e
 | `Record<K, V>` | Object with keys `K`, values `V` | Mapped type over `K` |
 | `Exclude<T, U>` | Remove `U` from union `T` | Distributive conditional |
 | `Extract<T, U>` | Keep only `U` from union `T` | Distributive conditional |
-| `NonNullable<T>` | Remove `null`/`undefined` | Conditional type |
+| `NonNullable<T>` | Remove `null`/`undefined` | Intersection trick (`T & {}`) — see below |
 | `ReturnType<F>` | The return type of `F` | Conditional with `infer` |
 | `Parameters<F>` | The parameter tuple of `F` | Conditional with `infer` |
 | `Awaited<T>` | Unwrap a Promise | Recursive conditional with `infer` |
+
+Not every entry is literally one of the three primitives (mapped type, distributive conditional, conditional with `infer`):
+
+| Utility | Why it does not fit a primitive |
+|---------|----------------------------------|
+| `NonNullable<T>` | An **intersection trick** (`T & {}`), not a conditional type — see below |
+| `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` | **Compiler intrinsics** with no expressible TypeScript-level definition at all |
 
 ## The mapped-type family
 
 `Partial`, `Required`, `Readonly`, `Pick`, and `Record` are all one-line mapped types:
 
 ```ts
-type Partial<T>  = { [K in keyof T]?: T[K] };
-type Required<T> = { [K in keyof T]-?: T[K] };
-type Readonly<T> = { readonly [K in keyof T]: T[K] };
-type Pick<T, K extends keyof T> = { [P in K]: T[P] };
-type Record<K extends keyof any, V> = { [P in K]: V };
+type MyPartial<T>  = { [K in keyof T]?: T[K] };
+type MyRequired<T> = { [K in keyof T]-?: T[K] };
+type MyReadonly<T> = { readonly [K in keyof T]: T[K] };
+type MyPick<T, K extends keyof T> = { [P in K]: T[P] };
+type MyRecord<K extends keyof any, V> = { [P in K]: V };
 ```
 
-Nothing exotic — a loop over keys, sometimes changing a modifier, sometimes looking up `T[K]`. Once you see this, `Pick<User, "id" | "name">` is obviously "iterate those two keys, copy their value types."
+Nothing exotic — a loop over keys, sometimes changing a modifier, sometimes looking up `T[K]`. Once you see this, `Pick<User, "id" | "name">` is obviously "iterate those two keys, copy their value types." (The real lib types are named `Partial`, `Required`, etc. — they are renamed `My…` here only so this fence can compile standalone without redeclaring TypeScript's own globals.)
 
 ## The distributive-conditional family
 
-`Exclude`, `Extract`, and `NonNullable` operate on **unions** using a conditional type that distributes over each member:
+`Exclude` and `Extract` operate on **unions** using a conditional type that distributes over each member:
 
 ```ts
-type Exclude<T, U> = T extends U ? never : T;
-type Extract<T, U> = T extends U ? T : never;
-type NonNullable<T> = T extends null | undefined ? never : T;
+type MyExclude<T, U> = T extends U ? never : T;
+type MyExtract<T, U> = T extends U ? T : never;
 
-type A = Exclude<"a" | "b" | "c", "b">; // "a" | "c"
+type A = MyExclude<"a" | "b" | "c", "b">; // "a" | "c"
 ```
 
 When the checked type is a naked type parameter and you pass a union, the conditional runs **once per member** and unions the results. So `Exclude` maps each member to either `never` (drop it) or itself (keep it) — and `never` disappears from a union. `Omit` then falls out as `Pick<T, Exclude<keyof T, K>>`.
+
+## `NonNullable`: an intersection trick, not a conditional
+
+`NonNullable` looks like it belongs in the family above, but since TypeScript 4.8 the real lib definition is a plain intersection, not a conditional type:
+
+```ts
+type MyNonNullable<T> = T & {};
+
+type A = MyNonNullable<string | null | undefined>; // string
+type B = MyNonNullable<number | null>;              // number
+```
+
+`null` and `undefined` are not assignable to the empty object type `{}`, so intersecting each union member with `{}` drops those two members while leaving every other member effectively unchanged — intersection distributes over a union the same way multiplication distributes over addition. It reads like "remove `null`/`undefined`," but the mechanism is an **intersection**, not `T extends null | undefined ? never : T` (which also works, but is not what the standard library ships).
 
 ## The `infer` family
 
 `ReturnType`, `Parameters`, and `Awaited` **capture** a type out of a structure with `infer`:
 
 ```ts
-type ReturnType<F> = F extends (...args: any[]) => infer R ? R : never;
-type Parameters<F> = F extends (...args: infer P) => any ? P : never;
+type MyReturnType<F> = F extends (...args: any) => infer R ? R : any;
+type MyParameters<F> = F extends (...args: infer P) => any ? P : never;
 
-type R = ReturnType<() => number>;        // number
-type P = Parameters<(a: string, b: number) => void>; // [string, number]
+type R = MyReturnType<() => number>;        // number
+type P = MyParameters<(a: string, b: number) => void>; // [string, number]
 ```
 
-`infer R` matches the function return position and binds it to `R`; `infer P` matches the whole parameter list as a tuple. `Awaited` adds recursion to peel nested promises.
+`infer R` matches the function return position and binds it to `R`; `infer P` matches the whole parameter list as a tuple. Note the two fallbacks differ: `ReturnType` falls back to `any` when `F` is not a function (so calling the result never adds new errors), while `Parameters` falls back to `never`. `Awaited` adds recursion to peel nested promises.
 
 ## Newer built-ins worth knowing
 
@@ -80,6 +99,7 @@ The table above is the classic set. A few later additions use exactly the same p
 - `NoInfer<T>` (5.4) — an intrinsic that stops a position from contributing to inference, so one argument can be *checked against* a type parameter without *widening* it. Details in [Inference and infer](/typescript/en/generics/inference-and-infer/).
 
 ```ts
+// @expect-error TS2322
 function createFSM<S extends string>(config: { states: S[]; initial: NoInfer<S> }) {}
 
 createFSM({ states: ["idle", "busy"], initial: "idle" });  // ✅ S = "idle" | "busy"
@@ -92,11 +112,12 @@ Without `NoInfer`, `initial: "bogus"` would simply widen `S` to `"idle" | "busy"
 
 export const utilDiagram = `flowchart TB
   mapped["Mapped types"] --> f1["Partial, Required, Readonly, Pick, Record"]
-  cond["Distributive conditionals"] --> f2["Exclude, Extract, NonNullable, Omit"]
-  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]`;
+  cond["Distributive conditionals"] --> f2["Exclude, Extract, Omit"]
+  infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]
+  trick["Intersection trick (T & {})"] --> f4["NonNullable"]`;
 
 <Callout title="The one-line takeaway">
-The utility types are not magic — they are short expressions in the primitives you have learned. The **mapped-type** family (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) loops over keys; the **distributive-conditional** family (`Exclude`, `Extract`, `NonNullable`, and `Omit`) filters union members; the **`infer`** family (`ReturnType`, `Parameters`, `Awaited`) captures a type out of a function or promise. Reading the standard library is the fastest way to internalize all five techniques.
+The utility types are not magic — they are short expressions in the primitives you have learned. The **mapped-type** family (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) loops over keys; the **distributive-conditional** family (`Exclude`, `Extract`, and `Omit`) filters union members; the **`infer`** family (`ReturnType`, `Parameters`, `Awaited`) captures a type out of a function or promise. `NonNullable` looks like it belongs with the conditionals but is actually a separate **intersection trick** (`T & {}`). Reading the standard library is the fastest way to internalize all of these techniques.
 </Callout>
 
 export const quizUtility = [
@@ -124,7 +145,7 @@ export const quizUtility = [
     q: 'How does `ReturnType<F>` extract the return type?',
     options: [
       'It runs the function',
-      'A conditional type with `infer R` in the return position: `F extends (...a: any[]) => infer R ? R : never`',
+      'A conditional type with `infer R` in the return position — essentially `F extends (...args: any) => infer R ? R : any`',
       'It reads a runtime property',
       'A mapped type over the parameters',
     ],

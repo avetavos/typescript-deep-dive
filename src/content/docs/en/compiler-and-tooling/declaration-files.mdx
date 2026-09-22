@@ -82,7 +82,26 @@ Now `tsc` produces a `.d.ts` next to each emitted `.js`, and you point `package.
 Two options improve what gets emitted:
 
 - **`isolatedDeclarations`** (5.5) requires an explicit type on every export. In return, `.d.ts` files can be generated one file at a time without running the checker — in parallel, or by a bundler plugin — which is what large monorepos and tools like `esbuild` need to emit declarations fast.
-- Since 5.8 computed property names that are plain identifiers or dotted names are **preserved** in declarations (`[propName]: number`) instead of being widened to an index signature (`[x: string]: number`), so consumers see the real shape.
+- Since 5.8 a computed property whose key is a plain identifier or a dotted name is **preserved** in declaration output instead of being widened to a generic index signature:
+
+```ts
+declare const propName: string;
+export const config = {
+  [propName]: 1,
+};
+
+declare const ns: { key: string };
+export const config2 = {
+  [ns.key]: 2,
+};
+
+// tsc --declaration emits:
+//   export declare const config: { [propName]: number; };
+//   export declare const config2: { [ns.key]: number; };
+// (pre-5.8 this widened both to { [x: string]: number })
+```
+
+so consumers see the real shape instead of a bare index signature.
 
 <Callout title="The one-line takeaway">
 A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package). Most libraries are covered either by types shipped in the package or by community `@types/*` packages from DefinitelyTyped — found automatically for imports, but since TypeScript 6.0 global packages like `@types/node` must be listed in `types`. When you publish a library, set `declaration: true` (and consider `isolatedDeclarations`) so your consumers get types too.
