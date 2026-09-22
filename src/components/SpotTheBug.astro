@@ -6,7 +6,7 @@ interface Props {
   lang?: string;
 }
 
-const { code, lang = 'go' } = Astro.props;
+const { code, lang = 'ts' } = Astro.props;
 const th = Astro.currentLocale === 'th';
 const title = th ? '🐛 หา bug ในโค้ดนี้' : '🐛 Spot the bug';
 const reveal = th ? 'เฉลย' : 'Show the answer';
