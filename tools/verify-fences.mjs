@@ -25,9 +25,14 @@ let n = 0, failed = 0, skipped = 0, disagree = 0;
 for (const f of files) {
   const src = readFileSync(f, 'utf8');
   let i = 0;
-  for (const m of src.matchAll(/```ts\n([\s\S]*?)```/g)) {
+  // ```ts fences plus TSPlayground literals (`export const xxxCode = `...``), which are the
+  // runnable snippets a reader can Check/Run in the browser and must compile the same way.
+  const snippets = [...src.matchAll(/```ts\n([\s\S]*?)```/g)].map((m) => m[1])
+    .concat([...src.matchAll(/export const (\w+Code) = `((?:[^`\\]|\\[\s\S])*)`/g)]
+      .map((m) => Function('return `' + m[2] + '`')()));
+  for (const raw of snippets) {
     i++; n++;
-    const body = m[1];
+    const body = raw.endsWith('\n') ? raw : raw + '\n';
     const first = body.split('\n')[0];
     const skip = first.match(/^\/\/ @skip-verify(.*)$/);
     if (skip) { skipped++; console.log(`SKIP ${f}#${i}${skip[1] ? ' —' + skip[1] : ''}`); continue; }
