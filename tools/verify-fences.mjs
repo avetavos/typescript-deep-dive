@@ -6,7 +6,7 @@
 import { readFileSync, mkdirSync, writeFileSync, globSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
-const FLAGS = ['--ignoreConfig', '--noEmit', '--strict', '--target', 'es2025', '--lib', 'es2025,dom,dom.iterable',
+const FLAGS = ['--ignoreConfig', '--noEmit', '--strict', '--target', 'es2025', '--lib', 'esnext,dom,dom.iterable',
   '--module', 'esnext', '--moduleResolution', 'bundler', '--skipLibCheck', '--types', 'node', '--pretty', 'false'];
 const filter = process.argv[2] ?? '';
 const useTsgo = process.env.TSGO !== '0' && existsSync('node_modules/.bin/tsgo');

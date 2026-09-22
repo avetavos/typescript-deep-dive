@@ -101,7 +101,6 @@ routes.home; // still the literal "/" — not widened to string
 **Dates.** TypeScript ships types for the **Temporal** API in the `esnext` library (`lib.esnext.temporal.d.ts` — not yet folded into `es2025`, verified against the installed 7.0.2 lib files). When a boundary hands you an ISO timestamp, `Temporal.Instant.from(iso)` gives you an immutable, timezone-explicit value — a far better inner type than a mutable `Date`, and Node 26 is expected to enable Temporal by default.
 
 ```ts
-// @skip-verify Temporal lives in lib.esnext.temporal — this harness always compiles fences with --lib es2025; type-checked separately with --lib esnext,dom
 const instant = Temporal.Instant.from("2026-09-22T00:00:00Z");
 instant.epochMilliseconds; // type-checks
 ```
