@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 **Prerequisite:** โมดูลนี้ต่อยอดจาก [Conditional Types](/typescript/th/generics/conditional-types/) และ [Inference and infer](/typescript/th/generics/inference-and-infer/) — อ่านสองบทนั้นก่อนถ้ายังไม่ได้อ่าน เพราะทุกบทในนี้ถือว่าคุณรู้แล้วว่า conditional type กับ `infer` คืออะไร
 
@@ -46,6 +48,151 @@ export const composeDiagram = `flowchart TB
 generic อย่าง `Box<T>` คือ *function* ระดับ type — รับ type แล้วคืน type โมดูลนี้ว่าด้วยการเขียน function แบบนั้นให้ซับซ้อนขึ้น: ตัวที่วน loop over key, branch ตามเงื่อนไข และเรียกตัวเอง compiler คือ interpreter ของคุณ และเส้นหยักสีแดงคือการประเมินที่ล้มเหลว
 </Callout>
 
+## Type-level testing: พิสูจน์ว่า type resolve เป็นอะไรจริง ๆ
+
+ทุก claim ในโมดูลนี้ — "`Foo<Bar>` resolve เป็น `Baz`" — ต้องถูก *ตรวจสอบ* ไม่ใช่แค่มองด้วยตา comment `// ^?` เป็นแค่คำใบ้สำหรับคนอ่าน diff มันไม่ใช่สิ่งที่ `tsc` ตรวจสอบให้ วิธีมาตรฐานที่ทำให้ claim ระดับ type กลายเป็นสิ่งที่ compiler ตรวจจริง คือ type alias เล็ก ๆ สองตัว:
+
+```ts
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+type Expect<T extends true> = T;
+
+// If Equal<A, B> is not literally `true`, this line fails to compile.
+type Case1 = Expect<Equal<1 | 2, 1 | 2>>;
+```
+
+`Expect<T extends true>` คือ type parameter ที่มี constraint: คุณ instantiate มันได้เฉพาะกับสิ่งที่ assignable ให้ `true` เท่านั้น ป้อนอะไรที่ไม่ใช่ literal `true` เข้าไป — `false` หรือ `boolean` ที่กว้างกว่า — compiler จะ reject ด้วย `TS2344` การ reject นั้น*คือ*การที่ test ล้มเหลว type-level test suite ไม่มีอะไรมากไปกว่าไฟล์ที่เต็มไปด้วยบรรทัด `Expect<Equal<..., ...>>` ที่ต้อง compile ผ่านหมดทุกบรรทัด
+
+### ทำไม `Equal` แบบตรงไปตรงมาถึงผิด
+
+วิธีที่ล่อใจให้เขียน `Equal` คือ "แต่ละฝั่ง extends อีกฝั่ง":
+
+```ts
+type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+```
+
+ดูสมเหตุสมผลและผ่านทุก test ง่าย ๆ ที่คุณคิดจะเขียนด้วยมือ มันพังตรงสอง case ที่สำคัญที่สุดพอดี: `any` และ union
+
+```ts
+type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+
+// EqualNaive<any, string> SHOULD be false -- any and string are not the same
+// type -- but both of these compile with zero errors:
+type NaiveAnyString = EqualNaive<any, string>;
+const proof1: NaiveAnyString = true;
+const proof2: NaiveAnyString = false;
+```
+
+ทั้งสอง assignment type-check ผ่านหมด ซึ่งเป็นไปได้ก็ต่อเมื่อ `NaiveAnyString` คือ `boolean` — ไม่ใช่ `true` หรือ `false` ที่ตัดสินใจได้เลย `any extends string` และ `string extends any` เป็น `true` *ทั้งคู่* (นี่แหละคือสิ่งที่ทำให้ `any` unsound) นิยามแบบ naive เลยแยก "เท่ากัน" ออกจาก "ฝั่งหนึ่งเป็น `any`" ไม่ได้
+
+union พังด้วยเหตุผลคนละแบบ — การเช็ค `extends` ของตัว naive เอง distribute ผ่าน naked union แบบเงียบ ๆ รันการเทียบใหม่ทีละ member แทนที่จะรันครั้งเดียว:
+
+```ts
+type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+
+// The exact same type compared to itself. This has to be `true`.
+type NaiveSame = EqualNaive<string | number, string | number>;
+const proof3: NaiveSame = true;
+const proof4: NaiveSame = false;
+```
+
+ทั้งคู่ compile ผ่านอีกแล้ว — `string | number` เทียบกับ*ตัวมันเอง*ได้ `boolean` ไม่ใช่ `true` เพราะ `A extends B` distribute ผ่าน member ของ `A` ในขณะที่ `B` ยังเป็น union ทั้งก้อน แล้ว `B extends A` ข้างในแต่ละกิ่งก็ distribute ผ่าน `B` อีกที สอง type ที่เหมือนกันเป๊ะให้ผลลัพธ์ที่ตัดสินใจไม่ได้
+
+`Equal` ที่ถูกต้อง — แบบ `(<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false` — หลบทั้งสองปัญหานี้ด้วยการไม่เอา `A` หรือ `B` ไปวางในตำแหน่งที่ถูกตรวจโดยตรงเลย แต่ละฝั่งถูกห่อด้วย generic function type ก่อน และ function type ถูกเทียบทั้งก้อน (ไม่ distribute และ `any` ก็ไม่ได้รับการปฏิบัติพิเศษแบบ "ทั้งสองกิ่งพร้อมกัน" ที่มันได้เมื่อมันเป็น naked checked type เอง) นี่คือ form ที่ harness `verify:fences` ของคอร์สนี้ และคู่ `Equal`/`Expect` ทุกคู่ที่คุณเคยเห็นในบทก่อนหน้า ใช้จริง
+
+<TSPlayground code={equalProofCode} id="equal-any-and-union-proof" title="Naive Equal ยุบเหลือ boolean; ตัวจริงไม่เป็นแบบนั้น" />
+
+export const equalProofCode = `type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+
+// naive: both compile -- proof that the result is \`boolean\`, not a real answer
+type NaiveAnyString = EqualNaive<any, string>;
+const naive1: NaiveAnyString = true;
+const naive2: NaiveAnyString = false;
+
+// correct: any is genuinely not string -- only \`false\` is assignable
+type CorrectAnyString = Equal<any, string>;
+const correct1: CorrectAnyString = false;
+// const correct2: CorrectAnyString = true; -- would be a real TS2322 error
+
+// naive: the exact same union compared to itself also collapses to boolean
+type NaiveSame = EqualNaive<string | number, string | number>;
+const naive3: NaiveSame = true;
+const naive4: NaiveSame = false;
+
+// correct: two identical types resolve to the literal \`true\`
+type CorrectSame = Equal<string | number, string | number>;
+const correct3: CorrectSame = true;`;
+
+### `@expect-error` เป็นตัว assertion
+
+อีกครึ่งหนึ่งของ harness คอร์สนี้ — `// @expect-error TSxxxx` — ก็เป็น type-level test เหมือนกัน แค่เล็งไปที่ diagnostic ของ compiler แทนที่จะเป็น type ที่ resolve ออกมา fence ที่ตั้งใจไม่ให้ compile ผ่านจะประกาศ error code ที่คาดไว้ในบรรทัดแรก; `verify:fences` จะทำให้ build fail ถ้า code นั้นไม่ปรากฏ หรือถ้ามี code *อื่น* ปรากฏมาด้วย รวมกับ `Expect` แล้ว ไฟล์เดียว assert ได้ทั้ง "อันนี้ resolve เป็น type นี้เป๊ะ" และ "อันนี้ตั้งใจให้เป็น compile error":
+
+```ts
+// @expect-error TS2344
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// passes: two identical unions really are equal
+type CaseOk = Expect<Equal<string | number, string | number>>;
+
+// intentionally wrong -- any is NOT string, so Equal<any, string> is `false`,
+// and Expect<false> is a TS2344 constraint violation. The failure to compile
+// is the test catching the (deliberately) incorrect claim.
+type CaseWrong = Expect<Equal<any, string>>;
+```
+
+นี่คือเวอร์ชันเล็กที่สุดของสิ่งที่บทเรียนเฉพาะทีหลังในคอร์สนี้จะครอบคลุมแบบเต็ม ๆ — เขียน type-level test suite จริง จัดระเบียบ case ของ `Expect` ต่อ utility และอ่าน error ของ constraint violation ว่าเป็น assertion ที่ล้มเหลว ไม่ใช่ bug ในโค้ดคุณ คู่ `Equal`/`Expect` ทุกคู่ที่ใช้ก่อนหน้านี้ในคอร์ส (Conditional Types, Inference & `infer`) และทุกที่ในโมดูลนี้ต่อจากนี้ก็คือ pattern เดียวกันเป๊ะ
+
+## Mental Model
+
+<Mermaid title="A type-level test turns a resolved-type claim into a compile error" code={testMentalDiagram} />
+
+export const testMentalDiagram = `flowchart TD
+  claim["ข้อกล่าวอ้าง: Foo of Bar resolve เป็น Baz"] --> wrap["Expect of Equal ของทั้งสอง type"]
+  wrap --> compiles{"compile ผ่านไหม?"}
+  compiles -->|ผ่าน| holds["ข้อกล่าวอ้างเป็นจริง -- Equal ให้ literal true"]
+  compiles -->|ไม่ผ่าน, TS2344| wrong["ข้อกล่าวอ้างเป็นเท็จ -- Equal ให้ false หรือ boolean"]`;
+
+มองว่า `Expect<Equal<A, B>>` เหมือน `assert(a === b)` ตอน runtime แค่ให้ type checker เป็นคนประเมินแทน `node` build ที่เขียวคือ test suite ที่ผ่าน comment `// ^?` ยังมีประโยชน์เป็นตัวช่วยอ่าน แต่มันไม่พิสูจน์อะไรด้วยตัวเอง — มีแค่เส้นหยักสีแดง (หรือการไม่มีมัน) เท่านั้นที่ถูกตรวจจริง
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `EqualNaive` (`A extends B ? (B extends A ? ...)`) | อ่านแล้วเข้าใจง่าย ไม่มี syntax แปลกใหม่ | ยุบเหลือ `boolean` — ไม่ใช่คำตอบที่ตัดสินใจได้ — สำหรับ `any` และสำหรับ union ที่เทียบกับตัวเอง ซึ่งเป็นสอง case ที่คุณต้องการให้ type test ถูกต้องมากที่สุด |
+| `Equal` แบบ function-type | reject `any` ถูกต้อง และจัดการ union ได้ เป็น form ที่ type-testing library จริงทุกตัว (`tsd`, `expect-type`, harness ของคอร์สนี้) ใช้ | ดูไม่มีที่มาจนกว่าคุณจะเห็นมันพังบน form แบบ naive — ควรเก็บ comment อธิบายไว้ |
+| `Expect<T extends true>` + `@expect-error` | เปลี่ยน claim เรื่อง resolved type ให้เป็น compiler error จริง ตรวจทุกครั้งที่รัน | ดีเท่ากับ `Equal` ที่มันห่ออยู่เท่านั้น — `Equal` ที่พังให้ความมั่นใจปลอม ไม่ใช่รายงาน bug |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **comment `// ^?` ในบทเรียนของคอร์สนี้ถูก compiler ตรวจสอบ** ไม่จริง — มันเป็นโน้ตสำหรับคนอ่าน มีแค่ `Expect<Equal<...>>` (หรือ `@expect-error` ที่ตั้งใจ) เท่านั้นที่ถูก `tsc` ตรวจจริง
+- **`A extends B ? (B extends A ? true : false) : false` เป็นวิธีเขียน `Equal` ที่ถูกต้อง แค่ดูเทอะทะกว่านิดหน่อย** ไม่จริง มันไม่ใช่แค่ผิดนิดหน่อย มันตัดสินใจไม่ได้เลยสำหรับสอง case ที่พบบ่อยที่สุดที่ type test ต้องครอบคลุม: `any` ในฝั่งไหนก็ตาม และการเทียบ union กับตัวเอง
+- **type-level test ที่ compile ผ่านต้องแปลว่า type นั้นเท่ากันจริง ๆ** มันแปลว่า `Equal` (ไม่ว่าจะนิยามแบบไหน) ให้ `true` ถ้า `Equal` เองเป็นเวอร์ชัน naive ที่พัง test ที่ "ผ่าน" ก็ซ่อนความต่างจริง ๆ ได้ — ความถูกต้องของ `Equal` ไม่ใช่ตัวเลือก มันคือตัว test ทั้งหมด
+
+## อ่านโค้ดที่ AI เขียน
+
+utility ระดับ type ที่ AI generate มักจะมาโดย*ไม่มี* test พิสูจน์ว่ามัน resolve ตรงตามชื่อที่ตั้งไว้ — และเวลามี test ก็ควรเช็คว่ามันใช้ `Equal` แบบไหน:
+
+- `Equal<A, B>` ที่เขียนมือแบบ `A extends B ? (B extends A ? true : false) : false` compile ผ่านสวย ๆ และดูเหมือนใช้ได้กับตัวอย่างในไฟล์เดียวกัน — ปัญหาจะโผล่แค่ตอนเจอ `any` หรือ union ที่เหมือนกันเป๊ะ ซึ่งเป็น case ที่มีโอกาสน้อยที่สุดที่จะโผล่ใน smoke test เร็ว ๆ
+- type utility ที่ไม่มี `Expect`/`Equal` probe อยู่ใกล้ ๆ เลยแม้แต่ตัวเดียว กำลังเชื่อ comment `// ^?` (หรือไม่มีอะไรเลย) เป็นหลักฐาน — ถามว่าอะไรพิสูจน์ claim นั้นจริง ๆ ใน PR description
+- `@ts-expect-error` (ไม่ใช่ `@ts-ignore`) บน type-level test ที่*ควร*พังนั้นถูกต้องและตั้งใจ — ตรงข้ามกับกลิ่น `@ts-ignore` ที่พูดถึงใน glossary — เช็คว่าไฟล์ยังคงพังดังๆ ถ้าโค้ดเลิกผิดจริง
+
+<SpotTheBug lang="ts" code={`type IsEqual<A, B> = A extends B ? (B extends A ? true : false) : false;
+type Expect<T extends true> = T;
+
+// "prove" that a generic cache key helper only ever returns string keys
+type CacheKey<T> = T extends string | number ? \`key:\${T}\` : never;
+
+type Test1 = Expect<IsEqual<CacheKey<any>, never>>;`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย แต่มันไม่ได้พิสูจน์อะไรเกี่ยวกับ `CacheKey<any>` เลย `IsEqual<CacheKey<any>, never>` ใช้นิยาม naive แบบ mutual-`extends` — และเพราะ `any` อยู่ฝั่งซ้าย `CacheKey<any> extends never` กับ `never extends CacheKey<any>` เป็น `true` ทั้งคู่ไม่ว่า `CacheKey<any>` จะ resolve เป็นอะไรจริง ๆ (`any` short-circuit ทั้งสองทิศทางของการเช็คความเท่ากันแบบ naive เหมือนกับที่มันทำกับ `EqualNaive<any, string>` ข้างบน) "test" นี้จะผ่านแม้ `CacheKey<any>` จะเป็น `string`, `boolean` หรืออะไรก็ตาม — มันไม่ได้ทดสอบ claim นั้นเลย เปลี่ยนไปใช้ `Equal` ตัวจริง (form function-type) ทำให้ test มีความหมาย: `Equal<CacheKey<any>, never>` resolve เป็น `false` ถูกต้อง เพราะ `CacheKey<any>` จริง ๆ คือ `` `key:${any}` `` ที่ยุบเหลือ string แบบ `any` ไม่ใช่ `never` — ซึ่งเป็นข้อมูลที่มีประโยชน์เองที่การเช็คแบบ naive ซ่อนไว้
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+claim เรื่อง resolved type น่าเชื่อถือแค่ไหนขึ้นกับ test ที่ตรวจมันเท่านั้น: `Expect<T extends true>` เปลี่ยน "`Foo<Bar>` คือ `Baz`" ให้เป็น compile error จริงเมื่อมันไม่ใช่ แต่ต้อง `Equal<A, B>` เป็น form function-type เท่านั้น — form ที่ดูตรงไปตรงมา `A extends B ? (B extends A ? true : false) : false` ยุบเหลือ `boolean` ที่ตัดสินใจไม่ได้สำหรับ `any` และสำหรับ union ที่เทียบกับตัวเอง ซึ่งเป็นสอง case ที่ type test ต้องจับให้ได้มากที่สุดพอดี
+</Callout>
+
 export const quizIndex = [
   {
     q: '"type-level programming" หมายความว่าอะไร?',
@@ -56,6 +203,7 @@ export const quizIndex = [
       'generate เอกสารจาก type',
     ],
     answer: 1,
+    explain: 'type-level programming derive type ใหม่จาก type เดิม — การวนซ้ำ การ branch และ function ที่รันหมดตอน compile time ก่อน JavaScript จะรันด้วยซ้ำ',
   },
   {
     q: '5 primitive ใดที่ประกอบกันเป็น type ขั้นสูงส่วนใหญ่?',
@@ -66,6 +214,7 @@ export const quizIndex = [
       'let, const, var, function, return',
     ],
     answer: 1,
+    explain: '5 ตัวนี้ — keyof สำหรับ key, indexed access สำหรับ value type, mapped type สำหรับวนซ้ำ, conditional type กับ infer สำหรับ branch และ capture, recursion สำหรับทำซ้ำ — ประกอบกันเป็นเกือบทุก utility type ในโมดูลนี้',
   },
   {
     q: 'generic type อย่าง `Box<T>` เข้าใจได้ดีที่สุดว่าเป็น:',
@@ -76,6 +225,40 @@ export const quizIndex = [
       'compiler flag',
     ],
     answer: 1,
+    explain: 'Box<T> รับ type argument แล้วผลิต type ออกมา — เป็น shape เดียวกับ function เป๊ะ แค่ compiler เป็นคนประเมินแทนที่จะรันตอน runtime',
+  },
+  {
+    q: '```ts\ntype EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;\ntype R = EqualNaive<any, string>;\n```\n`R` คืออะไร และทำไมมันเป็นปัญหาสำหรับ type-level test?',
+    options: [
+      '`false` — ถูกต้อง เพราะ any กับ string เป็นคนละ type',
+      '`true` — เพราะ any เข้ากันได้กับทุกอย่าง',
+      '`boolean` — เพราะ any extends string และ string extends any เป็น true ทั้งคู่ การเช็คแบบ naive เลยตัดสินใจไม่ได้ และทั้ง true กับ false ก็ assignable ให้ R',
+      'compile error',
+    ],
+    answer: 2,
+    explain: 'any ทำให้การเช็คแบบ naive ผ่านทั้งสองทิศทาง conditional เลย resolve เป็น literal เดียวไม่ได้ — มันยุบเหลือ boolean แปลว่า "test" จะยอมรับคำตอบไหนก็ได้',
+  },
+  {
+    q: '```ts\ntype Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;\ntype Expect<T extends true> = T;\ntype Case = Expect<Equal<any, string>>;\n```\nอันนี้ compile ผ่านไหม และทำไม?',
+    options: [
+      'ผ่าน — any assignable ให้ทุกอย่าง',
+      'ไม่ผ่าน, TS2344 — Equal<any, string> resolve เป็น literal false ถูกต้อง ซึ่งไม่ตรง constraint true ของ Expect',
+      'ผ่าน — Equal คืน true เสมอสำหรับ any',
+      'ไม่ผ่าน แต่เป็น error code อื่นเพราะ Expect ถูกใช้ผิด',
+    ],
+    answer: 1,
+    explain: 'การห่อแต่ละฝั่งด้วย generic function type ก่อนเทียบ หลบ any short-circuit ที่ทำให้นิยามแบบ naive พัง ดังนั้น Equal<any, string> คือ literal false — และ Expect<false> คือ TS2344 constraint violation จริง ตรงตาม failure ที่ type test ควรให้ตรงนี้',
+  },
+  {
+    q: 'ทำไม comment `// ^?` ในคอร์สนี้ถึงไม่นับเป็น type-level test?',
+    options: [
+      'มันมีไว้สำหรับคนอ่านเท่านั้น — compiler ไม่ตรวจมันเลย มีแค่ Expect<Equal<...>> (หรือ @expect-error ที่ตั้งใจ) เท่านั้นที่ tsc ตรวจจริง',
+      'มันถูกตรวจ แต่แค่ใน strict mode',
+      'มันเป็น syntax พิเศษของ TypeScript ที่รันตอน compile time',
+      'มันใช้ได้แค่ใน TSPlayground',
+    ],
+    answer: 0,
+    explain: 'comment `// ^?` คือข้อความธรรมดาที่ compiler ไม่รู้ความหมายเลย ว่า claim เรื่อง resolved type เป็นจริงไหมพิสูจน์ได้แค่ด้วยสิ่งที่ compiler ประเมินและพังได้จริง อย่าง Expect<Equal<A, B>>',
   },
 ];
 

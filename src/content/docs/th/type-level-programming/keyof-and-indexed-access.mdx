@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## `keyof` ให้ key มาเป็น type
 
@@ -112,8 +114,130 @@ type NameOnly = MyPick<User, "name">;
 
 `K extends keyof T` จำกัด key ให้เป็น key จริงของ `T`; `[P in K]` วนซ้ำ key เหล่านั้น (mapped type, บทเรียนถัดไปถ้าคุณข้ามมา); `T[P]` lookup value type แต่ละตัว สาม primitive ได้เครื่องมือที่มีประโยชน์หนึ่งตัว
 
+## `keyof any` คือ `string | number | symbol`
+
+`keyof` ไม่ได้จำกัดแค่ object type เจาะจง — คุณถามได้ว่า `keyof any` คืออะไร คำตอบคือเซตเต็มของสิ่งที่ JavaScript ยอมให้เป็น property key:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type KA = keyof any;
+//   ^? string | number | symbol
+
+type _kaCheck = Expect<Equal<KA, string | number | symbol>>;
+```
+
+นี่ไม่ใช่เรื่องบังเอิญ — property key ของ JavaScript จริง ๆ เป็นได้แค่ `string`, `number` (ที่ถูก coerce เป็น string ตอน runtime แต่ TypeScript แยกติดตามมันต่างหากสำหรับการ index tuple/array) หรือ `symbol` `keyof any` โผล่มาตลอดในฐานะ constraint ของ generic key parameter: `Record<K extends keyof any, V>` — นิยามจริงของ `Record` ใน lib — บอกว่า "`K` เป็นอะไรก็ได้ที่ object ของ JavaScript ใช้เป็น key ได้จริง" ซึ่งกว้างกว่า `keyof` ของ object type เจาะจงตัวใดตัวหนึ่ง
+
+## `keyof` บน generic type parameter ยังคง deferred
+
+ข้างใน generic function `keyof T` resolve เป็น union ของ literal key ที่เป็นรูปธรรมไม่ได้ — `T` ยังไม่ใช่ type เจาะจง compiler เลยเก็บ `keyof T` เป็น expression ที่ deferred ไม่โปร่งใส จนกว่า function จะถูกเรียกด้วย type argument จริง ผลที่ตามมาที่ใช้ได้จริงมากคือ: `Object.keys` ถูก type ให้คืน `(keyof T)[]` ไม่ได้ ทั้งที่ดูเหมือนควรเป็นแบบนั้นเป๊ะ
+
+```ts
+// @expect-error TS2322
+function describe<T extends object>(t: T) {
+  const keys: (keyof T)[] = Object.keys(t);
+  return keys;
+}
+```
+
+```text
+error TS2322: Type 'string[]' is not assignable to type '(keyof T)[]'.
+  Type 'string' is not assignable to type 'keyof T'.
+    Type 'string' is not assignable to type 'never'.
+```
+
+มีสองเรื่องเกิดขึ้นตรงนี้ อย่างแรก `Object.keys` ถูก type ให้คืน `string[]` เต็ม ๆ — signature จริงใน lib ไม่ได้พยายามคืน `(keyof T)[]` เลยด้วยซ้ำ ด้วยเหตุผลเรื่อง soundness: ตอน runtime object ที่ type เป็น `T` มี key ได้*มากกว่า*ที่ `T` ประกาศไว้ (structural typing ยอมให้ value จริงมี property เพิ่มได้ และ subclass หรือ object literal ที่ assign ผ่าน type ที่กว้างกว่าก็มี key ที่ `T` ไม่เคยพูดถึงได้) caller เลยสมมติไม่ได้ว่า key list ตอน runtime จะตรงกับ `keyof T` เป๊ะ อย่างที่สอง สังเกต error trail: TypeScript รายงานว่า `keyof T` assignable จาก `string` ไม่ได้ แล้วรายงาน `keyof T` ที่*ยังdeferred*เหมือนมันเป็น `never` ในบริบทนี้ ก็เพราะมันไม่มี type ที่เป็นรูปธรรมของ `T` ให้ resolve `keyof T` เทียบด้วยเลย นี่คือเหตุผลที่ pattern `Object.keys(obj).forEach(k => ...)` ที่ index กลับเข้า `obj` ด้วย `k` ในโลกจริงต้องมี cast หรือ key list ที่ validate ตอน runtime — type system ไม่ได้ดื้อ มันแค่ปฏิเสธถูกต้องที่จะสัญญาสิ่งที่มันพิสูจน์ไม่ได้
+
+## Indexed access บน union distribute
+
+พอคุณ index เข้าไปใน **union ของ object type** ด้วย key indexed access จะเช็คแต่ละ member ของ union แยกกันแล้ว union ผลลัพธ์กลับเข้าด้วยกัน — สัญชาตญาณ distributive แบบเดียวกับ conditional type แค่ใช้กับการ lookup แทนการ branch:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type Data = { type: "a"; value: string } | { type: "b"; value: number };
+
+type ValueType = Data["value"];
+//   ^? string | number
+
+type _valueDistributes = Expect<Equal<ValueType, string | number>>;
+```
+
+`Data["value"]` อ่าน property `value` ของแต่ละ union member แยกกัน — `string` จากตัวแรก `number` จากตัวที่สอง — แล้ว union กันเป็น `string | number` นี่แหละคือสิ่งที่ทำให้ property ที่ discriminated union แชร์กันถูก index ได้อย่างปลอดภัยโดยไม่ต้อง narrow ก่อน และเป็นกลไกเดียวกับที่ `Getters<T>` กับทุก pattern mapped-type-over-a-union ในบทถัดไปพึ่งพา
+
+<TSPlayground code={keyofDeferredCode} id="keyof-deferred-and-distribution" title="keyof any, generic keyof ที่ deferred และ indexed access ที่ distribute ผ่าน union" />
+
+export const keyofDeferredCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// keyof any: the full set of legal JS property key types
+type KA = keyof any;
+type _kaCheck = Expect<Equal<KA, string | number | symbol>>;
+
+// keyof T stays deferred inside a generic -- Object.keys is always string[]
+function describe<T extends object>(t: T) {
+  const keys = Object.keys(t);
+  type K = typeof keys;
+  type _isStringArray = Expect<Equal<K, string[]>>;
+  return keys;
+}
+
+// indexed access on a union distributes over each member
+type Data = { type: "a"; value: string } | { type: "b"; value: number };
+type ValueType = Data["value"];
+type _valueDistributes = Expect<Equal<ValueType, string | number>>;`;
+
+## Mental Model
+
+<Mermaid title="keyof T is deferred until T is a concrete type" code={deferredDiagram} />
+
+export const deferredDiagram = `flowchart TD
+  concrete["T เป็น type เจาะจง เช่น User"] --> resolved["keyof T resolve ทันทีเป็น literal union"]
+  generic["T เป็น bare generic type parameter"] --> deferred["keyof T ยังคงเป็น expression ที่ deferred ไม่โปร่งใส"]
+  deferred --> callsite["resolve ก็ต่อเมื่อ function ถูกเรียกด้วย type argument จริงแล้วเท่านั้น"]`;
+
+มองว่า `keyof T` ข้างใน generic เหมือนตัวแปรที่ถูก capture อยู่ใน closure ที่ยังไม่ถูก evaluate: expression นั้นถูกต้องและมี type ครบ แต่ยังไม่มีอะไรเป็นรูปธรรมให้คำนวณ compiler เลือก defer มันแทนที่จะเดา ซึ่งเป็นเหตุผลเป๊ะที่ `Object.keys(t)` — การคำนวณ runtime ที่เกิดขึ้นจริง ๆ — type ให้ตรงกับสิ่งที่ยังไม่ resolve ไม่ได้
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `Object.keys` type เป็น `string[]` | sound — ไม่เคยสัญญา key ที่ไม่ใช่ `string` จริงตอน runtime แม้ object จะมี property เพิ่มเกิน `T` | คุณเสียการเชื่อมกับ `keyof T` ไปเลย ต้อง cast หรือ validate เอาเองถ้าอยากได้ typed key กลับมา |
+| cast `Object.keys(t) as (keyof T)[]` | ได้ typed iteration สำหรับ case ที่คุณควบคุมทุก value ที่ assign เป็น `T` | นำ unsoundness แบบเดียวกับที่ signature จริงของ `Object.keys` ป้องกันไว้กลับมา — object ที่มี key เกินจะทำลายสัญญานั้นแบบเงียบ ๆ |
+| indexed access บน union (`Data["value"]`) | อ่านเป็นธรรมชาติ ตรงกับพฤติกรรมของ property ที่ discriminated union แชร์กันโดยไม่ต้อง narrow ก่อน | ใช้ได้แค่กับ key ที่มีอยู่ใน*ทุก*member ของ union — index key ที่มีแค่บาง member เป็น compile error ไม่ใช่ผลลัพธ์บางส่วน |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`keyof T` ข้างใน generic function อ่านเป็น key จริงของ `T` ตัวไหนก็ตามที่จะกลายมาเป็นในตัว function body ตรงนั้นได้เลย** ไม่จริง — `keyof T` ถูก defer จนกว่าจะ instantiate ข้างใน generic body มันทำตัวเป็น opaque type ไม่ใช่ literal union ที่ pattern-match ได้
+- **`Object.keys` คืน `string[]` แทนที่จะเป็น `(keyof T)[]` เป็นข้อจำกัดที่ทีม TypeScript แค่ยังไม่ได้แก้** ไม่จริง มันเป็นทางเลือกเรื่อง soundness ที่ตั้งใจ: type รันไทม์ของ value มี key ได้มากกว่าที่ type แบบ static `T` ประกาศไว้ ดังนั้น `(keyof T)[]` จะเป็นสัญญาที่ compiler รักษาไว้ไม่ได้
+- **index union ด้วย key ให้ value type จากแค่กิ่งเดียว กิ่งไหนก็ตามที่ "ชนะ"** มันไม่ใช่แบบนั้น มัน distribute ผ่านทุก member ที่มี key นั้นแล้ว union value type ของทุกตัวเข้าด้วยกัน — ไม่มีตัวชนะ มีแค่ union
+
+## อ่านโค้ดที่ AI เขียน
+
+- โค้ด generated ที่สมมติว่า `Object.keys(obj)` index กลับเข้า `obj` ได้ตรง ๆ (`Object.keys(obj).forEach(k => console.log(obj[k]))`) มักต้องมี cast, narrow ด้วย `keyof typeof obj` ที่ call site หรือยอมรับว่า value ที่อ่านแบบนี้ type เป็น union ของทุก property type — ไม่ใช่ lookup ที่เจาะจง การ type ตัวแปร loop `k` เป็น `any` แบบเงียบ ๆ เพื่อให้ error หายไปทำลายการป้องกันที่ signature จริงของ `Object.keys` มีไว้พอดี
+- generic helper ที่ cast `Object.keys(t) as (keyof T)[]` โดยไม่มี comment กำลังสัญญาว่า `T` ไม่มี key เกินตอน runtime — ควรเช็คว่าสัญญานั้นจริงไหมในทุก call site โดยเฉพาะตัวที่ส่ง subtype หรือ object literal ที่ assign ผ่านตัวแปรที่ type กว้างกว่าเข้ามา
+- `Data["someKey"]` ที่ใช้บน union ที่ `someKey` มีอยู่แค่บาง member เป็น compile error ไม่ใช่ผลลัพธ์แบบบางส่วนหรือแบบ `undefined` — ถ้าโค้ด generated ดูเหมือนคาดหวังแบบหลัง shape ของ union (หรือสมมติฐานของโค้ดเกี่ยวกับมัน) ควรถูกดูใหม่อีกที
+
+<SpotTheBug lang="ts" code={`interface Config {
+  host: string;
+  port: number;
+  debug: boolean;
+}
+
+function logAllSettings<T extends object>(config: T) {
+  const keys: (keyof T)[] = Object.keys(config);
+  for (const key of keys) {
+    console.log(key, config[key]);
+  }
+}`}>
+โค้ดนี้ compile ไม่ผ่าน — `Object.keys(config)` คือ `string[]` และ `string[]` assignable ให้ `(keyof T)[]` ไม่ได้ (เป็น `TS2322` เป๊ะจาก section deferred-`keyof` ข้างบน) มันน่าลอง "แก้" ด้วย `Object.keys(config) as (keyof T)[]` แต่ cast นั้นคือ unsoundness เป๊ะที่ signature จริงหลีกเลี่ยงไว้: ถ้า `logAllSettings` ถูกเรียกด้วย value `Config` ที่จริง ๆ ถูกสร้างเป็น `{ ...defaultConfig, extra: "field" }` แล้วส่งผ่าน type ที่กว้างกว่า `keys` จะมี `"extra"` รวมอยู่ด้วยแบบเงียบ ๆ ซึ่ง annotation `(keyof T)[]` สัญญาไว้ว่าจะไม่มีวันเกิดขึ้น ทางแก้ที่รักษาสัญญาไว้ได้คือไม่ต้องฝืน type จริง — วน `Object.keys(config)` เป็น `string[]` แล้วถ้าต้องการ index กลับเข้า `config` ให้ validate แต่ละ key เทียบกับ list ของ key ของ `T` ที่รู้จักตอน runtime หรือยอมรับ key parameter ที่เจาะจงและแคบกว่า (`function logSettings<T, K extends keyof T>(config: T, keys: K[])`) แทนที่จะพยายามกู้ `keyof T` กลับมาจากการสแกนตอน runtime
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`keyof T` สร้าง **union ของ key ของ `T`** เป็น type; **indexed access** `T[K]` lookup **value type** ที่ key เหล่านั้น และ `T[keyof T]` ให้ union ของ value type ทั้งหมด `Arr[number]` เปลี่ยน array หรือ tuple type เป็น union ของ element สอง lookup นี้รวมกันคือฐานของ mapped type และแทบทุก utility type
+`keyof T` สร้าง **union ของ key ของ `T`** เป็น type; **indexed access** `T[K]` lookup **value type** ที่ key เหล่านั้น และ `T[keyof T]` ให้ union ของ value type ทั้งหมด `Arr[number]` เปลี่ยน array หรือ tuple type เป็น union ของ element; `keyof any` คือ `string | number | symbol` เซตเต็มของ property key ที่ JS ยอมให้ ข้างใน generic function `keyof T` ยังคง **deferred** จนกว่า `T` จะเป็นรูปธรรม — ซึ่งเป็นเหตุผลเป๊ะที่ `Object.keys` คืน `string[]` ไม่ใช่ `(keyof T)[]` — และการ index **union** ของ object type ด้วย key ที่แชร์กัน**distribute** union value type ของแต่ละ member เข้าด้วยกัน
 </Callout>
 
 export const quizKeyof = [
@@ -126,6 +250,7 @@ export const quizKeyof = [
       'User',
     ],
     answer: 1,
+    explain: 'keyof สร้าง union ของชื่อ property เป็น literal string type ไม่ใช่ value type และไม่ใช่ค่าตอน runtime',
   },
   {
     q: 'indexed access type `User["name"]` ให้อะไร?',
@@ -136,6 +261,7 @@ export const quizKeyof = [
       'keyof User',
     ],
     answer: 1,
+    explain: 'indexed access คือเวอร์ชันระดับ type ของ obj[key] — มัน lookup type ของ value ที่เก็บอยู่ที่ key นั้น ไม่ใช่ตัว key เอง',
   },
   {
     q: 'จะเอา element type ของ array type `T = string[]` อย่างไร?',
@@ -146,6 +272,7 @@ export const quizKeyof = [
       '`T[string]`',
     ],
     answer: 1,
+    explain: 'การ index array หรือ tuple type ด้วย `number` ให้ union ของ element type ทั้งหมด — เป็น idiom มาตรฐานสำหรับ "element type" ของ array หรือ tuple',
   },
   {
     q: '`User[keyof User]` แทนอะไร?',
@@ -156,6 +283,40 @@ export const quizKeyof = [
       'never',
     ],
     answer: 1,
+    explain: 'keyof User ให้ union ของ key แล้วการ index User ด้วย union ทั้งก้อนนั้น lookup value type ทุกตัวพร้อมกัน ได้ union ของทั้งหมด',
+  },
+  {
+    q: '`keyof any` คืออะไร?',
+    options: [
+      '`any`',
+      '`string | number | symbol` — เซตเต็มของ type ที่ JavaScript ยอมให้เป็น property key',
+      '`never`',
+      '`unknown`',
+    ],
+    answer: 1,
+    explain: 'property key ของ JavaScript เป็นได้แค่ string, number หรือ symbol เท่านั้น ดังนั้น keyof any — "key ของอะไรก็ได้เลย" — ก็คือ union นั้นเป๊ะ นี่ยังเป็น constraint ของ key parameter ของ Record ด้วย',
+  },
+  {
+    q: '```ts\nfunction describe<T extends object>(t: T) {\n  const keys: (keyof T)[] = Object.keys(t);\n  return keys;\n}\n```\nอันนี้ compile ผ่านไหม และทำไม?',
+    options: [
+      'ผ่าน — Object.keys ตรงกับ keyof T เป๊ะเสมอ',
+      'ไม่ผ่าน, TS2322 — Object.keys(t) type เป็น string[] และ keyof T ยังคง deferred (ยังไม่ resolve) ข้างใน generic body เลยพิสูจน์ไม่ได้ว่า string[] assignable ให้ (keyof T)[]',
+      'ผ่าน แต่แค่ภายใต้ noUncheckedIndexedAccess',
+      'ไม่ผ่าน เพราะ Object.keys ไม่มีอยู่บน generic T',
+    ],
+    answer: 1,
+    explain: 'Object.keys คืน string[] อย่างตั้งใจ — value ที่ type เป็น T มี key เกินได้ตอน runtime มากกว่าที่ T ประกาศไว้ compiler เลยสัญญาไม่ได้ว่าผลลัพธ์จะตรงกับ keyof T แถม keyof T เองก็ไม่มี key ที่เป็นรูปธรรมให้เช็คจนกว่า T จะถูก instantiate',
+  },
+  {
+    q: '```ts\ntype Data = { type: "a"; value: string } | { type: "b"; value: number };\ntype V = Data["value"];\n```\n`V` คืออะไร?',
+    options: [
+      '`string` อย่างเดียว จาก member แรก',
+      '`string | number` — indexed access บน union distribute ผ่านแต่ละ member แล้ว union value type เข้าด้วยกัน',
+      '`never` เพราะ value มีสอง type ต่างกันในทั้ง union',
+      'compile error',
+    ],
+    answer: 1,
+    explain: 'การ index union type ด้วย key ที่มีอยู่ในทุก member จะอ่าน key นั้นจากแต่ละ member แยกกันแล้ว union ผลลัพธ์เข้าด้วยกัน — พฤติกรรม distributive แบบเดียวกับที่เห็นใน conditional type แค่เอามาใช้กับการ lookup',
   },
 ];
 

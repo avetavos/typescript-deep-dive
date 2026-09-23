@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## A loop over keys
 
@@ -99,8 +101,200 @@ type StringProps<T> = {
 
 Remapping a key to `never` **removes** it from the result — the standard trick for filtering properties by their value type.
 
+## Homomorphic mapped types: modifiers travel with the shape
+
+A mapped type is called **homomorphic** when it maps directly over `[K in keyof T]` for a single bare type parameter `T` — nothing wrapped around `keyof T`, nothing else mixed in. A homomorphic mapped type gets a feature no other mapped type does: it automatically **copies the `readonly` and `?` modifiers** from the source type, on top of whatever modifier the mapped type itself adds.
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Source {
+  readonly a: string;
+  b?: number;
+}
+
+// Homomorphic: maps directly over keyof T
+type Copy<T> = { [K in keyof T]: T[K] };
+type Copied = Copy<Source>;
+
+// `a` is still readonly -- this assignment is a real TS2540, proving it
+declare const copied: Copied;
+// @ts-expect-error -- readonly a is preserved from Source
+copied.a = "changed";
+
+// `b` is still optional -- omitting it compiles
+const noB: Copied = { a: "x" };
+```
+
+Compare that to a mapped type whose key comes from a **plain, separate type parameter** — not `keyof T` inside the same alias:
+
+```ts
+// Non-homomorphic: K is just a string-constrained parameter, not keyof T here
+type FromKeys<K extends string, V> = { [P in K]: V };
+
+interface Source {
+  readonly a: string;
+  b?: number;
+}
+
+type NotCopied = FromKeys<keyof Source, Source[keyof Source]>;
+
+declare const notCopied: NotCopied;
+notCopied.a = "changed"; // ✅ compiles -- readonly was NOT preserved
+```
+
+```ts
+// @expect-error TS2741
+interface Source {
+  readonly a: string;
+  b?: number;
+}
+
+type FromKeys<K extends string, V> = { [P in K]: V };
+type NotCopied = FromKeys<keyof Source, Source[keyof Source]>;
+
+const missingB: NotCopied = { a: "x" }; // ❌ b is now REQUIRED -- optional was NOT preserved
+```
+
+This is not folklore — it is exactly the difference between two utility types you already know. `Partial<T> = { [K in keyof T]?: T[K] }` is homomorphic, which is why `Partial` of a type with a `readonly` property keeps it `readonly`. `Record<K, V> = { [P in K]: V }` is *not* homomorphic — its `K` is a bare `keyof any`-constrained parameter with nothing to copy modifiers from, so `Record` can only ever produce plain mutable, required properties, never `readonly` or `?>` ones, no matter what you pass in. Wrapping `keyof T` in anything — even something as innocent as `Extract<keyof T, string>` — also turns homomorphism off, because the mapped type is no longer directly `[K in keyof T]`:
+
+```ts
+// @expect-error TS2741
+interface Source {
+  readonly a: string;
+  b?: number;
+}
+
+// keyof T wrapped in Extract -- no longer the bare `keyof T` shape, so homomorphism is lost too
+type Wrapped<T> = { [K in Extract<keyof T, string>]: T[K] };
+type WrappedResult = Wrapped<Source>;
+
+const test: WrappedResult = { a: "x" }; // ❌ b is required again
+```
+
+## A mapped type over a naked type parameter distributes over unions
+
+A second, separate piece of special behavior: when a homomorphic mapped type's bare type parameter `T` is instantiated with a **union**, the mapped type runs once *per member* and unions the results — the same distributive instinct as a conditional type over a naked checked type, just applied to the mapping instead of a branch.
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface A { a: number }
+interface B { b: string }
+
+type Boxed<T> = { [K in keyof T]: T[K][] };
+
+type Result = Boxed<A | B>;
+//   ^? { a: number[] } | { b: string[] }
+
+type _distributes = Expect<Equal<Result, { a: number[] } | { b: string[] }>>;
+```
+
+This might look surprising if you expect `keyof (A | B)` reasoning — `keyof (A | B)` alone is `never` (there is no key common to both, since `A` and `B` share no property names), which would make a *non-distributing* mapped type collapse to `{}`. But because `Boxed<T>`'s `T` is naked, TypeScript distributes the whole mapped type over the union *before* computing `keyof` on each piece — running `Boxed<A>` and `Boxed<B>` separately and unioning the two resulting object types, exactly like a distributive conditional's per-member branches.
+
+## Arrays and tuples map to arrays and tuples
+
+A homomorphic mapped type applied to an array or tuple type does not turn it into a numeric-keyed object — it produces another array or tuple, preserving the exact shape (including tuple length and each element's position):
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type Boxed<T> = { [K in keyof T]: T[K][] };
+
+type TupleResult = Boxed<[string, number]>;
+type _tupleCheck = Expect<Equal<TupleResult, [string[], number[]]>>;
+
+type ArrResult = Boxed<string[]>;
+type _arrCheck = Expect<Equal<ArrResult, string[][]>>;
+```
+
+`Boxed<[string, number]>` becomes `[string[], number[]]` — a two-element tuple, not `{ 0: string[]; 1: number[]; length: number[] }`. This is the same homomorphic special-casing at work: TypeScript recognizes arrays and tuples as a shape worth preserving, not just an object with numeric-looking keys.
+
+<TSPlayground code={homomorphicCode} id="homomorphic-vs-not" title="Homomorphic mapped types preserve modifiers and shape; wrapping keyof T loses both" />
+
+export const homomorphicCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Source {
+  readonly a: string;
+  b?: number;
+}
+
+// homomorphic: readonly + optional both preserved
+type Copy<T> = { [K in keyof T]: T[K] };
+declare const copied: Copy<Source>;
+const okOmit: Copy<Source> = { a: "x" };          // b is still optional
+
+// non-homomorphic: readonly and optional are both LOST
+type FromKeys<K extends string, V> = { [P in K]: V };
+type NotCopied = FromKeys<keyof Source, Source[keyof Source]>;
+declare const notCopied: NotCopied;
+notCopied.a = "changed";                           // allowed -- readonly is gone
+
+// naked T distributes over a union before keyof is computed per-branch
+interface A { a: number }
+interface B { b: string }
+type Boxed<T> = { [K in keyof T]: T[K][] };
+type Result = Boxed<A | B>;
+type _distributes = Expect<Equal<Result, { a: number[] } | { b: string[] }>>;
+
+// arrays/tuples map to arrays/tuples, not numeric-keyed objects
+type TupleResult = Boxed<[string, number]>;
+type _tupleCheck = Expect<Equal<TupleResult, [string[], number[]]>>;`;
+
+## Mental Model
+
+<Mermaid title="Homomorphic mapping copies modifiers and shape; anything else starts from scratch" code={homoMentalDiagram} />
+
+export const homoMentalDiagram = `flowchart TD
+  bare["[K in keyof T] -- T is a single bare type parameter"] --> homo["Homomorphic: copies readonly/optional from T, preserves array/tuple shape"]
+  wrapped["[K in SomeExpression<keyof T>] or [P in K] for an unrelated K"] --> nonhomo["Not homomorphic: builds a plain object from scratch -- no modifiers to copy"]
+  homo --> union{"T instantiated with a union?"}
+  union -->|yes| dist["Distributes: runs once per member, unions the results"]`;
+
+The question to ask about any mapped type is not "does it use `keyof`" but "is `keyof T` the *entire* thing being mapped over, with `T` a single bare parameter." `Partial`, `Required`, `Readonly`, and `Pick` all qualify — which is why they preserve `readonly`/`?` and array/tuple shape, and why they distribute over unions passed to them. `Record` does not qualify, because its key parameter was never `keyof` of the value type to begin with.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Homomorphic form (`{ [K in keyof T]: ... }`) | Preserves `readonly`/`?` and array/tuple shape automatically, and distributes over unions for free | Only works when there is a single source type `T` to copy modifiers from — you cannot use it to build a type keyed by an arbitrary string union unrelated to any object |
+| Non-homomorphic form (`{ [P in K]: V }`) | Lets you build a type from any key set at all, including one with no matching object type — this is exactly `Record` | Always produces plain, mutable, required properties — there is no way to make it preserve modifiers, because there is no source object to copy them from |
+| Relying on automatic union distribution | Free per-member behavior for object unions with disjoint key sets — no `Exclude`/conditional gymnastics needed | Easy to forget it is even happening; a mapped type that "should" produce one merged object type instead silently produces a union, one branch per input member |
+
+## Common Misconceptions
+
+- **Any mapped type that mentions `keyof T` is homomorphic and preserves modifiers.** Only a mapped type whose *entire* key expression is the bare `keyof T` of a single type parameter `T` qualifies. Wrapping it in `Extract<keyof T, string>`, or extracting `keyof T` into a separate type parameter first, both turn homomorphism off — modifiers are lost either way.
+- **`Record<K, V>` should preserve `readonly`/`?` if you pass it a `keyof T` that came from a type with those modifiers.** It cannot — by the time `Record` sees `K`, it is just a union of string/number/symbol literals, with no memory of which object type (if any) they came from, and no modifiers to copy.
+- **A mapped type over an object union computes `keyof` of the whole union first, so a union of disjoint-key objects collapses to `{}`.** That is true only when the type parameter is *not* naked (e.g., already resolved to a specific union before reaching the mapped type). A bare naked `T` distributes the whole mapping over each union member first, then computes `keyof` per member — which is why disjoint-key unions still produce a sensible per-member result instead of `{}`.
+
+## Reading AI-generated code
+
+- A hand-rolled "clone with extra readonly" or "deep partial" utility that looks correct on a plain object often breaks silently once someone passes it a type with a `readonly` or optional property — if the mapped type routes the key through anything other than a bare `keyof T`, check the readonly/optional case specifically, since the compiler will not warn you that homomorphism was lost.
+- A generic utility built as `{ [K in SomeKeys]: SomeValue }` where `SomeKeys` was computed in a *previous* type alias (rather than being `keyof T` written directly in this one) cannot preserve source modifiers even if the author's comment claims it does — that claim needs a `readonly`/optional assignability probe, not a read-through.
+- Code that expects a mapped type over a union of object types to produce one merged object (all keys present, "just union everything together") is fighting how mapped types actually behave: a naked `T` distributes per-member instead, which is usually what you want, but is worth calling out explicitly in a comment so the next reader does not "fix" it into a non-distributing form by wrapping `T` in brackets.
+
+<SpotTheBug lang="ts" code={`interface Config {
+  readonly apiUrl: string;
+  timeout?: number;
+}
+
+// "DeepPartial-lite": intended to keep readonly/optional exactly like Config, just re-typed
+type ConfigKeys = keyof Config;
+type RebuildConfig<K extends ConfigKeys, V> = { [P in K]: V };
+
+type Rebuilt = RebuildConfig<ConfigKeys, Config[ConfigKeys]>;
+
+declare const rebuilt: Rebuilt;
+rebuilt.apiUrl = "https://changed.example"; // should this be allowed?`}>
+This compiles with zero errors, including the reassignment on the last line — but that is the bug, not a clean pass. `RebuildConfig` extracted `keyof Config` into a separate type alias (`ConfigKeys`) before mapping over it, so by the time `RebuildConfig`'s own `[P in K]` runs, `K` is just a bare string-literal-union type parameter with no connection to `Config` at all. That breaks homomorphism completely: `apiUrl`'s `readonly` and `timeout`'s `?` are both silently dropped, so `Rebuilt` ends up with every property mutable and required — the exact opposite of what a "keep it like Config" utility should do. The fix is to make the mapped type itself the thing that writes `keyof T`: `type RebuildConfig<T> = { [K in keyof T]: T[K] }` applied as `RebuildConfig<Config>`, which is homomorphic (the bare `keyof T` of a single parameter `T`) and correctly keeps `apiUrl` readonly and `timeout` optional — verify it with exactly the assignment probe used above, since the compiler gives no error either way and a "does it type-check" glance is not enough.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-A mapped type `{ [K in keyof T]: ... }` is a type-level loop over the keys of `T`; inside it, `T[K]` gives each original value type to transform. You add modifiers by writing `readonly`/`?` and remove them with `-readonly`/`-?`. An `as` clause remaps keys — renaming them (with template literals) or filtering them out by remapping to `never`. This one construct is how `Partial`, `Readonly`, `Required`, and most utility types are built.
+A mapped type `{ [K in keyof T]: ... }` is a type-level loop over the keys of `T`; inside it, `T[K]` gives each original value type to transform. You add modifiers by writing `readonly`/`?` and remove them with `-readonly`/`-?`. An `as` clause remaps keys — renaming them (with template literals) or filtering them out by remapping to `never`. A mapped type is **homomorphic** only when its key expression is the bare `keyof T` of a single type parameter `T` — that form alone copies `readonly`/`?` modifiers from the source, preserves array/tuple shape, and distributes over unions passed to `T`; anything else (`Record`, or `keyof T` wrapped in another type operator) builds a plain object from scratch with no modifiers to inherit.
 </Callout>
 
 export const quizMapped = [
@@ -113,6 +307,7 @@ export const quizMapped = [
       'A JSON schema',
     ],
     answer: 1,
+    explain: 'A mapped type iterates over a set of keys and produces a new type from them -- a for-loop the compiler runs at the type level.',
   },
   {
     q: 'Inside `{ [K in keyof T]: ... }`, how do you reference the original value type at key K?',
@@ -123,6 +318,7 @@ export const quizMapped = [
       '`K.value`',
     ],
     answer: 1,
+    explain: 'T[K] is indexed access -- it looks up the value type at whichever key K currently represents inside the loop.',
   },
   {
     q: 'What does the `-?` modifier do in a mapped type?',
@@ -133,6 +329,7 @@ export const quizMapped = [
       'Marks it readonly',
     ],
     answer: 1,
+    explain: 'The minus prefix subtracts a modifier rather than adding it -- -? strips optionality, which is exactly how the real Required utility type is implemented.',
   },
   {
     q: 'In a key-remapping `as` clause, what happens when you remap a key to `never`?',
@@ -143,6 +340,40 @@ export const quizMapped = [
       'The key becomes optional',
     ],
     answer: 1,
+    explain: 'A key remapped to never simply does not appear in the resulting object type -- never is the standard way to filter a key out of a mapped type.',
+  },
+  {
+    q: '```ts\ninterface Source { readonly a: string; b?: number; }\ntype Copy<T> = { [K in keyof T]: T[K] };\ntype FromKeys<K extends string, V> = { [P in K]: V };\n\ntype R1 = Copy<Source>;\ntype R2 = FromKeys<keyof Source, Source[keyof Source]>;\n```\nWhich of `R1`/`R2` keeps `a` readonly and `b` optional?',
+    options: [
+      'Both -- keyof Source is used in both',
+      'Only R1 -- it is homomorphic (maps directly over keyof T for a single bare T); R2 is not, because its K is a separate parameter with no connection to Source',
+      'Only R2',
+      'Neither -- mapped types never preserve modifiers',
+    ],
+    answer: 1,
+    explain: 'Homomorphism requires the mapped type\'s key expression to be exactly the bare keyof T of a single type parameter. R2 extracted keyof Source into K before mapping, so by the time { [P in K]: V } runs, there is no source object left to copy readonly/optional from.',
+  },
+  {
+    q: 'Why is `Record<K, V>` unable to preserve `readonly` or `?` modifiers, even if `K` is `keyof SomeType`?',
+    options: [
+      'Record is a special compiler intrinsic with no real definition',
+      'Record\'s K is just a union of key literals by the time Record sees it -- it is not homomorphic, so there is no source type to copy modifiers from',
+      'Record always makes every property readonly instead',
+      'It can, with a flag',
+    ],
+    answer: 1,
+    explain: 'Record is defined as { [P in K]: V } -- P ranges over a plain key union, not keyof T for some object T in the same alias, so it is not homomorphic and cannot inherit modifiers it has no way to see.',
+  },
+  {
+    q: '```ts\ninterface A { a: number }\ninterface B { b: string }\ntype Boxed<T> = { [K in keyof T]: T[K][] };\ntype Result = Boxed<A | B>;\n```\nWhat is `Result`?',
+    options: [
+      '`{}` — because keyof (A | B) is never, there being no shared key',
+      '`{ a: number[] } | { b: string[] }` — the homomorphic mapped type distributes over the union before computing keyof per member',
+      '`{ a: number[]; b: string[] }` — all keys merged into one object',
+      'A compile error',
+    ],
+    answer: 1,
+    explain: 'Because T is a naked bare type parameter in a homomorphic mapped type, TypeScript runs the mapping once per union member and unions the results -- the same distributive behavior conditional types have, applied here to a mapping instead of a branch.',
   },
 ];
 

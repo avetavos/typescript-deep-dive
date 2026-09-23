@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## You already know how these are built
 
@@ -108,6 +110,189 @@ createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" is not
 
 Without `NoInfer`, `initial: "bogus"` would simply widen `S` to `"idle" | "busy" | "bogus"` and compile.
 
+A few more built-ins round out the same intrinsic-vs-primitive picture:
+
+| Utility | Category | How it is built |
+|---------|----------|-----------------|
+| `Awaited<T>` | `infer` family (recursive) | Recursive conditional peeling `{ then(onfulfilled: infer F) }` layers until the value is no longer thenable |
+| `InstanceType<T>` | `infer` family | `infer` in the return position of a constructor signature: `T extends abstract new (...args: any) => infer R ? R : never` |
+| `ConstructorParameters<T>` | `infer` family | `infer` over a constructor's whole parameter list, mirroring `Parameters` but for `new (...)` instead of `(...)` |
+| `ThisParameterType<T>` | `infer` family | `infer` over an explicit `this` parameter: `T extends (this: infer U, ...args: any) => any ? U : unknown` |
+| `OmitThisParameter<T>` | `infer` family | `infer` over everything *except* `this`, rebuilding a callable type without it |
+| `NoInfer<T>` (5.4) | Compiler intrinsic (had a pre-5.4 workaround) | No expressible pre-5.4 TypeScript definition existed as a *built-in*, but `[T][T extends any ? 0 : never]` was the well-known community trick — see below |
+| `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` | Compiler intrinsic | No TypeScript-level definition at all, in any TypeScript version |
+
+## Writing six of them yourself, proven with `Equal`
+
+Reading the table is one thing; writing your own version and proving it matches is what actually confirms you understand the mechanism, rather than having memorized a name:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// 1. Awaited -- recursive conditional peeling nested Promise/PromiseLike layers
+type MyAwaited<T> = T extends null | undefined
+  ? T
+  : T extends { then(onfulfilled: infer F): any }
+    ? F extends (value: infer V, ...args: any) => any
+      ? MyAwaited<V>
+      : never
+    : T;
+
+type A1 = MyAwaited<Promise<Promise<number>>>;
+type _a1 = Expect<Equal<A1, number>>;
+
+// 2. InstanceType -- infer the instance type from a constructor's return position
+type MyInstanceType<T extends abstract new (...args: any) => any> =
+  T extends abstract new (...args: any) => infer R ? R : never;
+
+class Point { constructor(public x: number, public y: number) {} }
+type P1 = MyInstanceType<typeof Point>;
+type _p1 = Expect<Equal<P1, Point>>;
+
+// 3. ConstructorParameters -- infer the parameter tuple from a constructor
+type MyConstructorParameters<T extends abstract new (...args: any) => any> =
+  T extends abstract new (...args: infer P) => any ? P : never;
+
+type CP1 = MyConstructorParameters<typeof Point>;
+type _cp1 = Expect<Equal<CP1, [x: number, y: number]>>;
+
+// 4. ThisParameterType -- infer an explicit `this` parameter's type, or unknown
+type MyThisParameterType<T> = T extends (this: infer U, ...args: any) => any ? U : unknown;
+
+function greet(this: { name: string }, greeting: string) { return `${greeting}, ${this.name}`; }
+type G1 = MyThisParameterType<typeof greet>;
+type _g1 = Expect<Equal<G1, { name: string }>>;
+
+// 5. OmitThisParameter -- strip an explicit `this` parameter from a function type
+type MyOmitThisParameter<T> = T extends (this: any, ...args: infer A) => infer R
+  ? (...args: A) => R
+  : T;
+
+type O1 = MyOmitThisParameter<typeof greet>;
+type _o1 = Expect<Equal<O1, (greeting: string) => string>>;
+
+// 6. NoInfer -- the pre-5.4 community trick, before it became a compiler intrinsic
+type MyNoInfer<T> = [T][T extends any ? 0 : never];
+
+function createFSM<S extends string>(config: { states: S[]; initial: MyNoInfer<S> }) {}
+createFSM({ states: ["idle", "busy"], initial: "idle" });
+```
+
+The sixth one is worth pausing on: before `NoInfer<T>` became a real compiler intrinsic in TypeScript 5.4, `[T][T extends any ? 0 : never]` was the community's standard workaround, and it behaves identically for this purpose — wrapping `T` in a tuple, then immediately indexing back into it through a conditional, forces the position to be *checked against* rather than *contributing to* inference, the same effect the real intrinsic has. Knowing the old trick is not just historical trivia: it explains *why* `NoInfer` needed to become a real intrinsic at all (the tuple-indexing trick works, but obscures the intent, and does not compose as cleanly as a real, name-carrying utility).
+
+## The `Omit`-on-a-union footgun, and the distributive fix
+
+`Omit<T, K>` is defined as `Pick<T, Exclude<keyof T, K>>` — and `keyof` on a **union** of object types is the *intersection* of each member's keys, not the union of them (only a key present on every member counts). Apply `Omit` to a union of object types with different shapes, and you can lose far more than the one key you asked to remove:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+// Footgun: Omit<Shape, "kind"> collapses to the COMMON shape -- radius and side both vanish
+type OmitKind = Omit<Shape, "kind">;
+//   ^? {}
+
+type _footgun = Expect<Equal<OmitKind, {}>>;
+```
+
+`kind` was the *only* key common to both `Circle` and `Square`, so `keyof Shape` is just `"kind"`, and removing it leaves `keyof Shape` as `never` — `Omit<Shape, "kind">` becomes the empty object type `{}`, silently discarding `radius` and `side` entirely, not just `kind`. The fix is the same distributive-conditional idiom from Conditional Types, applied to make `Omit` run once per union member instead of once for the union as a whole:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
+type FixedOmitKind = DistributiveOmit<Shape, "kind">;
+//   ^? { radius: number } | { side: number }
+
+type _fixed = Expect<Equal<FixedOmitKind, { radius: number } | { side: number }>>;
+```
+
+`T extends any ? Omit<T, K> : never` looks like a no-op conditional (everything extends `any`), but its real job is making `T` naked on the checked side, which triggers distribution: `Omit` now runs separately on `Circle` and on `Square`, each keeping its own non-`kind` properties, and the results are unioned back together — exactly what "remove `kind` from each shape" should have meant in the first place.
+
+## `Partial` and `Required` under `exactOptionalPropertyTypes`
+
+The `exactOptionalPropertyTypes` flag changes what an optional property (`?`) is allowed to mean, and `Partial` is directly affected — an object with an explicit `undefined` value is a completely different question from an object that simply omits the key, and the flag decides whether `Partial` accepts the former:
+
+```ts
+interface Base { a: number; }
+type P = Partial<Base>;
+
+const p1: P = {};              // omit the key entirely -- always fine
+const p2: P = { a: undefined }; // explicit undefined -- fine WITHOUT the flag, TS2375 WITH it
+```
+
+```text
+$ node_modules/typescript/bin/tsc --noEmit --strict --exactOptionalPropertyTypes exact-optional.ts
+error TS2375: Type '{ a: undefined; }' is not assignable to type 'Partial<Base>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'a' are incompatible.
+    Type 'undefined' is not assignable to type 'number'.
+```
+
+Without the flag, an optional property has always informally meant "present with this type, or absent, or explicitly `undefined` — treat them the same." `exactOptionalPropertyTypes` makes `Partial<Base>`'s `a?: number` mean exactly what it says: present as `number`, or the key is entirely absent — explicitly writing `a: undefined` is now a type error unless you say so in the type itself (`a?: number | undefined`).
+
+A related, genuinely surprising fact about `Required`, in the *other* direction: when the source property's type **explicitly** includes `| undefined` (not just an implicit optional), whether `Required` removes that explicit `undefined` depends on the very same flag:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type LooseExplicit = { a?: number | undefined };
+type RExplicit = Required<LooseExplicit>;
+
+type AType = RExplicit["a"];
+type _isNumber = Expect<Equal<AType, number>>;
+```
+
+```text
+$ node_modules/typescript/bin/tsc --noEmit --strict exact-optional3.ts
+# (0 errors -- AType really is `number`: the explicit `| undefined` was stripped)
+
+$ node_modules/typescript/bin/tsc --noEmit --strict --exactOptionalPropertyTypes exact-optional3.ts
+error TS2344: Type 'false' does not satisfy the constraint 'true'.
+# (AType is `number | undefined` here -- Required did NOT strip it)
+```
+
+Without `exactOptionalPropertyTypes`, `?` and an explicit `| undefined` are treated as redundant restatements of the same thing, and `Required`'s `-?` collapses them together, leaving plain `number`. *With* the flag, `?` and `| undefined` are deliberately separate concerns (that separation is the entire point of the flag), so `-?` removes only the optionality — the explicit `| undefined` in the value type survives untouched, and `RExplicit["a"]` stays `number | undefined`. This is exactly the kind of claim that looks obvious in either direction until you actually run both commands — which is why both are quoted above rather than asserted from memory.
+
+<TSPlayground code={utilityDeepCode} id="write-your-own-and-omit-footgun" title="Six hand-written utilities, the Omit-on-union footgun, and its distributive fix" />
+
+export const utilityDeepCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type MyAwaited<T> = T extends null | undefined
+  ? T
+  : T extends { then(onfulfilled: infer F): any }
+    ? F extends (value: infer V, ...args: any) => any
+      ? MyAwaited<V>
+      : never
+    : T;
+type A1 = MyAwaited<Promise<Promise<number>>>;
+type _a1 = Expect<Equal<A1, number>>;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+// footgun: loses radius AND side, not just kind
+type OmitKind = Omit<Shape, "kind">;
+type _footgun = Expect<Equal<OmitKind, {}>>;
+
+// fix: distribute Omit over each union member first
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+type FixedOmitKind = DistributiveOmit<Shape, "kind">;
+type _fixed = Expect<Equal<FixedOmitKind, { radius: number } | { side: number }>>;`;
+
 <Mermaid title="Each utility maps to one primitive you already know" code={utilDiagram} />
 
 export const utilDiagram = `flowchart TB
@@ -116,8 +301,57 @@ export const utilDiagram = `flowchart TB
   infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]
   trick["Intersection trick (T & {})"] --> f4["NonNullable"]`;
 
+## Mental Model
+
+<Mermaid title="A footgun-free Omit and a flag-aware Required both come from reading the mechanism, not the name" code={utilMentalDiagram} />
+
+export const utilMentalDiagram = `flowchart TD
+  omitUnion["Omit applied to a union of object types"] --> keyofUnion["keyof (A | B) is the INTERSECTION of keys -- only shared keys count"]
+  keyofUnion --> lostKeys["Removing a shared key can drop unrelated keys along with it"]
+  distribute["T extends any ? Omit<T, K> : never"] --> perMember["Runs Omit once per union member instead"]
+  flagOff["exactOptionalPropertyTypes off"] --> loose["? and an explicit | undefined are treated as the same idea"]
+  flagOn["exactOptionalPropertyTypes on"] --> strict["? and an explicit | undefined are separate, both tracked exactly"]`;
+
+Every utility type in this lesson reduces to one of a small number of mechanisms you already know from earlier lessons — a mapped type, a distributive conditional, an `infer` capture, an intersection trick, or (for the four string intrinsics) no expressible TypeScript at all. The two "gotchas" in this lesson — `Omit` on a union, and `Required`'s flag-dependent handling of an explicit `| undefined` — are not new mechanisms; they are the *same* mechanisms (distribution, and the modifier-vs-value-type distinction) showing up somewhere less obvious than the lesson that first introduced them.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Plain `Omit<T, K>` on a union | Simple, and correct for a single object type or a union whose members share the removed key with nothing else at stake | Silently drops every key that is not common to all union members, once you remove the one key that *was* common — verify with `Equal` before trusting it on a union |
+| `DistributiveOmit<T, K>` | Correctly keeps each union member's own keys, removing only `K` from each | An extra type alias to define and remember to reach for whenever `T` might be a union |
+| `Partial<T>` under `exactOptionalPropertyTypes` | Matches the flag's whole premise: optional truly means "present or absent," not "present, absent, or explicitly undefined" | Any code that previously wrote `{ ...defaults, field: undefined }` to "reset" a field needs to either add `| undefined` to the type or switch to omitting the key |
+| Hand-writing a utility and proving it with `Equal` | Confirms understanding beyond "I recognize this name" | Takes longer than trusting the built-in — worth doing once per utility family, not for every one you use |
+
+## Common Misconceptions
+
+- **`Omit<T, K>` always does exactly what its name says: remove `K`, keep everything else.** On a union of object types, it can remove far more than `K` — anything not common to every member vanishes too, because `Omit` is built from `keyof`, and `keyof` on a union is an intersection of keys, not a union of them.
+- **`Required<T>` always strips `undefined` from a property's type, the way it strips the `?` modifier.** It depends on `exactOptionalPropertyTypes`. Without the flag, an explicit `| undefined` written by the author is treated as redundant with `?` and gets collapsed away. With the flag, `?` and `| undefined` are separate, and `Required` only removes the modifier — the explicit `| undefined` stays.
+- **A utility applied to `T` is basically the same utility applied to each member of `T` if `T` happens to be a union.** Only for the ones built from a *naked*, distributive conditional (`Exclude`, `Extract`) or a homomorphic mapped type over a bare `T`. `Omit` (via `keyof` on the whole union) is a clear counterexample, and it is worth checking each utility rather than assuming.
+- **The pre-5.4 `NoInfer` trick (`[T][T extends any ? 0 : never]`) was just an inferior imitation with different behavior from the real thing.** For the purpose it exists for — stopping a position from contributing to inference — it behaves identically. It became a real intrinsic for clarity and composability, not because the trick was wrong.
+
+## Reading AI-generated code
+
+- `Omit<SomeUnion, "someKey">` in generated code that models a discriminated union (API response variants, form state, event payloads) is worth checking immediately: does `SomeUnion`'s `keyof` actually include more than the discriminant? If the union members otherwise share no keys, `Omit` has almost certainly silently produced `{}` or something far too narrow, and the generated code compiling is not evidence it is correct — verify with `Equal` against what you expect, not by reading the call site.
+- Generated code that assigns `field: undefined` to "clear" an optional field, in a codebase with `exactOptionalPropertyTypes` enabled, will fail to compile — but code generated *without* awareness of that flag being on may instead reach for `delete obj.field` or a cast to work around the error, which is worth flagging as a workaround rather than a fix; the type-correct approaches are either adding `| undefined` to the field's type deliberately, or genuinely omitting the key.
+- A hand-rolled utility type that claims to match a built-in (a custom `MyAwaited`, a custom deep-utility) with no `Expect<Equal<...>>` anywhere nearby is trusting a docstring or a variable name as proof — the "write your own and prove it" pattern from this lesson is exactly the bar generated type-level code should be held to before it ships.
+
+<SpotTheBug lang="ts" code={`type ApiSuccess = { status: "ok"; data: string; };
+type ApiError = { status: "error"; message: string; };
+type ApiResponse = ApiSuccess | ApiError;
+
+// "strip the internal status field before returning to the client"
+type PublicResponse = Omit<ApiResponse, "status">;
+
+function toPublic(res: ApiResponse): PublicResponse {
+  const { status, ...rest } = res;
+  return rest;
+}`}>
+This compiles with zero errors, and that is exactly the trap. `Omit<ApiResponse, "status">` is `{}` (the empty object type), because `status` is the *only* key common to `ApiSuccess` and `ApiError` — removing it leaves `keyof ApiResponse` as `never`. `PublicResponse` was supposed to mean "either success data without the status tag, or an error message without the status tag" (`{ data: string } | { message: string }`), but instead it means "an object with no guaranteed properties at all." `return rest;` type-checks because *any* object is assignable to `{}` — the function looks like it does the right thing, and the type it returns type-checks at the call site too, right up until a consumer of `toPublic`'s result tries to read `.data` or `.message` off it and discovers the type system never promised either one exists. The fix is `DistributiveOmit<ApiResponse, "status">` (`T extends any ? Omit<T, "status"> : never`), which correctly resolves to `{ data: string } | { message: string }` by running `Omit` on `ApiSuccess` and `ApiError` separately before unioning the results — giving `toPublic`'s callers a return type they can actually narrow on and read from.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-The utility types are not magic — they are short expressions in the primitives you have learned. The **mapped-type** family (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) loops over keys; the **distributive-conditional** family (`Exclude`, `Extract`, and `Omit`) filters union members; the **`infer`** family (`ReturnType`, `Parameters`, `Awaited`) captures a type out of a function or promise. `NonNullable` looks like it belongs with the conditionals but is actually a separate **intersection trick** (`T & {}`). Reading the standard library is the fastest way to internalize all of these techniques.
+The utility types are not magic — they are short expressions in the primitives you have learned. The **mapped-type** family (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) loops over keys; the **distributive-conditional** family (`Exclude`, `Extract`, and `Omit`) filters union members; the **`infer`** family (`ReturnType`, `Parameters`, `Awaited`, `InstanceType`, `ConstructorParameters`, `ThisParameterType`, `OmitThisParameter`) captures a type out of a function, constructor, or promise. `NonNullable` is a separate **intersection trick** (`T & {}`). Two mechanisms hide real footguns: `Omit` on a **union** can drop far more than the key you named, because `keyof` on a union is an intersection of keys (fixed with a distributive wrapper), and `Required`'s handling of an explicit `| undefined` **depends on `exactOptionalPropertyTypes`** — collapsed away without the flag, preserved with it.
 </Callout>
 
 export const quizUtility = [
@@ -130,6 +364,7 @@ export const quizUtility = [
       'A class decorator',
     ],
     answer: 1,
+    explain: 'Partial is a one-line homomorphic mapped type adding the optional modifier to every property -- no conditional or infer involved.',
   },
   {
     q: 'What technique powers `Exclude<T, U>`?',
@@ -140,6 +375,7 @@ export const quizUtility = [
       'Recursion only',
     ],
     answer: 1,
+    explain: 'Exclude is T extends U ? never : T -- a distributive conditional that drops matching union members by mapping them to never, which vanishes from the resulting union.',
   },
   {
     q: 'How does `ReturnType<F>` extract the return type?',
@@ -150,6 +386,7 @@ export const quizUtility = [
       'A mapped type over the parameters',
     ],
     answer: 1,
+    explain: 'infer R captures whatever type appears in the return position of the function signature being matched -- purely a compile-time capture, nothing runs.',
   },
   {
     q: 'How is `Omit<T, K>` typically defined?',
@@ -160,6 +397,40 @@ export const quizUtility = [
       'As a decorator',
     ],
     answer: 1,
+    explain: 'Omit removes K by first computing keyof T minus K (via Exclude) and then Picking exactly those remaining keys.',
+  },
+  {
+    q: '```ts\ninterface Circle { kind: "circle"; radius: number; }\ninterface Square { kind: "square"; side: number; }\ntype Shape = Circle | Square;\ntype R = Omit<Shape, "kind">;\n```\nWhat is `R`, and why?',
+    options: [
+      '`{ radius: number } | { side: number }` — Omit removes kind from each branch',
+      '`{}` — kind is the only key common to both members of the union, so keyof Shape is just "kind"; removing it leaves keyof Shape as never, and Omit collapses to the empty object type',
+      '`{ radius: number; side: number }` — the two shapes get merged',
+      'A compile error, because Shape is a union',
+    ],
+    answer: 1,
+    explain: 'Omit is built from keyof, and keyof on a union is the intersection of each member\'s keys. Since "kind" is the only shared key, removing it leaves nothing in keyof Shape, so Omit produces {} instead of the two narrower object types you might expect.',
+  },
+  {
+    q: 'What fixes the `Omit`-on-a-union footgun, and how does the fix work?',
+    options: [
+      'Switching to Pick instead of Omit',
+      '`type DistributiveOmit<T, K> = T extends any ? Omit<T, K> : never` — making T naked so the conditional distributes, running Omit once per union member before unioning the results',
+      'Adding `as const` to the union',
+      'There is no fix -- Omit cannot be used on unions at all',
+    ],
+    answer: 1,
+    explain: 'Wrapping Omit in a conditional with a naked checked type forces the same per-member distribution seen in Conditional Types, so each union member keeps its own non-K properties instead of the whole union being reduced to its common keys first.',
+  },
+  {
+    q: '```ts\ntype Loose = { a?: number | undefined };\ntype R = Required<Loose>;\ntype AType = R["a"];\n```\nIs `AType` `number` or `number | undefined`, and what does it depend on?',
+    options: [
+      'Always `number` -- Required always strips undefined',
+      'Always `number | undefined` -- Required never touches the value type',
+      'It depends on exactOptionalPropertyTypes: without the flag it collapses to `number` (? and the explicit | undefined are treated as redundant); with the flag it stays `number | undefined` (Required only removes the ? modifier, not the explicit union member)',
+      'It depends on the target JavaScript version',
+    ],
+    answer: 2,
+    explain: 'This is flag-dependent and verified by running tsc both ways: without exactOptionalPropertyTypes, ? and an explicit | undefined are treated as the same idea and collapse together under -?; with the flag, they are tracked as separate concerns, so -? removes only the modifier and the explicit | undefined survives.',
   },
 ];
 

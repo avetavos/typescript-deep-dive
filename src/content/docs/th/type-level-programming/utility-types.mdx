@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## คุณรู้อยู่แล้วว่าพวกนี้ถูกสร้างยังไง
 
@@ -108,6 +110,189 @@ createFSM({ states: ["idle", "busy"], initial: "bogus" }); // ❌ "bogus" is not
 
 ถ้าไม่มี `NoInfer` `initial: "bogus"` จะแค่ขยาย `S` เป็น `"idle" | "busy" | "bogus"` แล้ว compile ผ่านเฉย ๆ
 
+built-in อีกไม่กี่ตัวเติมภาพ intrinsic-vs-primitive เดียวกันให้ครบ:
+
+| Utility | หมวด | สร้างอย่างไร |
+|---------|----------|-----------------|
+| `Awaited<T>` | ตระกูล `infer` (recursive) | recursive conditional ลอกชั้น `{ then(onfulfilled: infer F) }` จนกว่า value จะไม่ thenable แล้ว |
+| `InstanceType<T>` | ตระกูล `infer` | `infer` ที่ตำแหน่ง return ของ constructor signature: `T extends abstract new (...args: any) => infer R ? R : never` |
+| `ConstructorParameters<T>` | ตระกูล `infer` | `infer` บน parameter list ทั้งหมดของ constructor สะท้อน `Parameters` แต่สำหรับ `new (...)` แทน `(...)` |
+| `ThisParameterType<T>` | ตระกูล `infer` | `infer` บน explicit `this` parameter: `T extends (this: infer U, ...args: any) => any ? U : unknown` |
+| `OmitThisParameter<T>` | ตระกูล `infer` | `infer` บนทุกอย่าง*ยกเว้น* `this` สร้าง callable type ใหม่โดยไม่มีมัน |
+| `NoInfer<T>` (5.4) | compiler intrinsic (เคยมีทางแก้ก่อน 5.4) | ไม่มีนิยาม TypeScript ก่อน 5.4 ที่เป็น *built-in* จริง แต่ `[T][T extends any ? 0 : never]` คือทริกที่ community รู้จักดี — ดูด้านล่าง |
+| `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` | compiler intrinsic | ไม่มีนิยามระดับ TypeScript เลย ไม่ว่าเวอร์ชันไหน |
+
+## เขียนเอง 6 ตัว พิสูจน์ด้วย `Equal`
+
+อ่านตารางคืออย่างหนึ่ง เขียนเวอร์ชันของตัวเองแล้วพิสูจน์ว่าตรงกันคือสิ่งที่ยืนยันจริง ๆ ว่าคุณเข้าใจกลไก ไม่ใช่แค่จำชื่อได้:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// 1. Awaited -- recursive conditional peeling nested Promise/PromiseLike layers
+type MyAwaited<T> = T extends null | undefined
+  ? T
+  : T extends { then(onfulfilled: infer F): any }
+    ? F extends (value: infer V, ...args: any) => any
+      ? MyAwaited<V>
+      : never
+    : T;
+
+type A1 = MyAwaited<Promise<Promise<number>>>;
+type _a1 = Expect<Equal<A1, number>>;
+
+// 2. InstanceType -- infer the instance type from a constructor's return position
+type MyInstanceType<T extends abstract new (...args: any) => any> =
+  T extends abstract new (...args: any) => infer R ? R : never;
+
+class Point { constructor(public x: number, public y: number) {} }
+type P1 = MyInstanceType<typeof Point>;
+type _p1 = Expect<Equal<P1, Point>>;
+
+// 3. ConstructorParameters -- infer the parameter tuple from a constructor
+type MyConstructorParameters<T extends abstract new (...args: any) => any> =
+  T extends abstract new (...args: infer P) => any ? P : never;
+
+type CP1 = MyConstructorParameters<typeof Point>;
+type _cp1 = Expect<Equal<CP1, [x: number, y: number]>>;
+
+// 4. ThisParameterType -- infer an explicit `this` parameter's type, or unknown
+type MyThisParameterType<T> = T extends (this: infer U, ...args: any) => any ? U : unknown;
+
+function greet(this: { name: string }, greeting: string) { return `${greeting}, ${this.name}`; }
+type G1 = MyThisParameterType<typeof greet>;
+type _g1 = Expect<Equal<G1, { name: string }>>;
+
+// 5. OmitThisParameter -- strip an explicit `this` parameter from a function type
+type MyOmitThisParameter<T> = T extends (this: any, ...args: infer A) => infer R
+  ? (...args: A) => R
+  : T;
+
+type O1 = MyOmitThisParameter<typeof greet>;
+type _o1 = Expect<Equal<O1, (greeting: string) => string>>;
+
+// 6. NoInfer -- the pre-5.4 community trick, before it became a compiler intrinsic
+type MyNoInfer<T> = [T][T extends any ? 0 : never];
+
+function createFSM<S extends string>(config: { states: S[]; initial: MyNoInfer<S> }) {}
+createFSM({ states: ["idle", "busy"], initial: "idle" });
+```
+
+ตัวที่หกควรหยุดดูเป็นพิเศษ: ก่อน `NoInfer<T>` จะกลายเป็น compiler intrinsic จริงใน TypeScript 5.4 `[T][T extends any ? 0 : never]` คือทางแก้มาตรฐานของ community และมันทำงานเหมือนกันเป๊ะสำหรับจุดประสงค์นี้ — ห่อ `T` ด้วย tuple แล้ว index กลับเข้าไปทันทีผ่าน conditional บังคับให้ตำแหน่งนั้นถูก *เช็คกับ* แทนที่จะ *มีส่วนใน* inference ผลเดียวกับที่ intrinsic จริงมี รู้จักทริกเก่านี้ไม่ใช่แค่ trivia ประวัติศาสตร์ — มันอธิบายว่า*ทำไม* `NoInfer` ถึงต้องกลายเป็น intrinsic จริงเลยด้วยซ้ำ (ทริก tuple-indexing ใช้ได้ แต่บดบัง intent และไม่ compose ได้สะอาดเท่า utility จริงที่มีชื่อบอก)
+
+## กับดัก `Omit` บน union และทางแก้แบบ distributive
+
+`Omit<T, K>` นิยามเป็น `Pick<T, Exclude<keyof T, K>>` — และ `keyof` บน **union** ของ object type คือ*intersection*ของ key แต่ละตัว ไม่ใช่ union ของมัน (มีแค่ key ที่มีอยู่ในทุก member เท่านั้นที่นับ) ใช้ `Omit` กับ union ของ object type ที่ shape ต่างกัน แล้วคุณเสีย key ได้มากกว่าตัวเดียวที่ขอให้ลบ:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+// Footgun: Omit<Shape, "kind"> collapses to the COMMON shape -- radius and side both vanish
+type OmitKind = Omit<Shape, "kind">;
+//   ^? {}
+
+type _footgun = Expect<Equal<OmitKind, {}>>;
+```
+
+`kind` คือ key เดียวที่ `Circle` กับ `Square` มีร่วมกัน ดังนั้น `keyof Shape` คือแค่ `"kind"` และการลบมันทิ้งเหลือ `keyof Shape` เป็น `never` — `Omit<Shape, "kind">` กลายเป็น empty object type `{}` ทิ้ง `radius` กับ `side` ไปเลยแบบเงียบ ๆ ไม่ใช่แค่ `kind` ทางแก้คือ distributive-conditional idiom เดียวกับบท Conditional Types ใช้ทำให้ `Omit` รันครั้งเดียวต่อ union member แทนที่จะรันครั้งเดียวสำหรับ union ทั้งก้อน:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
+type FixedOmitKind = DistributiveOmit<Shape, "kind">;
+//   ^? { radius: number } | { side: number }
+
+type _fixed = Expect<Equal<FixedOmitKind, { radius: number } | { side: number }>>;
+```
+
+`T extends any ? Omit<T, K> : never` ดูเหมือน conditional ที่ไม่ทำอะไรเลย (ทุกอย่าง extends `any`) แต่หน้าที่จริงของมันคือทำให้ `T` naked อยู่ฝั่งที่ถูกตรวจ ซึ่งกระตุ้น distribution: `Omit` ตอนนี้รันแยกกันบน `Circle` และ `Square` แต่ละตัวเก็บ property ที่ไม่ใช่ `kind` ของตัวเอง แล้ว union ผลลัพธ์กลับเข้าด้วยกัน — ตรงตาม "ลบ `kind` ออกจากแต่ละ shape" ที่ตั้งใจไว้แต่แรก
+
+## `Partial` กับ `Required` ภายใต้ `exactOptionalPropertyTypes`
+
+flag `exactOptionalPropertyTypes` เปลี่ยนความหมายที่ optional property (`?`) ยอมให้เป็นได้ และ `Partial` ได้รับผลกระทบตรง ๆ — object ที่มี value เป็น `undefined` อย่างชัดเจนเป็นคำถามคนละแบบกับ object ที่แค่ omit key และ flag เป็นตัวตัดสินว่า `Partial` ยอมรับแบบแรกไหม:
+
+```ts
+interface Base { a: number; }
+type P = Partial<Base>;
+
+const p1: P = {};              // omit the key entirely -- always fine
+const p2: P = { a: undefined }; // explicit undefined -- fine WITHOUT the flag, TS2375 WITH it
+```
+
+```text
+$ node_modules/typescript/bin/tsc --noEmit --strict --exactOptionalPropertyTypes exact-optional.ts
+error TS2375: Type '{ a: undefined; }' is not assignable to type 'Partial<Base>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'a' are incompatible.
+    Type 'undefined' is not assignable to type 'number'.
+```
+
+ถ้าไม่มี flag optional property มักถูกเข้าใจแบบไม่เป็นทางการมาตลอดว่า "มีอยู่ด้วย type นี้ หรือไม่มีเลย หรือมีค่าเป็น `undefined` ชัดเจน — ปฏิบัติเหมือนกันหมด" `exactOptionalPropertyTypes` ทำให้ `Partial<Base>`'s `a?: number` หมายความตรงตามที่มันบอกเป๊ะ: มีอยู่เป็น `number` หรือ key ไม่มีอยู่เลย — การเขียน `a: undefined` ตรง ๆ ตอนนี้เป็น type error เว้นแต่คุณจะระบุไว้ใน type เอง (`a?: number | undefined`)
+
+ข้อเท็จจริงที่เกี่ยวข้องและน่าประหลาดใจจริง ๆ เกี่ยวกับ `Required` ในทิศทาง*ตรงข้าม*: เมื่อ type ของ property ต้นทางมี `| undefined` อยู่*ชัดเจน* (ไม่ใช่แค่ optional โดยนัย) ว่า `Required` จะลบ `undefined` ที่ชัดเจนนั้นทิ้งไหมขึ้นอยู่กับ flag เดียวกันนี้เป๊ะ:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type LooseExplicit = { a?: number | undefined };
+type RExplicit = Required<LooseExplicit>;
+
+type AType = RExplicit["a"];
+type _isNumber = Expect<Equal<AType, number>>;
+```
+
+```text
+$ node_modules/typescript/bin/tsc --noEmit --strict exact-optional3.ts
+# (0 errors -- AType really is `number`: the explicit `| undefined` was stripped)
+
+$ node_modules/typescript/bin/tsc --noEmit --strict --exactOptionalPropertyTypes exact-optional3.ts
+error TS2344: Type 'false' does not satisfy the constraint 'true'.
+# (AType is `number | undefined` here -- Required did NOT strip it)
+```
+
+ถ้าไม่มี `exactOptionalPropertyTypes` `?` กับ `| undefined` ที่เขียนชัดเจนถูกมองว่าเป็นการพูดซ้ำเรื่องเดียวกัน และ `-?` ของ `Required` ยุบมันรวมกันไป เหลือแค่ `number` ธรรมดา *มี* flag แล้ว `?` กับ `| undefined` เป็นคนละเรื่องกันโดยตั้งใจ (การแยกนี้แหละคือประเด็นทั้งหมดของ flag) ดังนั้น `-?` ลบแค่ optionality — `| undefined` ที่ชัดเจนใน value type รอดไปโดยไม่ถูกแตะ และ `RExplicit["a"]` ยังคงเป็น `number | undefined` นี่คือ claim แบบที่ดูชัดเจนไปได้ทั้งสองทิศทางจนกว่าคุณจะรันทั้งสอง command จริง ๆ — ซึ่งเป็นเหตุผลที่ทั้งคู่ถูก quote ไว้ข้างบนแทนที่จะยืนยันจากความจำ
+
+<TSPlayground code={utilityDeepCode} id="write-your-own-and-omit-footgun" title="Six hand-written utilities, the Omit-on-union footgun, and its distributive fix" />
+
+export const utilityDeepCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type MyAwaited<T> = T extends null | undefined
+  ? T
+  : T extends { then(onfulfilled: infer F): any }
+    ? F extends (value: infer V, ...args: any) => any
+      ? MyAwaited<V>
+      : never
+    : T;
+type A1 = MyAwaited<Promise<Promise<number>>>;
+type _a1 = Expect<Equal<A1, number>>;
+
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+
+// footgun: loses radius AND side, not just kind
+type OmitKind = Omit<Shape, "kind">;
+type _footgun = Expect<Equal<OmitKind, {}>>;
+
+// fix: distribute Omit over each union member first
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+type FixedOmitKind = DistributiveOmit<Shape, "kind">;
+type _fixed = Expect<Equal<FixedOmitKind, { radius: number } | { side: number }>>;`;
+
 <Mermaid title="แต่ละ utility map ไปยัง primitive ที่คุณรู้แล้ว" code={utilDiagram} />
 
 export const utilDiagram = `flowchart TB
@@ -116,8 +301,57 @@ export const utilDiagram = `flowchart TB
   infer["Conditionals with infer"] --> f3["ReturnType, Parameters, Awaited"]
   trick["Intersection trick (T & {})"] --> f4["NonNullable"]`;
 
+## Mental Model
+
+<Mermaid title="A footgun-free Omit and a flag-aware Required both come from reading the mechanism, not the name" code={utilMentalDiagram} />
+
+export const utilMentalDiagram = `flowchart TD
+  omitUnion["Omit ใช้กับ union ของ object type"] --> keyofUnion["keyof (A | B) คือ INTERSECTION ของ key -- นับแค่ key ที่ร่วมกัน"]
+  keyofUnion --> lostKeys["ลบ key ที่ร่วมกันอาจดึง key อื่นที่ไม่เกี่ยวข้องหายไปด้วย"]
+  distribute["T extends any ? Omit<T, K> : never"] --> perMember["รัน Omit ครั้งเดียวต่อ union member แทน"]
+  flagOff["exactOptionalPropertyTypes ปิด"] --> loose["? กับ | undefined ที่ชัดเจนถูกมองว่าเป็นไอเดียเดียวกัน"]
+  flagOn["exactOptionalPropertyTypes เปิด"] --> strict["? กับ | undefined ที่ชัดเจนแยกกัน ทั้งคู่ถูก track แม่นยำ"]`;
+
+utility type ทุกตัวในบทนี้ยุบเหลือกลไกจำนวนน้อยที่คุณรู้จักอยู่แล้วจากบทก่อนหน้า — mapped type, distributive conditional, infer capture, intersection trick หรือ (สำหรับ intrinsic string 4 ตัว) ไม่มี TypeScript ที่เขียนได้เลย สอง "กับดัก" ในบทนี้ — `Omit` บน union และการจัดการ `| undefined` ที่ขึ้นกับ flag ของ `Required` — ไม่ใช่กลไกใหม่ มันคือกลไก*เดิม*ที่โผล่มาในที่ที่ไม่ชัดเจนเท่าบทที่แนะนำมันครั้งแรก (distribution และความต่างระหว่าง modifier กับ value type)
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `Omit<T, K>` ธรรมดาบน union | ง่าย และถูกต้องสำหรับ object type เดี่ยว หรือ union ที่ member แชร์แค่ key ที่ถูกลบโดยไม่มีอะไรอื่นเสี่ยง | ทิ้ง key ทุกตัวที่ไม่ร่วมกันในทุก union member แบบเงียบ ๆ ทันทีที่คุณลบ key ที่*เคย*ร่วมกัน — verify ด้วย `Equal` ก่อนเชื่อมันบน union |
+| `DistributiveOmit<T, K>` | เก็บ key ของแต่ละ union member ไว้ถูกต้อง ลบแค่ `K` จากแต่ละตัว | ต้องนิยาม type alias เพิ่มและจำไว้ว่าต้องใช้เมื่อ `T` อาจเป็น union |
+| `Partial<T>` ภายใต้ `exactOptionalPropertyTypes` | ตรงกับ premise ทั้งหมดของ flag: optional แปลว่า "มีอยู่หรือไม่มีเลย" จริง ๆ ไม่ใช่ "มีอยู่ ไม่มีเลย หรือมี undefined ชัดเจน" | โค้ดเก่าที่เคยเขียน `{ ...defaults, field: undefined }` เพื่อ "reset" field ต้องเพิ่ม `| undefined` เข้า type หรือเปลี่ยนไป omit key แทน |
+| เขียน utility เองแล้วพิสูจน์ด้วย `Equal` | ยืนยันความเข้าใจที่ลึกกว่า "จำชื่อนี้ได้" | ใช้เวลานานกว่าเชื่อ built-in — คุ้มค่าทำครั้งเดียวต่อตระกูล utility ไม่ต้องทำทุกตัวที่ใช้ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`Omit<T, K>` ทำตามชื่อมันเสมอ: ลบ `K` เก็บที่เหลือไว้ทั้งหมด** บน union ของ object type มันลบได้มากกว่า `K` มาก — อะไรก็ตามที่ไม่ร่วมกันในทุก member หายไปด้วย เพราะ `Omit` สร้างจาก `keyof` และ `keyof` บน union คือ intersection ของ key ไม่ใช่ union ของมัน
+- **`Required<T>` ลบ `undefined` ออกจาก type ของ property เสมอ เหมือนที่มันลบ modifier `?`** ขึ้นอยู่กับ `exactOptionalPropertyTypes` ถ้าไม่มี flag `| undefined` ที่ผู้เขียนเขียนชัดเจนถูกมองว่าซ้ำกับ `?` แล้วถูกยุบทิ้งไป ถ้ามี flag `?` กับ `| undefined` แยกกัน และ `Required` ลบแค่ modifier — `| undefined` ที่ชัดเจนยังอยู่
+- **utility ที่ใช้กับ `T` ก็เหมือน utility เดียวกันที่ใช้กับแต่ละ member ของ `T` ถ้า `T` บังเอิญเป็น union** จริงแค่กับตัวที่สร้างจาก distributive conditional แบบ *naked* (`Exclude`, `Extract`) หรือ mapped type แบบ homomorphic บน `T` เปลือย ๆ `Omit` (ผ่าน `keyof` บนทั้ง union) คือตัวอย่างที่ขัดแย้งชัดเจน ควรเช็คแต่ละ utility เอง ไม่ใช่สมมติ
+- **ทริก `NoInfer` ก่อน 5.4 (`[T][T extends any ? 0 : never]`) เป็นแค่การเลียนแบบที่ด้อยกว่าและพฤติกรรมต่างจากตัวจริง** สำหรับจุดประสงค์ที่มันมีอยู่ — กันไม่ให้ตำแหน่งมีส่วนใน inference — มันทำงานเหมือนกันเป๊ะ มันกลายเป็น intrinsic จริงเพื่อความชัดเจนและ composability ไม่ใช่เพราะทริกมันผิด
+
+## อ่านโค้ดที่ AI เขียน
+
+- `Omit<SomeUnion, "someKey">` ในโค้ด generated ที่ model discriminated union (API response variant, form state, event payload) ควรเช็คทันที: `keyof` ของ `SomeUnion` มีมากกว่า discriminant จริงไหม? ถ้า union member ไม่แชร์ key อื่นกันเลย `Omit` เกือบแน่นอนให้ `{}` หรืออะไรที่แคบเกินไปแบบเงียบ ๆ และโค้ด generated ที่ compile ผ่านไม่ใช่หลักฐานว่ามันถูกต้อง — verify ด้วย `Equal` เทียบกับสิ่งที่คุณคาดหวัง ไม่ใช่อ่านจาก call site
+- โค้ด generated ที่ assign `field: undefined` เพื่อ "clear" optional field ใน codebase ที่เปิด `exactOptionalPropertyTypes` จะ compile ไม่ผ่าน — แต่โค้ดที่ generate โดยไม่รู้ว่า flag นี้เปิดอยู่อาจหันไปใช้ `delete obj.field` หรือ cast เพื่อหลบ error แทน ซึ่งควร flag ว่าเป็น workaround ไม่ใช่ทางแก้จริง วิธีที่ type-correct คือเพิ่ม `| undefined` เข้า type ของ field อย่างตั้งใจ หรือ omit key จริง ๆ
+- utility type ที่เขียนมือแล้วอ้างว่าตรงกับ built-in (`MyAwaited` ที่เขียนเอง, deep-utility ที่เขียนเอง) โดยไม่มี `Expect<Equal<...>>` อยู่ใกล้ ๆ เลย กำลังเชื่อ docstring หรือชื่อตัวแปรเป็นหลักฐาน — pattern "เขียนเองแล้วพิสูจน์" จากบทนี้คือมาตรฐานที่โค้ดระดับ type ที่ generate มาควรถูกวัดด้วยก่อน ship
+
+<SpotTheBug lang="ts" code={`type ApiSuccess = { status: "ok"; data: string; };
+type ApiError = { status: "error"; message: string; };
+type ApiResponse = ApiSuccess | ApiError;
+
+// "strip the internal status field before returning to the client"
+type PublicResponse = Omit<ApiResponse, "status">;
+
+function toPublic(res: ApiResponse): PublicResponse {
+  const { status, ...rest } = res;
+  return rest;
+}`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย และนั่นแหละคือกับดัก `Omit<ApiResponse, "status">` คือ `{}` (empty object type) เพราะ `status` คือ key เดียวที่ `ApiSuccess` กับ `ApiError` มีร่วมกัน — ลบมันทิ้งเหลือ `keyof ApiResponse` เป็น `never` `PublicResponse` ควรจะแปลว่า "success data ที่ไม่มี status tag หรือ error message ที่ไม่มี status tag" (`{ data: string } | { message: string }`) แต่กลับแปลว่า "object ที่ไม่รับประกัน property อะไรเลย" `return rest;` type-check ผ่านเพราะ object *อะไรก็ได้* assignable ให้ `{}` — function ดูเหมือนทำสิ่งที่ถูกต้อง และ type ที่มันคืนก็ type-check ผ่านที่ call site ด้วย จนกว่าคนที่เรียก `toPublic` จะลองอ่าน `.data` หรือ `.message` จากผลลัพธ์แล้วพบว่า type system ไม่เคยสัญญาว่าตัวไหนมีอยู่เลย ทางแก้คือ `DistributiveOmit<ApiResponse, "status">` (`T extends any ? Omit<T, "status"> : never`) ซึ่ง resolve เป็น `{ data: string } | { message: string }` ถูกต้อง ด้วยการรัน `Omit` บน `ApiSuccess` และ `ApiError` แยกกันก่อนจะ union ผลลัพธ์ — ให้ caller ของ `toPublic` ได้ return type ที่ narrow และอ่านได้จริง
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`) capture type ออกมาจาก function หรือ promise `NonNullable` ดูเหมือนจะอยู่กลุ่ม conditional แต่จริง ๆ เป็น **intersection trick** แยกต่างหาก (`T & {}`) การอ่าน standard library คือวิธีที่เร็วที่สุดในการซึมซับเทคนิคเหล่านี้ทั้งหมด
+utility type ไม่ใช่เวทมนตร์ — แต่เป็น expression สั้น ๆ ใน primitive ที่คุณเรียนมาแล้ว ตระกูล **mapped-type** (`Partial`, `Required`, `Readonly`, `Pick`, `Record`) วนซ้ำ key; ตระกูล **distributive-conditional** (`Exclude`, `Extract` และ `Omit`) filter member ของ union; ตระกูล **`infer`** (`ReturnType`, `Parameters`, `Awaited`, `InstanceType`, `ConstructorParameters`, `ThisParameterType`, `OmitThisParameter`) capture type ออกมาจาก function, constructor หรือ promise `NonNullable` เป็น **intersection trick** แยกต่างหาก (`T & {}`) สองกลไกซ่อนกับดักจริง: `Omit` บน **union** ทิ้งได้มากกว่า key ที่คุณระบุ เพราะ `keyof` บน union คือ intersection ของ key (แก้ด้วย distributive wrapper) และการจัดการ `| undefined` ที่ชัดเจนของ `Required` **ขึ้นอยู่กับ `exactOptionalPropertyTypes`** — ยุบทิ้งถ้าไม่มี flag, คงไว้ถ้ามี
 </Callout>
 
 export const quizUtility = [
@@ -130,6 +364,7 @@ export const quizUtility = [
       'class decorator',
     ],
     answer: 1,
+    explain: 'Partial คือ homomorphic mapped type บรรทัดเดียวที่เพิ่ม optional modifier ให้ทุก property ไม่มี conditional หรือ infer เข้ามาเกี่ยวข้อง',
   },
   {
     q: 'เทคนิคใดที่เป็นพลังของ `Exclude<T, U>`?',
@@ -140,6 +375,7 @@ export const quizUtility = [
       'recursion อย่างเดียว',
     ],
     answer: 1,
+    explain: 'Exclude คือ T extends U ? never : T — distributive conditional ที่ตัด union member ที่ match ทิ้งด้วยการ map เป็น never ซึ่งหายไปจาก union ผลลัพธ์',
   },
   {
     q: '`ReturnType<F>` ดึง return type อย่างไร?',
@@ -150,6 +386,7 @@ export const quizUtility = [
       'mapped type บน parameter',
     ],
     answer: 1,
+    explain: 'infer R capture type ที่อยู่ในตำแหน่ง return ของ function signature ที่กำลัง match — เป็นการ capture ที่ compile time ล้วน ไม่มีอะไรรันจริง',
   },
   {
     q: '`Omit<T, K>` มักถูก define อย่างไร?',
@@ -160,6 +397,40 @@ export const quizUtility = [
       'เป็น decorator',
     ],
     answer: 1,
+    explain: 'Omit ลบ K ด้วยการคำนวณ keyof T ลบ K ก่อน (ผ่าน Exclude) แล้ว Pick key ที่เหลือพอดี',
+  },
+  {
+    q: '```ts\ninterface Circle { kind: "circle"; radius: number; }\ninterface Square { kind: "square"; side: number; }\ntype Shape = Circle | Square;\ntype R = Omit<Shape, "kind">;\n```\n`R` คืออะไร และทำไม?',
+    options: [
+      '`{ radius: number } | { side: number }` — Omit ลบ kind ออกจากแต่ละกิ่ง',
+      '`{}` — kind คือ key เดียวที่ทั้งสอง member ของ union มีร่วมกัน ดังนั้น keyof Shape คือแค่ "kind"; ลบมันทิ้งเหลือ keyof Shape เป็น never และ Omit ยุบเหลือ empty object type',
+      '`{ radius: number; side: number }` — สอง shape ถูกรวมเข้าด้วยกัน',
+      'compile error เพราะ Shape เป็น union',
+    ],
+    answer: 1,
+    explain: 'Omit สร้างจาก keyof และ keyof บน union คือ intersection ของ key แต่ละ member เพราะ "kind" คือ key เดียวที่ร่วมกัน ลบมันทิ้งเหลือไม่มีอะไรใน keyof Shape เลย Omit เลยให้ {} แทนที่จะเป็นสอง object type ที่แคบกว่าที่คุณอาจคาดไว้',
+  },
+  {
+    q: 'อะไรแก้กับดัก `Omit` บน union ได้ และทางแก้ทำงานยังไง?',
+    options: [
+      'เปลี่ยนไปใช้ Pick แทน Omit',
+      '`type DistributiveOmit<T, K> = T extends any ? Omit<T, K> : never` — ทำให้ T naked เพื่อให้ conditional distribute รัน Omit ครั้งเดียวต่อ union member ก่อนจะ union ผลลัพธ์',
+      'เพิ่ม `as const` เข้า union',
+      'ไม่มีทางแก้ — Omit ใช้กับ union ไม่ได้เลย',
+    ],
+    answer: 1,
+    explain: 'การห่อ Omit ด้วย conditional ที่มี checked type naked บังคับให้ distribute ทีละ member แบบเดียวกับที่เห็นในบท Conditional Types แต่ละ union member เลยเก็บ property ที่ไม่ใช่ K ของตัวเองไว้ แทนที่จะให้ union ทั้งก้อนถูกลดเหลือ key ร่วมกันก่อน',
+  },
+  {
+    q: '```ts\ntype Loose = { a?: number | undefined };\ntype R = Required<Loose>;\ntype AType = R["a"];\n```\n`AType` เป็น `number` หรือ `number | undefined` และขึ้นอยู่กับอะไร?',
+    options: [
+      'เป็น `number` เสมอ — Required ลบ undefined เสมอ',
+      'เป็น `number | undefined` เสมอ — Required ไม่แตะ value type เลย',
+      'ขึ้นอยู่กับ exactOptionalPropertyTypes: ถ้าไม่มี flag มันยุบเหลือ `number` (? กับ | undefined ที่ชัดเจนถูกมองว่าซ้ำกัน); ถ้ามี flag มันยังเป็น `number | undefined` (Required ลบแค่ modifier ? ไม่แตะ union member ที่ชัดเจน)',
+      'ขึ้นอยู่กับ target JavaScript version',
+    ],
+    answer: 2,
+    explain: 'นี่ขึ้นกับ flag และยืนยันแล้วด้วยการรัน tsc ทั้งสองแบบ: ถ้าไม่มี exactOptionalPropertyTypes ? กับ | undefined ที่ชัดเจนถูกมองว่าเป็นไอเดียเดียวกันแล้วยุบรวมกันภายใต้ -?; ถ้ามี flag ทั้งสองถูก track แยกกัน -? เลยลบแค่ modifier และ | undefined ที่ชัดเจนรอดไป',
   },
 ];
 

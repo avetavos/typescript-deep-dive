@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type ที่อ้างถึงตัวเอง
 
@@ -59,6 +61,155 @@ export const recDiagram = `flowchart LR
   c --> d["head 3, rest []"]
   d --> e["base case: stop"]`;
 
+## `Join`: ภาพสะท้อนของ `Split`
+
+บทก่อนหน้าสร้าง `Split<S, D>` ลอก string ที่มี delimiter เป็น tuple ด้วย `infer` ข้างใน template pattern `Join<T, D>` รัน recursion แบบเดียวกันในทิศตรงข้าม — บน **tuple** ต่อ element ของมันกลับเป็น string เดียวโดยมี separator คั่นแต่ละคู่:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type Join<T extends readonly string[], D extends string> =
+  T extends readonly [infer Head extends string, ...infer Rest extends string[]]
+    ? Rest extends []
+      ? Head
+      : `${Head}${D}${Join<Rest, D>}`
+    : "";
+
+type J = Join<["a", "b", "c"], "-">;
+//   ^? "a-b-c"
+
+type _joinCheck = Expect<Equal<J, "a-b-c">>;
+```
+
+shape เดียวกับ `Reverse` และ `Split`: ลอก `Head` ออกจากหน้าด้วย `[infer Head, ...infer Rest]` recurse บน `Rest` แล้วหยุดที่ base case — ตรงนี้คือ "ไม่มี element เหลือให้ join" แทนที่จะเป็น "ไม่มี element เหลือให้ reverse"
+
+## `DeepReadonly`: recursion บน object tree
+
+`Readonly<T>` ไปถึงแค่ระดับบนสุด — object และ array ที่ซ้อนอยู่ข้างใน `T` ยังคง mutable เต็มที่ การทำให้*ทั้งต้นไม้*เป็น readonly ต้องใช้ recursion: เช็คว่า value ปัจจุบันเป็น array, object หรืออย่างอื่น แล้ว recurse เข้าไปใน container ที่มันเป็น:
+
+```ts
+type DeepReadonly<T> = T extends (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T;
+
+interface Config {
+  name: string;
+  servers: { host: string; ports: number[] }[];
+}
+
+type ReadonlyConfig = DeepReadonly<Config>;
+
+declare const cfg: ReadonlyConfig;
+// @ts-expect-error -- top-level property is readonly
+cfg.name = "x";
+// @ts-expect-error -- nested object property is readonly too
+cfg.servers[0].host = "y";
+// @ts-expect-error -- the array itself is readonly -- no push
+cfg.servers.push({ host: "z", ports: [] });
+```
+
+สาม branch สาม base/recursive case: array recurse เข้า element type แล้วห่อผลลัพธ์กลับเป็น `readonly Array`; object ธรรมดา recurse เข้าทุก property value พร้อมเพิ่ม `readonly`; อย่างอื่น (`string`, `number`, function, `null`) เป็น leaf อยู่แล้วและถูกคืนกลับตามเดิม นี่คือ implementation ที่ซื่อสัตย์เบื้องหลัง utility "deep readonly" หรือ "deep partial" ทุกตัวที่คุณเจอใน codebase หรือ library จริง
+
+## `Paths<T>`: dotted key path พร้อม depth guard
+
+generic ที่สร้างทุก dotted property path ที่ valid ของ object type (`"address.city"` shape ที่ React Hook Form และ library คล้าย ๆ กันใช้กับชื่อ nested field) ต้อง recurse เข้าไปในทุก nested object — และที่สำคัญ ต้องมีวิธี**หยุด** เพราะ object จริง ๆ จำนวนมากอ้างถึงตัวเอง ไม่งั้นจะ recurse ไม่รู้จบ:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type Prev = [never, 0, 1, 2, 3, 4, 5];
+
+type Paths<T, D extends number = 5> = [D] extends [never]
+  ? never
+  : T extends object
+    ? { [K in keyof T & (string | number)]:
+          T[K] extends object
+            ? `${K}` | `${K}.${Paths<T[K], Prev[D]>}`
+            : `${K}`
+      }[keyof T & (string | number)]
+    : never;
+
+interface Address { city: string; zip: string; }
+interface Person { name: string; age: number; address: Address; }
+
+type P = Paths<Person>;
+//   ^? "name" | "age" | "address" | "address.city" | "address.zip"
+
+type _check = Expect<Equal<P, "name" | "age" | "address" | "address.city" | "address.zip">>;
+```
+
+`Prev` คือ lookup tuple เล็ก ๆ ที่ใช้เป็นตารางลดค่าล้วน ๆ — index มันด้วยความลึกปัจจุบัน `D` จะได้เลขที่เล็กลงหนึ่ง (หรือ `never` พอหลุดจากหน้าตาราง) ซึ่งเป็นทริกที่ recursion ที่นับตัวเลขต้องใช้เพราะ TypeScript ไม่มี operator `D - 1` ที่ระดับ type `[D] extends [never]` (idiom `[T] extends [U]` เดียวกับบท Conditional Types ใช้ตรงนี้เพื่อไม่ให้ distribution เห็น `never` เป็น "0 กิ่ง") คือ guard จริง ๆ: พอความลึกถึง `never` ทั้งหมด resolve เป็น `never` ทันที ก่อนจะ recurse ต่อเลย ไม่ว่า `T` จะหน้าตายังไง
+
+guard ไม่ใช่ของตกแต่ง ลองไอเดียเดียวกันกับ type ที่อ้างถึงตัวเองจริง ๆ แล้วความต่างระหว่างมีกับไม่มี guard ชัดเจนมาก:
+
+```ts
+// @expect-error TS2615
+type PathsNoGuard<T> =
+  T extends object
+    ? { [K in keyof T & (string | number)]:
+          T[K] extends object
+            ? `${K}` | `${K}.${PathsNoGuard<T[K]>}`
+            : `${K}`
+      }[keyof T & (string | number)]
+    : never;
+
+interface Self { name: string; self: Self; }
+
+type Deep = PathsNoGuard<Self>;
+```
+
+ไม่มี guard `PathsNoGuard<Self>` ไปไม่ถึงเพดาน "excessively deep" ตามปกติด้วยซ้ำ — compiler ตรวจพบว่า type ของ `self` เองขึ้นอยู่กับการ resolve mapped type ตัวเดียวกับที่กำลังคำนวณอยู่ตอนนี้ โดยไม่มี depth parameter ไหนเปลี่ยนระหว่าง call เลยเพื่อตัด cycle แล้ว reject มันทันทีด้วย `TS2615: Type of property 'self' circularly references itself` ใส่ depth parameter ที่ index ด้วย `Prev` กลับเข้าไป แล้ว interface `Self` ที่อ้างถึงตัวเองตัวเดียวกันเป๊ะก็ compile ผ่านสะอาด — `Paths<Self>` แค่หยุด descend หลัง 5 ระดับ แทนที่จะพยายาม (แล้วล้มเหลว) enumerate path จำนวนไม่จำกัดเข้า type ที่ซ้อนเข้าตัวเองไม่รู้จบ
+
+<TSPlayground code={recursiveDeepCode} id="join-deepreadonly-paths" title="Join, DeepReadonly, and a depth-guarded Paths<T>" />
+
+export const recursiveDeepCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type Join<T extends readonly string[], D extends string> =
+  T extends readonly [infer Head extends string, ...infer Rest extends string[]]
+    ? Rest extends []
+      ? Head
+      : \`\${Head}\${D}\${Join<Rest, D>}\`
+    : "";
+
+type J = Join<["a", "b", "c"], "-">;
+type _joinCheck = Expect<Equal<J, "a-b-c">>;
+
+type DeepReadonly<T> = T extends (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T;
+
+interface Config { name: string; servers: { host: string; ports: number[] }[]; }
+type ReadonlyConfig = DeepReadonly<Config>;
+declare const cfg: ReadonlyConfig;
+// cfg.name = "x"; -- would be a real error: readonly
+
+type Prev = [never, 0, 1, 2, 3, 4, 5];
+type Paths<T, D extends number = 5> = [D] extends [never]
+  ? never
+  : T extends object
+    ? { [K in keyof T & (string | number)]:
+          T[K] extends object
+            ? \`\${K}\` | \`\${K}.\${Paths<T[K], Prev[D]>}\`
+            : \`\${K}\`
+      }[keyof T & (string | number)]
+    : never;
+
+interface Address { city: string; zip: string; }
+interface Person { name: string; age: number; address: Address; }
+type P = Paths<Person>;
+type _check = Expect<Equal<P, "name" | "age" | "address" | "address.city" | "address.zip">>;
+
+// the guard matters: a genuinely self-referential type still terminates
+interface Self { name: string; self: Self; }
+type DeepPaths = Paths<Self>;`;
+
 ## instantiation-depth limit
 
 type-level recursion ไม่ได้ไม่จำกัด compiler จำกัด recursive instantiation เพื่อป้องกันตัวเองจาก loop ไม่รู้จบ และคุณจะชนเพดานเมื่อ input ใหญ่ recursion แบบตรงไปตรงมา — ที่ recursive call อยู่ *ข้างใน* type constructor อีกตัว อย่าง array spread ด้านล่าง — ชนเพดานแถว ๆ เลข 40 ปลาย ๆ:
@@ -88,6 +239,123 @@ type TooDeep1000 = BuildTuple<1000>; // "Type instantiation is excessively deep 
 
 ทั้งสองเพดานข้างบน (47/48 แบบตรงไปตรงมา, 999/1000 แบบ tail-recursive) เป็นขอบเขตจริงที่วัดบน compiler ตัวนี้เป๊ะ ๆ — ไม่ใช่ "ราว ๆ" และไม่การันตีว่าจะเหมือนเดิมในเวอร์ชันถัดไป แต่ให้ sense of scale ที่มีประโยชน์: tail recursion ให้ความลึกมากกว่าประมาณ **20 เท่า** ของ naive recursion
 
+## recursion กินต้นทุนจริงเท่าไหร่: นับ instantiation จริง
+
+"recursive type ช้า" มักถูกพูดโดยไม่มีตัวเลขแนบมา `tsc --extendedDiagnostics` พิมพ์ตัวเลขให้: จำนวน `Instantiations` — checker ต้อง instantiate generic type กี่ครั้งตอนเช็คไฟล์ เทียบไฟล์ธรรมดากับไฟล์เดิมที่เพิ่ม recursive type เข้าไปหนึ่งตัว แยกให้เห็นเป๊ะว่า type ตัวเดียวนั้นกินต้นทุนเท่าไหร่:
+
+```text
+$ node_modules/typescript/bin/tsc --noEmit --strict --target es2025 --extendedDiagnostics cost-small.ts
+# cost-small.ts contains only: type X = number;
+Instantiations:  34231
+
+$ node_modules/typescript/bin/tsc --noEmit --strict --target es2025 --extendedDiagnostics cost-big.ts
+# cost-big.ts adds: type BuildTuple<N, Acc=[]> = Acc["length"] extends N ? Acc : BuildTuple<N, [...Acc, unknown]>;
+#                   type Y = BuildTuple<500>;
+Instantiations:  163504
+```
+
+ไฟล์ที่ไม่ทำอะไรนอกจากประกาศ `type X = number` กินไป 34,231 instantiation อยู่แล้ว — baseline นั้นคือ compiler กำลัง resolve standard library ของตัวเอง (`lib.es2025.d.ts` และเพื่อน ๆ) ไม่ใช่โค้ดของคุณ เพิ่ม call เดียวไปที่ `BuildTuple<500>` แบบ tail-recursive ข้างบนเพิ่มอีกประมาณ **129,000** การเติบโตไม่ได้เป็นเชิงเส้นตามความลึกของ recursion ด้วยซ้ำ — accumulator เองถูกสร้างใหม่ (`[...Acc, unknown]`) ทุกหนึ่งใน 500 ขั้น ดังนั้นต้นทุนของแต่ละขั้นโตขึ้นตามขนาด tuple ที่มีอยู่แล้ว:
+
+| Type ที่คำนวณ | Instantiation รวม | เพิ่มจาก baseline |
+|---|---|---|
+| (baseline: `type X = number`) | 34,231 | — |
+| `BuildTuple<50>` | 35,929 | ~1,700 |
+| `BuildTuple<500>` | 163,504 | ~129,000 |
+| `BuildTuple<999>` (ใกล้เพดาน 1000) | 541,746 | ~507,500 |
+
+จาก `50` ไป `500` (10 เท่า) กิน instantiation เพิ่มขึ้นประมาณ 75 เท่า และจาก `500` ไป `999` (ประมาณ 2 เท่า) กินเพิ่มอีกประมาณ 3.3 เท่า — แย่กว่าเชิงเส้น นี่คือสัญชาตญาณที่ควรมีก่อนจะหยิบ recursive type ที่ลึกมาใช้ใน hot path ของ codebase ใหญ่: ตัวเลขความลึกใน "เพดาน: 999" คือจุดหยุดแข็ง ๆ แต่กราฟต้นทุนตอน compile ชันขึ้นมากก่อนที่คุณจะใกล้ถึงมันด้วยซ้ำ
+
+## Mutual recursion: ผ่านตำแหน่ง object/array ไม่ใช่ตรง ๆ
+
+type alias สองตัวอ้างถึงกันได้ ไม่ใช่แค่ตัวเดียวอ้างถึงตัวเอง — แต่ทำได้ก็ต่อเมื่อการอ้างถึง*อีกตัว*แต่ละครั้งอยู่ข้างใน **deferred position**: property type, array element type, function parameter หรือ return type ตำแหน่งพวกนี้ resolve แบบ lazy ดังนั้น compiler ไม่ต้อง expand alias หนึ่งเต็ม ๆ แค่เพื่อเริ่มประมวลผลอีกตัว ตัวอย่างคลาสสิกคือ tree กับ array-of-trees ("forest") ที่เป็น children ของมัน:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+interface Tree<T> {
+  value: T;
+  children: Forest<T>;
+}
+type Forest<T> = Tree<T>[];
+
+const t: Tree<number> = {
+  value: 1,
+  children: [
+    { value: 2, children: [] },
+    { value: 3, children: [{ value: 4, children: [] }] },
+  ],
+};
+
+type _shapeCheck = Expect<Equal<Tree<number>["children"], Forest<number>>>;
+```
+
+`Tree<T>` อ้างถึง `Forest<T>` ข้างใน property (`children: Forest<T>`) และ `Forest<T>` อ้างถึง `Tree<T>` ข้างใน array element position (`Tree<T>[]`) — ทั้งสองเป็น deferred position ดังนั้น cycle นี้ไม่มีปัญหาและเป็น TypeScript ธรรมดาที่ idiomatic เต็มที่
+
+ทีนี้ความผิดพลาดแบบ naive ที่หน้าตาคล้ายกัน: เขียน alias สองตัวที่อ้างถึงกัน**ตรง ๆ** โดยไม่มีอะไรมา defer การอ้างอิงเลย — ไม่มี object property ไม่มี array ไม่มีอะไรทั้งนั้น:
+
+```ts
+// @expect-error TS2456
+type Tree = Forest;
+type Forest = Tree;
+```
+
+นี่ไม่ได้ช้า และไม่ชนเพดานความลึกไหนเลย — มันพัง**ทันที** ด้วย `TS2456: Type alias 'Tree' circularly references itself` เพราะการอ้างอิง alias-to-alias เปล่า ๆ ต้อง resolve *เดี๋ยวนี้เลย* ถึงจะรู้ว่า alias นั้นหมายถึงอะไร และการ resolve `Tree` ต้อง resolve `Forest` ก่อน ซึ่งต้อง resolve `Tree` อีกครั้ง โดยไม่มี boundary ของ object หรือ array ไหนเลยที่จะบอกว่า "หยุดก่อน ค่อยกลับมาทีหลัง" ทางแก้ไม่เคยเป็น "ทำให้ recursion ตื้นลง" ตรงนี้ — แต่คือ "ใส่ object หรือ array คั่นระหว่างสองชื่อ" แบบเดียวกับที่ `Tree`/`Forest` ข้างบนทำอยู่แล้ว
+
+## `unknown`/`any` propagate ผ่าน utility type: สามคำตอบที่ต่างกัน
+
+สมมติฐานที่พบบ่อยคือ `any` ติดต่อกันได้ — ป้อนมันเข้า generic utility ไหนก็ตาม `any` จะออกมาโดยไม่เปลี่ยนแปลง สำหรับ utility บางตัวนั่นจริง และพิสูจน์ได้ว่าผิดสำหรับตัวอื่น — วิธีเดียวที่จะรู้ว่าตัวไหนคือเช็คจริง:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// Awaited<any>: any really does propagate straight through
+type AA = Awaited<any>;
+type _awaitedIsAny = Expect<Equal<AA, any>>;
+
+declare const aa: AA;
+const s: string = aa;   // any is assignable to (and from) everything
+const aa2: AA = "hello";
+
+// keyof any: despite the name, this does NOT propagate `any` -- it is a
+// fully concrete, decidable type
+type KA = keyof any;
+type _kaIsConcrete = Expect<Equal<KA, string | number | symbol>>;
+type _kaIsNotAny = Expect<Equal<Equal<KA, any>, false>>;
+```
+
+```ts
+// @expect-error TS2322 TS2740
+// Partial<any>: neither `any` nor fully untouched -- a third, distinct behavior
+type PA = Partial<any>;
+declare const pa: PA;
+const s2: string = pa;        // ❌ NOT assignable, unlike real `any`
+const arr: string[] = pa;     // ❌ NOT assignable either
+const n2: number = pa;        // ❌ NOT assignable either
+```
+
+`Awaited<any>` คือ `any` เป๊ะ — ขั้น `infer` ของ recursive conditional พอถูกเช็คกับ `any` เดินทาง "ทั้งสองกิ่งพร้อมกัน" ที่ special-case ไว้ทุกระดับของ recursion แล้วทั้งอันยุบเหลือ `any` ตรง ๆ `keyof any` คือขั้วตรงข้าม: มันไม่ไปใกล้ conditional หรือ mapped type เลย มันเป็น union ที่ resolve เต็มแล้วโดยตรง ไม่มีอะไร deferred เลย — `string | number | symbol` คือคำตอบจริงที่ตัดสินใจได้ ไม่ใช่ `any` ที่แค่งแปลงตัว `Partial<any>` อยู่ตรงกลางระหว่างสองขั้วนี้ และเป็นตัวที่น่าประหลาดใจจริง ๆ: มันยังคงแสดงเป็น generic ที่ไม่ resolve `Partial<any>` การ access member บนมัน (`pa.whatever`) ให้ `any` จริง และมัน assignable ไปมากับ shape ของ **object** อะไรก็ได้ — แต่ compiler ปฏิเสธที่จะ assign มันไปหรือมาจาก primitive อย่าง `string` หรือ `number` ซึ่ง `any` จริง ๆ จะยอมโดยไม่บ่นเลย mapped type แบบ homomorphic ที่ใช้กับ `any` ไม่ expand เต็มแบบที่มันทำกับ object type เจาะจง และก็ไม่ยุบเหลือ `any` เหมือนกัน — มันเป็นสิ่งที่สามของตัวเอง และ "`X<any>` ทำตัวเหมือน `any` ไหม" เป็นคำถามที่ควรทดสอบจริงด้วย `Equal` (หรืออย่างที่นี่ คือ assignability probe ตรง ๆ) แทนที่จะสมมติจาก rule of thumb
+
+<TSPlayground code={anyPropagationCode} id="any-propagation-three-ways" title="any propagates through Awaited, not through keyof, and only partially through Partial" />
+
+export const anyPropagationCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type AA = Awaited<any>;
+type _awaitedIsAny = Expect<Equal<AA, any>>;
+
+type KA = keyof any;
+type _kaIsConcrete = Expect<Equal<KA, string | number | symbol>>;
+type _kaIsNotAny = Expect<Equal<Equal<KA, any>, false>>;
+
+type PA = Partial<any>;
+declare const pa: PA;
+const anything = pa.whatever;   // any -- member access on Partial<any> yields any
+const o1: { a?: number } = pa;  // OK -- assignable to/from object shapes
+const o2: PA = { anything: "goes" };
+// const s: string = pa;        -- would be a real TS2322: NOT assignable, unlike real any`;
+
 ## รู้ว่าเมื่อไรควรหยุด
 
 recursive type คือเครื่องมือที่คมที่สุดในกล่อง type-level และใช้ผิดง่ายที่สุด ก่อนเขียนถามตัวเองว่า:
@@ -98,8 +366,56 @@ recursive type คือเครื่องมือที่คมที่�
 
 engineer ระดับ type-level ที่เก่งที่สุดเขียน recursion *น้อยกว่า* ที่ทำได้ เก็บ recursion ไว้ใช้กับไม่กี่กรณี — deep key path, builder API ที่แม่นยำ — ที่คุ้มค่าจริง
 
+## Mental Model
+
+<Mermaid title="Deferred positions let recursion resolve lazily; direct aliasing forces it immediately" code={recursionMentalDiagram} />
+
+export const recursionMentalDiagram = `flowchart TD
+  deferred["การอ้างอิงอยู่ใน property, array element หรือตำแหน่ง function"] --> lazy["resolve แบบ lazy -- recursion (แม้แต่ mutual) ไม่มีปัญหา จนถึงเพดานความลึก"]
+  direct["bare alias-to-alias reference ไม่มีอะไรคั่น"] --> eager["ต้อง resolve ทันที -- TS2456 ทันทีที่มี cycle"]
+  guarded["recursive call มี parameter ที่หดตัวลง (accumulator, depth counter)"] --> terminates["พิสูจน์ได้ว่า terminate -- และเป็น tail-recursive ได้เพื่อเพดานที่สูงกว่ามาก"]
+  unguarded["recursive call ไม่มีอะไรเปลี่ยนจากขั้นสู่ขั้น"] --> stuck["TS2589 (naive) หรือ TS2615 (self-referential mapped type) -- แล้วแต่ checker เจออันไหนก่อน"]`;
+
+recursive type ทุกตัวในบทนี้เป็นหนึ่งในสอง shape: อันที่ recurse ผ่าน **deferred position** (object property, array element, function signature) กับอันที่ไม่ใช่ shape แบบ deferred คือสิ่งที่ทำให้ `Json`, `Tree`/`Forest`, `DeepReadonly` และ `Paths` ทำงานได้ทั้งหมด — compiler วางการอ้างอิงแบบ recursive ไว้ก่อนแล้วค่อยกลับมาทีหลังได้ shape ที่ไม่ deferred (`type A = B; type B = A;`) ไม่มีอะไรให้วางไว้ก่อน มันเลยพังตอน declaration แทนที่จะพังที่ depth limit
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| recursive alias ผ่าน deferred position (object/array) | อธิบายข้อมูลที่ไม่จำกัดหรืออ้างถึงตัวเองจริง ๆ ได้แม่นยำ (`Json`, tree, linked structure) | ยังโดน depth ceiling ถ้ามีอะไรบังคับให้ expand เต็ม (เช่น การ enumerate แบบ `Paths` ที่ไม่มี depth guard) |
+| recursion ที่มี depth guard (`Paths<T, D>`) | พิสูจน์ได้ว่า terminate แม้บน type ที่อ้างถึงตัวเอง แลกกับ depth parameter สูงสุดที่คุณควบคุมเอง | guard คือ limit จริง — object ที่ลึกจริง ๆ 6 ระดับจะเสีย path ที่เกิน depth ที่คุณเลือกไป |
+| form tail-recursive (accumulator parameter) | เพดานลึกกว่า naive recursion ประมาณ 20 เท่าสำหรับปัญหาหน้าตาเดียวกัน | ไม่ใช่วิธีธรรมชาติเสมอไปในการเขียน recursion — บางการคำนวณไม่มี accumulator ที่ชัดเจน |
+| bare alias-to-alias mutual reference | N/A — นี่คือความผิดพลาด ไม่ใช่ตัวเลือกที่ valid | พังทันทีด้วย TS2456 ก่อนที่ recursion จะเริ่มด้วยซ้ำ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **type alias สองตัวที่อ้างถึงกันคือ "mutual recursion" และ TypeScript จะจัดการให้เอง** จริงแค่ถ้าการอ้างอิงแต่ละครั้งอยู่ใน deferred position (property, array element, function signature) `type A = B; type B = A;` ไม่ใช่ recursion ที่ compiler defer ได้ — มันคือ circular reference ทันทีแบบ `TS2456`
+- **depth guard แบบใน `Paths<T, D>` เป็นแค่การป้องกันเกินจำเป็นสำหรับ type ที่ไม่มีมันก็ทำงานได้อยู่แล้ว** สำหรับ type ที่อ้างถึงตัวเองจริง ๆ มันคือความต่างระหว่าง compile ผ่านกับ `TS2615` ทันที — ลองเวอร์ชันไม่มี guard กับ interface ที่อ้างถึงตัวเอง (แบบที่บทนี้ทำ) ก่อนจะสมมติว่า guard เป็นทางเลือก
+- **`any` propagate ไม่เปลี่ยนแปลงผ่าน generic utility ทุกตัวเสมอ ดังนั้น `X<any>` ก็คือ `any` เสมอ** `Awaited<any>` คือ `any` `keyof any` คือ `string | number | symbol` ที่เป็นรูปธรรมเต็มที่ ไม่ใช่ `any` เลย `Partial<any>` ไม่ใช่ทั้งสองแบบ — เป็นพฤติกรรมที่สามแยกต่างหาก assignable ไปมากับ object แต่ไม่ใช่กับ primitive แต่ละ utility ต้องเช็คด้วยตัวเอง ไม่ใช่สมมติจาก rule of thumb
+- **recursive type ที่ compile ผ่านสำหรับ input เล็ก ๆ จะยังทำงานต่อไปเมื่อ input โตขึ้น แค่ช้าลง** พ้นเพดาน instantiation-depth ไปมันไม่ได้แค่ช้าลง มันพังตรง ๆ ด้วย `TS2589` และก่อนถึงเพดานนั้นด้วยซ้ำ ต้นทุน `Instantiations` โตได้แย่กว่าเชิงเส้น (accumulator แบบ tail-recursive ที่ถูกสร้างใหม่ทุกขั้นเป็นสาเหตุที่พบบ่อย) ดังนั้น "ช้าลง" มาถึงเร็วเกินคาดได้เหมือนกัน
+
+## อ่านโค้ดที่ AI เขียน
+
+- type "deep clone" หรือ "deep merge" ที่ generate มา recurse เข้า object และ array แต่ไม่มี depth parameter และไม่มี base case นอกจาก "ไม่ใช่ object" ห่างจาก input ที่อ้างถึงตัวเองแค่ก้าวเดียวจะเจอทั้ง `TS2589` (ถ้าเป็น recursive conditional ธรรมดา) หรือ `TS2615`/`TS2456` ทันที (ถ้า self-reference เป็นเชิงโครงสร้าง อยู่ข้างใน mapped type หรือเป็น bare alias) ถามว่าเกิดอะไรขึ้นกับ type ที่อ้างถึงตัวเองก่อนจะเชื่อมันกับข้อมูลจริงที่ไม่รู้ shape ล่วงหน้า
+- type alias สองตัวที่ดูเหมือนตั้งใจ model ความสัมพันธ์แบบ mutual (node กับ parent ของมัน, value กับ wrapper ของมัน) แต่อ้างถึงกันโดยไม่มี object, array หรือ function คั่นระหว่างกันเลย จะ compile ไม่ผ่านเลย — `TS2456` พังทันที ซึ่งอย่างน้อยก็พังดัง ๆ แทนที่จะให้ type ผิดแบบเงียบ ๆ แต่ควรจำได้ทันทีที่เห็น ไม่ใช่มองว่าเป็น compiler bug ลึกลับ
+- โค้ด (หรือ comment) ที่สมมติว่า `SomeUtility<any>` ปลอดภัยเป็น `any` เพราะ "`any` เป็นพิษกับทุกอย่าง" ควรมี `Equal` check ก่อนจะพึ่งพามัน — `Partial<any>` โดยเฉพาะเป็นข้อยกเว้นที่มีเอกสารรองรับ และ codebase ที่ branch ตาม "นี่คือ any ไหม" โดยใช้ type ที่ derive ผ่าน `Partial` (หรือ homomorphic mapped type อื่น) อาจไม่ทำงานตามที่ผู้เขียนสมมติไว้
+
+<SpotTheBug lang="ts" code={`// Deep-freeze a config object type, recursively, no matter how nested
+type DeepFreeze<T> = T extends object
+  ? { readonly [K in keyof T]: DeepFreeze<T[K]> }
+  : T;
+
+interface Node {
+  id: string;
+  parent: Node | null;
+}
+
+type FrozenNode = DeepFreeze<Node>;`}>
+โค้ดนี้ไม่ compile ในฐานะ type ที่อ้างถึงตัวเองโดยไม่มี depth guard — `Node.parent` type เป็น `Node | null` ดังนั้น freeze `Node` ต้อง freeze `Node` อีกครั้งเพื่อ freeze property `parent` ของมัน ซึ่งต้อง freeze `Node` อีกครั้ง โดยไม่มีอะไรใน `DeepFreeze` ที่เปลี่ยนระหว่าง call เลยเพื่อตัด cycle ต่างจาก recursion บน array/tuple ก่อนหน้านี้ในบทนี้ (ที่ terminate ได้เพราะ tuple หดตัวลงจริงทุกขั้น) `DeepFreeze<Node>` recurse บน type *เดิม* ซ้ำไปเรื่อย ๆ TypeScript เลยรายงาน error แบบ immediate structural-cycle เดียวกับที่ตัวอย่าง `PathsNoGuard<Self>` ของบทนี้เจอ (`TS2615`, "circularly references itself") ไม่ใช่ `TS2589` แบบ "ลึกเกินไป" ทางแก้คือแบบเดียวกับที่ `Paths<T, D>` ใช้: เพิ่ม depth parameter (`DeepFreeze<T, D extends number = 8>` ลดค่าผ่าน lookup tuple แบบ `Prev` พร้อม `[D] extends [never] ? T : ...` เป็นเงื่อนไขหยุด) เพื่อให้ recursion มีอะไรที่เปลี่ยนจริงในแต่ละขั้นและมีจุดที่ยอมแพ้แล้วคืน type ตามเดิม
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`) และ recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element compiler จำกัดความลึกของ recursion — วัดได้ 47/48 สำหรับแบบตรงไปตรงมา, 999/1000 สำหรับ **tail-recursive** conditional ที่สะสมเข้า parameter recursion ทรงพลังและอ่านยาก — หยิบมาใช้เฉพาะเมื่อ type ที่ง่ายกว่าหรือ runtime check ใช้แทนไม่ได้จริง ๆ
+type อ้างถึงตัวเองได้: recursive **alias** อธิบายข้อมูลที่ลึก (type `Json`), recursion บน **tuple** ด้วย `[infer Head, ...infer Rest]` ประมวลผล list ทีละ element (`Reverse`, `Join`) และ recursion บน **object** พร้อม depth guard (index ด้วย `Prev`, `[D] extends [never]`) สร้างอย่าง `DeepReadonly` กับ `Paths<T>` ที่ terminate ได้แม้บน input ที่อ้างถึงตัวเอง **Mutual** recursion ทำงานแบบเดียวกัน แต่ผ่าน deferred position เท่านั้น (object/array/function) — `type A = B; type B = A;` เปล่า ๆ พังทันทีด้วย `TS2456` ไม่ใช่ที่ depth limit ไหน compiler จำกัดความลึกของ recursion — วัดได้ 47/48 สำหรับแบบตรงไปตรงมา, 999/1000 สำหรับ **tail-recursive** conditional — และต้นทุน `Instantiations` จาก `--extendedDiagnostics` โตได้แย่กว่าเชิงเส้นก่อนถึงเพดานนั้นด้วยซ้ำ `any` ไม่ propagate เหมือนกันหมดผ่าน utility ทุกตัว: `Awaited<any>` คือ `any`, `keyof any` เป็นรูปธรรมเต็มที่ และ `Partial<any>` ไม่ใช่ทั้งสองแบบ
 </Callout>
 
 export const quizRecursive = [
@@ -112,6 +428,7 @@ export const quizRecursive = [
       'ไม่มี limit flag',
     ],
     answer: 1,
+    explain: 'Json พูดถึงตัวเองข้างใน array position และ object property position — ทั้งคู่เป็น deferred position — ซึ่งเป็นสิ่งที่ทำให้มันอธิบายข้อมูลที่ซ้อนได้ทุกระดับ',
   },
   {
     q: '`[infer Head, ...infer Rest]` ทำอะไรใน recursive tuple type?',
@@ -122,6 +439,7 @@ export const quizRecursive = [
       'แปลง tuple เป็น array',
     ],
     answer: 1,
+    explain: 'pattern นี้ capture element แรกเป็น Head และที่เหลือทั้งหมดเป็น tuple Rest ซึ่งเป็นเวอร์ชันระดับ type ของการ destructure head/tail ของ array',
   },
   {
     q: 'ทำไม compiler ถึงจำกัด instantiation depth ของ type?',
@@ -132,6 +450,7 @@ export const quizRecursive = [
       'เพื่อทำให้ build ช้าลงโดยตั้งใจ',
     ],
     answer: 1,
+    explain: 'ถ้าไม่มีเพดาน recursive type ที่ไม่มี base case จริง (หรือมีแต่ไม่ terminate สำหรับ input บางแบบ) อาจทำให้ compiler ค้างหรือ crash ได้ — เพดานคือ safety limit ไม่ใช่การห้าม recursion',
   },
   {
     q: 'ทริกมาตรฐานในการดัน recursion ให้ลึกขึ้นคืออะไร?',
@@ -142,6 +461,40 @@ export const quizRecursive = [
       'ใช้ class แทน',
     ],
     answer: 1,
+    explain: 'conditional แบบ tail-recursive — ที่ recursive call เป็นผลลัพธ์ทั้งหมด โดยมี accumulator ถือคำตอบไว้ — ให้ compiler optimize recursion ได้ ดันเพดานจากประมาณ 47 ไปเป็น 999',
+  },
+  {
+    q: '```ts\ntype A = B;\ntype B = A;\n```\nทำไมอันนี้พัง และต่างจากการชนเพดาน instantiation-depth อย่างไร?',
+    options: [
+      'มันชน TS2589 หลัง 47 ระดับ เหมือน naive recursion ทั่วไป',
+      'มันพังทันทีด้วย TS2456 — bare alias-to-alias reference ไม่มี deferred position (ไม่มี object, array หรือ function) ให้ compiler วาง cycle ไว้ก่อนแล้ว resolve แบบ lazy',
+      'มัน compile ผ่านสบาย — TypeScript infer เป็น unknown ทั้งคู่',
+      'มันพังแค่ใน strict mode',
+    ],
+    answer: 1,
+    explain: 'object property, array element และ function signature เป็น deferred position resolve แบบ lazy การอ้างอิง alias-to-alias เปล่า ๆ ไม่มีตำแหน่งแบบนั้นเลย compiler เลยต้อง resolve ทันทีและตรวจพบ cycle ทันทีเป็น TS2456 ไม่ใช่ depth-limit error',
+  },
+  {
+    q: '```ts\ntype Prev = [never, 0, 1, 2, 3, 4, 5];\ntype Paths<T, D extends number = 5> = [D] extends [never] ? never : T extends object ? /* ...recurse with Prev[D]... */ never : never;\ninterface Self { name: string; self: Self; }\ntype P = Paths<Self>;\n```\n`Paths<Self>` compile ผ่านไหม และทำไม?',
+    options: [
+      'ไม่ผ่าน — type ที่อ้างถึงตัวเองใช้กับ generic recursive ไม่ได้เลย',
+      'ผ่าน — guard [D] extends [never] ที่ลดค่าผ่าน Prev ทุก call บังคับให้ recursion หยุดหลังจำนวนระดับคงที่ ไม่ว่า Self จะซ้อนเข้าตัวเองลึกแค่ไหนจริง ๆ',
+      'ไม่ผ่าน ชน TS2589 เพราะ Self ไม่มีที่สิ้นสุด',
+      'ผ่าน แต่แค่เพราะ Self บังเอิญไม่ได้อ้างถึงตัวเองจริง ๆ',
+    ],
+    answer: 1,
+    explain: 'depth parameter D หดลงทีละหนึ่ง (ผ่าน lookup table Prev) ทุก recursive call และ [D] extends [never] หยุดการคำนวณทั้งหมดพอ D หมด — เป็นการการันตี termination ที่ไม่ขึ้นกับว่า T จะเลิกอ้างถึงตัวเองเมื่อไหร่',
+  },
+  {
+    q: '`Partial<any>` คืออะไร และต่างจาก `any` จริง ๆ ยังไง?',
+    options: [
+      'มันคือ `any` เป๊ะ — any propagate ผ่านทุก utility โดยไม่เปลี่ยนแปลงเสมอ',
+      'มันเป็นพฤติกรรมที่สามแยกต่างหาก: member access บนมันให้ `any`, และมัน assignable ไปมากับ object shape อะไรก็ได้ แต่ — ต่างจาก `any` จริง — มัน assignable ไปหรือมาจาก primitive อย่าง `string` หรือ `number` ไม่ได้',
+      'มันคือ `never` เพราะ Partial ใช้กับ any ไม่ได้',
+      'มันคือ `unknown` คู่หูที่ปลอดภัยของ any',
+    ],
+    answer: 1,
+    explain: 'Partial<any> ยังคงแสดงเป็น generic ที่ไม่ resolve Partial<any>: มันทำตัว permissive สำหรับ object shape และให้ any ตอน property access แต่ compiler ปฏิเสธการ assign มันไปหรือมาจาก string, number หรือ primitive อื่น — ความต่างจริงที่พิสูจน์ได้จาก any เอง',
   },
 ];
 

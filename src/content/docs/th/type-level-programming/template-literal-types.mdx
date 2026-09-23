@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## string ที่คุณคำนวณได้
 
@@ -95,8 +97,186 @@ recursive string type ทุกตัวที่ลอกทีละตัว�
 
 ใช้เทคนิคนี้ตรงที่ string encode structure จริง ๆ ถ้าใช้กระตือรือร้นเกินไปคุณจะได้ type ที่เพื่อนร่วมทีมอ่านไม่ออก — เป็น trade-off ที่กลับมาเสมอของ type-level programming
 
+## union cross-product ระเบิดได้: `TS2590`
+
+union ที่ interpolate แต่ละตัวคูณจำนวนการผสม literal ทั้งหมดเข้าด้วยกัน union สองตัวที่มี 10 member ไม่ได้ให้แค่ 20 ความเป็นไปได้ — มันให้ 100 และการเติบโตเป็นแบบคูณกันทุกจุด interpolate ที่เพิ่มเข้ามา:
+
+```ts
+// @expect-error TS2590
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+type Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;
+```
+
+digit 10 ตัว interpolate 5 ครั้งคือ `10 ** 5` = **100,000** literal string type ที่แตกต่างกัน — มากพอที่จะข้าม union-size ceiling ของ TypeScript แล้วให้ `TS2590: Expression produces a union type that is too complex to represent` ทำซ้ำ 4 ครั้ง (10,000 การผสม) compile ผ่านสบาย ๆ — นี่คือเวอร์ชันที่เล็กที่สุดที่ reproduce error นี้ได้ หาเจอด้วยการนับ: `10 ** n` ข้าม 100,000 ที่ `n = 5` บทเรียนไม่ใช่ "หลีกเลี่ยง template literal ที่มี union" — แต่คือ "รู้ว่าขนาดคือผลคูณ (`∏`) ของจำนวน member ของแต่ละ union ที่ interpolate ไม่ใช่ผลบวก" ก่อนจะหยิบ template literal type มาใช้ encode อะไรอย่าง "ทุกโค้ด alphanumeric 5 ตัวที่เป็นไปได้"
+
+## ปิด distribution ด้วย `[T]` ใน conditional ที่อยู่ข้าง template
+
+generic template literal type distribute บน union แบบเดียวกับ construct อื่นที่อยู่ข้าง conditional เมื่อ type parameter เป็น naked:
+
+```ts
+type StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;
+
+type Result = StartsWithSlash<"/users" | "profile">;
+//   ^? boolean   -- one branch per union member, unioned
+```
+
+`"/users"` match แล้วให้ `true`; `"profile"` ไม่ match ให้ `false`; union กันได้ `boolean` — ไม่ใช่คำตอบใช่/ไม่ใช่ที่มีประโยชน์เกี่ยวกับ union ทั้งก้อน idiom `[T] extends [U]` แบบเดียวกับบท Conditional Types แก้ปัญหานี้ได้ด้วย ตรวจ union ทั้งก้อนกับ template pattern ทีเดียวแทนที่จะทีละ member:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type StartsWithSlashAll<T extends string> = [T] extends [`/${string}`] ? true : false;
+
+type NotAll = StartsWithSlashAll<"/users" | "profile">;
+type _notAll = Expect<Equal<NotAll, false>>;
+
+type AllSlash = StartsWithSlashAll<"/users" | "/profile">;
+type _allSlash = Expect<Equal<AllSlash, true>>;
+```
+
+`StartsWithSlashAll` ตอบคำถาม "member*ทุก*ตัว*ของ union นี้ขึ้นต้นด้วย `/` ไหม" ซึ่งเป็นคำถามที่ต่างไปจาก (และมีประโยชน์กว่าในบางกรณี) "member*ตัวนี้*ขึ้นต้นด้วย `/` ไหม"
+
+## `infer` ข้างใน template แบบ recursive: `Split`
+
+รวม `infer` ข้างใน template pattern กับ recursion แล้วคุณจะได้การ parse string จริง ๆ — ตัวอย่างคลาสสิกคือแบ่ง string ที่มี delimiter เป็น tuple ของแต่ละส่วน เวอร์ชันระดับ type ของ `"a,b,c".split(",")`:
+
+```ts
+type Split<S extends string, D extends string> =
+  S extends `${infer Head}${D}${infer Rest}`
+    ? [Head, ...Split<Rest, D>]
+    : [S];
+
+type R = Split<"a,b,c", ",">;
+//   ^? ["a", "b", "c"]
+```
+
+แต่ละขั้น capture ทุกอย่างก่อน delimiter ถัดไปเป็น `Head` แล้ว recurse บน `Rest`; base case (ไม่เจอ delimiter อีกแล้ว) ห่อสิ่งที่เหลือไว้ใน tuple element เดียว `Join` คือภาพสะท้อนกัน — ต่อ tuple ของ string กลับเป็น string เดียวแบบ recursive โดยมี separator คั่นแต่ละคู่ — และ `Trim` ก็คือแนวคิด "ลอกทีละตัวอักษร" เดียวกัน แค่ใช้กับ space ที่หัว/ท้ายแทน delimiter:
+
+```ts
+type TrimLeft<S extends string> = S extends ` ${infer Rest}` ? TrimLeft<Rest> : S;
+type TrimRight<S extends string> = S extends `${infer Rest} ` ? TrimRight<Rest> : S;
+type Trim<S extends string> = TrimLeft<TrimRight<S>>;
+
+type T1 = Trim<"  hello  ">;
+//   ^? "hello"
+```
+
+## pattern-match string key เข้าไปเป็น event map
+
+key remapping ด้วย `as` ของ mapped type จากบทก่อนหน้ากับ template literal interpolation รวมกันได้เป็นธรรมชาติ สร้าง typed event-handler map จาก interface ที่แค่ map ชื่อ event ไปหา payload — pattern ที่คุณจะจำได้จาก typed DOM หรือ UI event system ทุกตัว:
+
+```ts
+interface EventMap {
+  click: MouseEvent;
+  hover: PointerEvent;
+}
+
+type OnHandlers<T> = {
+  [K in keyof T as `on${Capitalize<string & K>}`]: (event: T[K]) => void;
+};
+
+type Handlers = OnHandlers<EventMap>;
+//   ^? { onClick: (event: MouseEvent) => void; onHover: (event: PointerEvent) => void }
+```
+
+`Capitalize<string & K>` ต้องมี `string &` เพราะ `K` ไล่ผ่าน `keyof T` ซึ่งรู้แค่ว่า assignable ให้ `string | number | symbol` เท่านั้นโดยทั่วไป — intersect กับ `string` บอก compiler ว่า "ให้ปฏิบัติกับมันเป็น string เพื่อจุดประสงค์ของ `Capitalize` ด้วย" ซึ่งปลอดภัยตรงนี้เพราะ key ทุกตัวของ `EventMap` เป็น string literal จริง ๆ
+
+## template literal บวก `satisfies` สำหรับ route table
+
+template literal type เป็น *value* type ของ `Record` รวมกับ `satisfies` validate ทุก entry ใน route table เทียบกับ shape (ขึ้นต้นด้วย `/`) พร้อมทั้งคง literal type ของแต่ละ route ไว้ใช้ต่อ — ประโยชน์เดียวกับ `satisfies` จากบท Literals & Widening แค่ใช้กับทั้ง table ทีเดียว:
+
+```ts
+const routes = {
+  home: "/",
+  userProfile: "/users/:id",
+  postDetail: "/posts/:id/comments/:commentId",
+} satisfies Record<string, `/${string}`>;
+
+// Each entry keeps its own literal type, not the widened `` `/${string}` `` template.
+type HomeRoute = typeof routes.home;
+//   ^? "/"
+```
+
+ถ้า route value ตัวไหนถูกเปลี่ยนเป็น `"users/:id"` (ขาด `/` ข้างหน้า) การเช็ค `satisfies` เทียบกับ `Record` ที่ value type เป็น template literal แบบข้างบนจะจับได้ทันที — annotation ธรรมดา `: Record<string, string>` จับไม่ได้ และ `as` cast ก็จับไม่ได้เหมือนกัน
+
+<TSPlayground code={templateDeepCode} id="template-cross-product-and-split" title="Union cross-products, [T] suppression, and recursive Split with infer" />
+
+export const templateDeepCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// distribution gives boolean for "does this member start with /"
+type StartsWithSlash<T extends string> = T extends \`/\${string}\` ? true : false;
+type Result = StartsWithSlash<"/users" | "profile">;
+
+// [T] suppression answers "does the WHOLE union start with /" instead
+type StartsWithSlashAll<T extends string> = [T] extends [\`/\${string}\`] ? true : false;
+type NotAll = StartsWithSlashAll<"/users" | "profile">;
+type _notAll = Expect<Equal<NotAll, false>>;
+
+// recursive infer inside a template: Split
+type Split<S extends string, D extends string> =
+  S extends \`\${infer Head}\${D}\${infer Rest}\`
+    ? [Head, ...Split<Rest, D>]
+    : [S];
+
+type R = Split<"a,b,c", ",">;
+type _splitCheck = Expect<Equal<R, ["a", "b", "c"]>>;
+
+// event map built from mapped-type key remapping + template literal
+interface EventMap { click: MouseEvent; hover: PointerEvent; }
+type OnHandlers<T> = { [K in keyof T as \`on\${Capitalize<string & K>}\`]: (event: T[K]) => void };
+type Handlers = OnHandlers<EventMap>;`;
+
+## Mental Model
+
+<Mermaid title="A template literal's union size multiplies; [T] wrapping tests the whole union at once" code={tmplMentalDiagram} />
+
+export const tmplMentalDiagram = `flowchart TD
+  interp["จุด interpolate union แต่ละจุด"] --> mult["คูณจำนวนการผสมทั้งหมด"]
+  mult --> limit{"รวมแล้วเกิน ~100,000 ไหม?"}
+  limit -->|เกิน| ts2590["TS2590: too complex to represent"]
+  naked["T ที่ naked ถูกตรวจกับ template pattern"] --> perMember["distribute: กิ่งละ member"]
+  wrapped["[T] extends [pattern]"] --> whole["ตรวจ union ทั้งก้อนเป็น type เดียว -- ไม่ distribute"]`;
+
+มองทุกจุด interpolate ใน template literal type เหมือนเป็นการคูณ ไม่ใช่บวก — mental model เดียวกับที่อธิบายว่าทำไม `TS2590` โผล่เร็วกว่าที่สัญชาตญาณบอก มองว่า conditional ที่สร้างรอบ template pattern เหมือน conditional ธรรมดาทุกตัว: naked distribute ทีละ member, `[T]` ตรวจ union ทั้งก้อนทีเดียว — กลไกไม่ได้เกี่ยวกับ string เป็นพิเศษเลย มันคือกฎ distribution เดียวกับบท Conditional Types แค่มี template pattern เป็นฝั่ง `U`
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| interpolate หลาย union ใน template เดียว | generate ทุกการผสมที่ valid อัตโนมัติ — ไม่ต้อง enumerate มือ | จำนวนการผสมคูณกัน ไม่ใช่บวก — union ขนาดกลางไม่กี่ตัวก็ชน `TS2590` ได้เร็วกว่าที่คาด |
+| `T` naked เทียบกับ template pattern | ตอบ "member*นี้*match ไหม" ทีละตัว มีประโยชน์สำหรับ filter union | distribute เป็น `boolean` ทั้งที่คุณอยากได้คำตอบเดียวสำหรับทั้ง union |
+| `[T] extends [pattern]` | ตอบ "union*ทั้งก้อน*match ไหม" คำตอบเดียวเด็ดขาด | เสียรายละเอียดทีละ member ไป — ถ้าต้องการทั้งสองแบบ ต้องเขียนทั้งสอง form |
+| recursive `infer` ข้างใน template (`Split`, `Trim`) | parse string จริง ๆ ที่ประเมินทั้งหมดตอน compile time | นำ recursion-depth ceiling จากบท Recursive Types กลับมาสำหรับ string ที่ยาวมาก ๆ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **interpolate union สองตัวที่มี 10 member ให้ 20 string ที่เป็นไปได้** ไม่จริง มันให้ `10 × 10 = 100` — ขนาด union คูณกันข้ามจุด interpolate ไม่ใช่บวก ซึ่งเป็นเหตุผลเป๊ะที่ `TS2590` โผล่มาได้กับ union ที่ดูขนาดพอประมาณ
+- **conditional ของ generic template literal type อย่าง `` T extends `/${string}` ? true : false `` บอกเรื่อง union ทั้งก้อนเสมอ** มัน distribute บน `T` ที่ naked ให้กิ่งละ member แล้ว union เข้าด้วยกัน — สำหรับ union ผสมนั่นคือ `boolean` ไม่ใช่คำตอบเดียวที่มีความหมาย `[T] extends [pattern]` คือทางแก้เมื่อคุณอยากได้คำถามแบบ whole-union แทน
+- **`Capitalize<K>` ที่ `K` เป็น `keyof T` ไม่ต้องทำอะไรเพิ่ม** `keyof T` รู้แค่ว่า assignable ให้ `string | number | symbol` เท่านั้นโดยทั่วไป และ intrinsic การจัดการ string ต้องการ type ที่ assignable ให้ `string` จริง ๆ — `string & K` (หรือ constraint `K extends string`) คือสิ่งที่ทำให้ compiler ยอมรับ
+
+## อ่านโค้ดที่ AI เขียน
+
+- type ที่ generate มา interpolate union เล็ก ๆ หลายตัวเพื่อสร้าง enumeration "ครบถ้วน" ของ string ที่ valid (product code, permission string, hex-like identifier) มีความเสี่ยง `TS2590` ที่จะไม่โผล่ตอน review มือเร็ว ๆ ที่แค่นับจำนวน member ของ union — คูณมันก่อนจะสมมติว่าปลอดภัย
+- conditional ที่สร้างจาก template pattern (`` T extends `prefix-${string}` ? ... : ... ``) ที่ใช้กับ union แล้วคาดหวังว่าจะ gate "list ทั้งหมดนี้ okay ไหม" เป็นกับดักที่ AI generate บ่อย: มัน distribute แล้วให้ `boolean` ยอมรับ call site แบบเงียบ ๆ แทนที่จะ reject union ที่มี member ผิดหนึ่งตัว เพราะ `boolean` มี shape ที่ truthy พอจะ type-check ผ่านกับโค้ดรอบข้างส่วนใหญ่โดยไม่มีคำเตือน
+- `Record<string, T>` ที่ใช้กับ route/permission/config table โดยไม่มี `satisfies` เลย เสีย literal type ที่แม่นยำของทุก entry ไป และไม่ validate shape อะไรเลย — ถ้าโค้ดทีหลังพึ่งพา route string type เจาะจง (หรือลืมใส่ `/` นำหน้า) ไม่มีอะไรใน type system จะจับได้
+
+<SpotTheBug lang="ts" code={`type ApiRoute = "/users" | "/posts" | "/comments";
+
+type IsValidRoute<T extends string> = T extends ApiRoute ? true : false;
+
+// "validate" that every route a client requests is one of our known routes
+function checkRoutes<T extends string>(routes: T[]): IsValidRoute<T> {
+  return routes.every((r) => (["/users", "/posts", "/comments"] as string[]).includes(r)) as IsValidRoute<T>;
+}
+
+const result = checkRoutes(["/users", "/unknown"]);`}>
+`IsValidRoute<T>` distribute บน `T` เพราะ `T` naked อยู่ฝั่งที่ถูกตรวจ ดังนั้นสำหรับ `T = "/users" | "/unknown"` มัน evaluate เป็น `true | false` — `boolean` ธรรมดา — ไม่ใช่คำตอบเดียวที่เด็ดขาดว่า call ทั้งอัน valid ไหม return type ของ function จบลงด้วย `boolean` สำหรับ call นี้ไม่ว่ายังไง ดังนั้น `result` type-check ผ่านสบายทั้งสองทาง และ cast `as IsValidRoute<T>` ตอนท้ายก็เงียบความไม่ตรงกันระหว่างการเช็คจริงตอน runtime (`.every(...)` ซึ่งคำนวณคำตอบ true/false เดียวสำหรับทั้ง array จริง ๆ) กับสิ่งที่ type system เชื่อว่า return type เป็น การแก้ type ให้ตรงกับความตั้งใจ — คำตอบเด็ดขาดเดียวสำหรับทั้ง array — คือห่อฝั่งที่ถูกตรวจ: `type IsValidRoute<T extends string> = [T] extends [ApiRoute] ? true : false;` พอแก้แล้ว `IsValidRoute<"/users" | "/unknown">` resolve เป็น literal `false` ตัวเดียวถูกต้อง (เพราะ `"/unknown"` ไม่ใช่ส่วนหนึ่งของ `ApiRoute`) ตรงกับสิ่งที่ `.every(...)` คำนวณจริงตอน runtime แทนที่จะให้ type แบบ always-`boolean` แบบเงียบ ๆ ที่ cast `as` กำลังซ่อนไว้
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-template literal type สร้าง string type ด้วยการ interpolate และ **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform string type เหล่านั้น และการรวม template กับ conditional type บวก `infer` ให้คุณ **pattern-match และ parse** string type ได้ (capture ชิ้นส่วนเข้า type variable ใหม่) นี่คือการ parse string จริง ๆ ที่ compiler ประเมินให้
+template literal type สร้าง string type ด้วยการ interpolate และ **distribute** บน union — เปลี่ยน union เล็ก ๆ เป็นทุกการผสม literal และคูณ (ไม่ใช่บวก) ขนาดของแต่ละ union ที่ interpolate ซึ่งเป็นเหตุผลที่ union ขนาดกลางไม่กี่ตัวสามารถชน `TS2590` ได้ intrinsic `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform string type เหล่านั้น `infer` ข้างใน template pattern รวมกับ recursion parse string ได้ (`Split`, `Trim`) และ — เหมือนกับ conditional type เป๊ะ — การห่อ naked checked type parameter ด้วย `[T]` เปลี่ยน conditional ของ template pattern จาก "member นี้ match ไหม" (distribute) เป็น "union ทั้งก้อน match ไหม" (คำตอบเดียวเด็ดขาด)
 </Callout>
 
 export const quizTemplate = [
@@ -109,6 +289,7 @@ export const quizTemplate = [
       'never',
     ],
     answer: 1,
+    explain: 'จุด interpolate union แต่ละจุดคูณออกมาเป็นทุกการผสม — union สองตัวที่มี 2 member ให้ union ของ literal string 4 ตัวที่เป็น cross-product',
   },
   {
     q: '`Capitalize<"click">` ให้อะไร?',
@@ -119,6 +300,7 @@ export const quizTemplate = [
       'string',
     ],
     answer: 1,
+    explain: 'Capitalize uppercase แค่ตัวอักษรแรก ปล่อยส่วนที่เหลือของ string ไว้เหมือนเดิม — "click" กลายเป็น "Click"',
   },
   {
     q: 'ใน `T extends \\`on${infer E}\\` ? E : never` `infer E` ทำอะไร?',
@@ -129,6 +311,7 @@ export const quizTemplate = [
       'แปลง string เป็น number',
     ],
     answer: 1,
+    explain: 'infer ข้างใน template pattern capture ทุกอย่างที่ match ตำแหน่งนั้น — ตรงนี้คือทุกอย่างหลัง literal prefix "on" — เข้าไปใน type variable ใหม่ที่ใช้ได้ใน branch true',
   },
   {
     q: 'ใน TypeScript 7 `HeadTail<"😀abc">` ให้อะไร เมื่อ `HeadTail` ลอกตัวอักษรแรกด้วย `${infer Head}${infer Tail}`?',
@@ -139,6 +322,7 @@ export const quizTemplate = [
       'string',
     ],
     answer: 1,
+    explain: 'TypeScript 7 เปลี่ยน infer ของ template literal ให้แบ่งตาม Unicode code point แทน UTF-16 code unit ดังนั้นตัวอักษร astral อย่าง emoji ถูก capture เต็มตัวแทนที่จะเป็นครึ่งหนึ่งของ surrogate pair',
   },
   {
     q: '`EventName<"click">` คืนอะไรถ้า `EventName<T> = T extends \\`on${infer E}\\` ? E : never`?',
@@ -149,6 +333,29 @@ export const quizTemplate = [
       'string',
     ],
     answer: 2,
+    explain: '"click" ไม่ได้ขึ้นต้นด้วย literal prefix "on" ที่ pattern ต้องการ conditional เลยตกไปที่ branch else คือ never',
+  },
+  {
+    q: '```ts\ntype Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";\ntype Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;\n```\nทำไมอันนี้ compile ไม่ผ่าน?',
+    options: [
+      'template literal type ใช้ union ที่หน้าตาเป็นตัวเลขไม่ได้',
+      'จุด interpolate 5 จุดของ union 10 member คูณกันเป็น 10 ยกกำลัง 5 = 100,000 การผสม ข้าม union-size ceiling ของ TypeScript (TS2590)',
+      'Digit ต้องมี `as const` ชัดเจน',
+      'มันพังแค่ภายใต้ noUncheckedIndexedAccess',
+    ],
+    answer: 1,
+    explain: 'ขนาด union คูณกันข้ามจุด interpolate แทนที่จะบวก — 10 ความเป็นไปได้ทำซ้ำ 5 ครั้งคือ 10 ยกกำลัง 5 เกิน ceiling ประมาณ 100,000 member ที่ทำให้เกิด TS2590 ไปสบาย ๆ',
+  },
+  {
+    q: '```ts\ntype StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;\ntype R = StartsWithSlash<"/users" | "profile">;\n```\n`R` คืออะไร และจะทำให้มันตอบ "union ทั้งก้อน match ไหม" แทนได้อย่างไร?',
+    options: [
+      '`true` — และไม่มีทางเปลี่ยนพฤติกรรมนี้ได้',
+      '`boolean` (distribute ทีละ member); ห่อทั้งสองฝั่งเป็น `[T] extends [\\`/${string}\\`]` เพื่อตรวจ union ทั้งก้อนทีเดียวแทน',
+      '`false` — เพราะ "profile" ไม่ match',
+      'compile error เพราะ union ตรวจกับ template ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'T naked อยู่ฝั่งที่ถูกตรวจ conditional เลยรันครั้งเดียวต่อ union member ("/users" match, "profile" ไม่ match) แล้ว union true | false เป็น boolean idiom [T] extends [pattern] จากบท Conditional Types ใช้ได้ตรงนี้ด้วย ตรวจ union ทั้งก้อนเป็นการเปรียบเทียบเดียว',
   },
 ];
 

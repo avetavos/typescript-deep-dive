@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Strings you can compute
 
@@ -95,8 +97,186 @@ Every recursive string type that peels one character at a time — a `Split`, a 
 
 Use it where a string genuinely encodes structure. Reach for it too eagerly and you get types no teammate can read — the recurring trade-off of type-level programming.
 
+## Union cross-products can blow up: `TS2590`
+
+Each interpolated union multiplies the total number of literal combinations. Two unions of ten members each do not give you twenty possibilities — they give you a hundred, and the growth is multiplicative with every additional interpolation:
+
+```ts
+// @expect-error TS2590
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+type Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;
+```
+
+Ten digits interpolated five times is `10 ** 5` = **100,000** distinct string literal types — enough to cross TypeScript's union-size ceiling and produce `TS2590: Expression produces a union type that is too complex to represent`. Four repetitions (`10,000` combinations) compiles fine; this is the smallest reproducible version of the error, found by counting: `10 ** n` crosses 100,000 at `n = 5`. The lesson is not "avoid template literals with unions" — it is "know that the size is `∏` of each interpolated union's member count, not a sum," before reaching for a template literal type to encode something like every possible five-character alphanumeric code.
+
+## Suppressing distribution with `[T]`, inside a template-adjacent conditional
+
+A generic template literal type distributes over a union the same way any other conditional-adjacent construct does, when the type parameter is naked:
+
+```ts
+type StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;
+
+type Result = StartsWithSlash<"/users" | "profile">;
+//   ^? boolean   -- one branch per union member, unioned
+```
+
+`"/users"` matches and gives `true`; `"profile"` does not and gives `false`; unioned, that is `boolean` — not a useful yes/no answer about the union as a whole. The same `[T] extends [U]` idiom from the Conditional Types lesson fixes it here too, testing the whole union against the template pattern in one shot instead of per member:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+type StartsWithSlashAll<T extends string> = [T] extends [`/${string}`] ? true : false;
+
+type NotAll = StartsWithSlashAll<"/users" | "profile">;
+type _notAll = Expect<Equal<NotAll, false>>;
+
+type AllSlash = StartsWithSlashAll<"/users" | "/profile">;
+type _allSlash = Expect<Equal<AllSlash, true>>;
+```
+
+`StartsWithSlashAll` answers "does *every* member of this union start with `/`," which is a genuinely different (and sometimes more useful) question than "does *this particular* member start with `/`."
+
+## `infer` inside a template, recursively: `Split`
+
+Combine `infer` inside a template pattern with recursion and you get real string parsing — the classic example is splitting a delimited string into a tuple of its parts, the type-level equivalent of `"a,b,c".split(",")`:
+
+```ts
+type Split<S extends string, D extends string> =
+  S extends `${infer Head}${D}${infer Rest}`
+    ? [Head, ...Split<Rest, D>]
+    : [S];
+
+type R = Split<"a,b,c", ",">;
+//   ^? ["a", "b", "c"]
+```
+
+Each step captures everything before the next delimiter as `Head` and recurses on `Rest`; the base case (no more delimiter found) wraps whatever is left in a single-element tuple. `Join` is the mirror image — recursively concatenating a tuple of strings back into one, with a separator between each pair — and `Trim` is the same peel-one-character idea applied to leading/trailing spaces instead of a delimiter:
+
+```ts
+type TrimLeft<S extends string> = S extends ` ${infer Rest}` ? TrimLeft<Rest> : S;
+type TrimRight<S extends string> = S extends `${infer Rest} ` ? TrimRight<Rest> : S;
+type Trim<S extends string> = TrimLeft<TrimRight<S>>;
+
+type T1 = Trim<"  hello  ">;
+//   ^? "hello"
+```
+
+## Pattern-matching string keys into an event map
+
+The mapped-type `as` remapping from the previous lesson and template literal interpolation combine naturally to build a typed event-handler map from a plain event-name-to-payload interface — a pattern you will recognize from every typed DOM or UI event system:
+
+```ts
+interface EventMap {
+  click: MouseEvent;
+  hover: PointerEvent;
+}
+
+type OnHandlers<T> = {
+  [K in keyof T as `on${Capitalize<string & K>}`]: (event: T[K]) => void;
+};
+
+type Handlers = OnHandlers<EventMap>;
+//   ^? { onClick: (event: MouseEvent) => void; onHover: (event: PointerEvent) => void }
+```
+
+`Capitalize<string & K>` needs the `string &` because `K` ranges over `keyof T`, which is only known to be assignable to `string | number | symbol` in general — intersecting with `string` tells the compiler "and also treat it as a string for `Capitalize`'s purposes," which is safe here because every key of `EventMap` actually is a string literal.
+
+## Template literals plus `satisfies` for a route table
+
+A template literal type as the *value* type of a `Record`, combined with `satisfies`, validates every entry in a route table against a shape (starts with `/`) while keeping each individual route's literal string type for later use — the same `satisfies` benefit from Literals & Widening, applied to a whole table at once:
+
+```ts
+const routes = {
+  home: "/",
+  userProfile: "/users/:id",
+  postDetail: "/posts/:id/comments/:commentId",
+} satisfies Record<string, `/${string}`>;
+
+// Each entry keeps its own literal type, not the widened `` `/${string}` `` template.
+type HomeRoute = typeof routes.home;
+//   ^? "/"
+```
+
+If any route value were changed to, say, `"users/:id"` (missing the leading slash), the `satisfies` check against that template-literal-valued `Record` would catch it immediately — a plain `: Record<string, string>` annotation would not, and an `as` cast would not either.
+
+<TSPlayground code={templateDeepCode} id="template-cross-product-and-split" title="Union cross-products, [T] suppression, and recursive Split with infer" />
+
+export const templateDeepCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// distribution gives boolean for "does this member start with /"
+type StartsWithSlash<T extends string> = T extends \`/\${string}\` ? true : false;
+type Result = StartsWithSlash<"/users" | "profile">;
+
+// [T] suppression answers "does the WHOLE union start with /" instead
+type StartsWithSlashAll<T extends string> = [T] extends [\`/\${string}\`] ? true : false;
+type NotAll = StartsWithSlashAll<"/users" | "profile">;
+type _notAll = Expect<Equal<NotAll, false>>;
+
+// recursive infer inside a template: Split
+type Split<S extends string, D extends string> =
+  S extends \`\${infer Head}\${D}\${infer Rest}\`
+    ? [Head, ...Split<Rest, D>]
+    : [S];
+
+type R = Split<"a,b,c", ",">;
+type _splitCheck = Expect<Equal<R, ["a", "b", "c"]>>;
+
+// event map built from mapped-type key remapping + template literal
+interface EventMap { click: MouseEvent; hover: PointerEvent; }
+type OnHandlers<T> = { [K in keyof T as \`on\${Capitalize<string & K>}\`]: (event: T[K]) => void };
+type Handlers = OnHandlers<EventMap>;`;
+
+## Mental Model
+
+<Mermaid title="A template literal's union size multiplies; [T] wrapping tests the whole union at once" code={tmplMentalDiagram} />
+
+export const tmplMentalDiagram = `flowchart TD
+  interp["Each interpolated union position"] --> mult["Multiplies the total combination count"]
+  mult --> limit{"Total combinations over ~100,000?"}
+  limit -->|yes| ts2590["TS2590: too complex to represent"]
+  naked["Naked T checked against a template pattern"] --> perMember["Distributes: one branch per union member"]
+  wrapped["[T] extends [pattern]"] --> whole["Tests the whole union as one type -- no distribution"]`;
+
+Think of every interpolated position in a template literal type as a multiplication, not an addition — the same mental model that explains why `TS2590` shows up sooner than intuition suggests. Treat a conditional built around a template pattern exactly like any other conditional: naked distributes per member, `[T]` tests the whole union at once — the mechanism has nothing to do with strings specifically, it is the same distribution rule from Conditional Types, just with a template pattern as the `U` side.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Interpolating multiple unions in one template | Generates every valid combination automatically — no manual enumeration | Combination count multiplies, not adds — a handful of medium unions can hit `TS2590` far sooner than expected |
+| Naked `T` against a template pattern | Answers "does *this* member match" per member, useful for filtering a union | Distributes into a `boolean` when you actually wanted one whole-union answer |
+| `[T] extends [pattern]` | Answers "does the *whole* union match," a single decisive answer | Loses the per-member breakdown — if you need both, you need both forms |
+| Recursive `infer` inside a template (`Split`, `Trim`) | Real string parsing, evaluated entirely at compile time | Reintroduces the recursion-depth ceiling from the Recursive Types lesson for very long strings |
+
+## Common Misconceptions
+
+- **Interpolating two unions of ten members each gives twenty possible strings.** It gives `10 × 10 = 100` — union sizes multiply across interpolated positions, not add, which is exactly why `TS2590` can appear with surprisingly modest-looking unions.
+- **A generic template literal type conditional like `` T extends `/${string}` ? true : false `` always tells you about the union as a whole.** It distributes over a naked `T`, producing one branch per member unioned together — for a mixed union that is `boolean`, not a single meaningful answer. `[T] extends [pattern]` is the fix when you want the whole-union question instead.
+- **`Capitalize<K>` where `K` is `keyof T` needs no extra work.** `keyof T` is only known to be assignable to `string | number | symbol` in general, and the string-manipulation intrinsics require an actual `string`-assignable type — `string & K` (or a `K extends string` constraint) is what makes the compiler accept it.
+
+## Reading AI-generated code
+
+- A generated type that interpolates several small-looking unions to build a "complete" enumeration of valid strings (product codes, permission strings, hex-like identifiers) is a `TS2590` risk that will not show up in a quick manual review of the union member counts — multiply them before assuming it is safe.
+- A conditional built on a template pattern (`` T extends `prefix-${string}` ? ... : ... ``) applied to a union and expected to gate "is this whole list of things okay" is a common AI-generated footgun: it distributes and produces `boolean`, silently accepting the call site instead of rejecting a union with one bad member, because `boolean` is truthy-shaped enough to type-check against most surrounding code without complaint.
+- A `Record<string, T>` used for a route/permission/config table with no `satisfies` anywhere loses the exact literal type of every entry and validates nothing about its shape — if the code later relies on a specific route string type (or forgets to add the leading `/`), nothing in the type system will catch it.
+
+<SpotTheBug lang="ts" code={`type ApiRoute = "/users" | "/posts" | "/comments";
+
+type IsValidRoute<T extends string> = T extends ApiRoute ? true : false;
+
+// "validate" that every route a client requests is one of our known routes
+function checkRoutes<T extends string>(routes: T[]): IsValidRoute<T> {
+  return routes.every((r) => (["/users", "/posts", "/comments"] as string[]).includes(r)) as IsValidRoute<T>;
+}
+
+const result = checkRoutes(["/users", "/unknown"]);`}>
+`IsValidRoute<T>` distributes over `T` because `T` is naked on the checked side, so for `T = "/users" | "/unknown"` it evaluates to `true | false` — plain `boolean` — not a single decisive answer about whether the *whole* call is valid. The function's return type ends up `boolean` for this call no matter what, so `result` type-checks fine either way, and the `as IsValidRoute<T>` cast at the end silences any mismatch between the real runtime check (`.every(...)`, which does compute one true/false answer for the whole array) and what the type system believes the return type is. Fixing the type to match the intent — one decisive answer for the whole array — means wrapping the checked side: `type IsValidRoute<T extends string> = [T] extends [ApiRoute] ? true : false;`. With that fix, `IsValidRoute<"/users" | "/unknown">` correctly resolves to the single literal `false` (since `"/unknown"` is not part of `ApiRoute`), matching what `.every(...)` actually computes at runtime instead of silently producing an always-`boolean` type that the `as` cast was hiding.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Template literal types build string types by interpolation, and they **distribute** over unions — turning small unions into every literal combination. The intrinsics `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform them, and combining a template with a conditional type plus `infer` lets you **pattern-match and parse** string types (capturing pieces into new type variables). It is real string parsing, evaluated by the compiler.
+Template literal types build string types by interpolation, and they **distribute** over unions — turning small unions into every literal combination, and multiplying (not adding) the size of each interpolated union, which is how a handful of modest unions can trip `TS2590`. The intrinsics `Uppercase`/`Lowercase`/`Capitalize`/`Uncapitalize` transform them, `infer` inside a template pattern combined with recursion parses strings (`Split`, `Trim`), and — exactly as with conditional types — wrapping a naked checked type parameter in `[T]` switches a template-pattern conditional from "does this member match" (distributes) to "does the whole union match" (one decisive answer).
 </Callout>
 
 export const quizTemplate = [
@@ -109,6 +289,7 @@ export const quizTemplate = [
       'never',
     ],
     answer: 1,
+    explain: 'Each interpolated union position multiplies out into every combination -- two unions of two members give the four-member cross-product union of literal strings.',
   },
   {
     q: 'What does `Capitalize<"click">` produce?',
@@ -119,6 +300,7 @@ export const quizTemplate = [
       'string',
     ],
     answer: 1,
+    explain: 'Capitalize only uppercases the first character, leaving the rest of the string untouched -- "click" becomes "Click".',
   },
   {
     q: 'In `T extends \\`on${infer E}\\` ? E : never`, what is `infer E` doing?',
@@ -129,6 +311,7 @@ export const quizTemplate = [
       'Converting the string to a number',
     ],
     answer: 1,
+    explain: 'infer inside a template pattern captures whatever matches that position -- here, everything after the literal "on" prefix -- into a new type variable usable in the true branch.',
   },
   {
     q: 'In TypeScript 7, what is `HeadTail<"😀abc">` when `HeadTail` peels the first character with `${infer Head}${infer Tail}`?',
@@ -139,6 +322,7 @@ export const quizTemplate = [
       'string',
     ],
     answer: 1,
+    explain: 'TypeScript 7 changed template literal infer to split by Unicode code point rather than UTF-16 code unit, so an astral character like an emoji is captured whole instead of as half a surrogate pair.',
   },
   {
     q: 'What does `EventName<"click">` return if `EventName<T> = T extends \\`on${infer E}\\` ? E : never`?',
@@ -149,6 +333,29 @@ export const quizTemplate = [
       'string',
     ],
     answer: 2,
+    explain: '"click" does not start with the literal "on" prefix the pattern requires, so the conditional falls to its else branch, never.',
+  },
+  {
+    q: '```ts\ntype Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";\ntype Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;\n```\nWhy does this fail to compile?',
+    options: [
+      'Template literal types cannot use numeric-looking unions',
+      'Five interpolated positions of a 10-member union multiply to 10^5 = 100,000 combinations, crossing TypeScript\'s union-size ceiling (TS2590)',
+      'Digit needs an explicit `as const`',
+      'It only fails under noUncheckedIndexedAccess',
+    ],
+    answer: 1,
+    explain: 'Union sizes multiply across interpolated positions rather than adding -- ten possibilities repeated five times is 10 to the 5th power, comfortably over the ~100,000-member ceiling that produces TS2590.',
+  },
+  {
+    q: '```ts\ntype StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;\ntype R = StartsWithSlash<"/users" | "profile">;\n```\nWhat is `R`, and how would you make it answer "does the whole union match" instead?',
+    options: [
+      '`true` -- and there is no way to change this behavior',
+      '`boolean` (distributes per member); wrapping both sides as `[T] extends [\\`/${string}\\`]` tests the whole union at once instead',
+      '`false` -- because "profile" does not match',
+      'A compile error, because unions cannot be checked against templates',
+    ],
+    answer: 1,
+    explain: 'T is naked on the checked side, so the conditional runs once per union member ("/users" matches, "profile" does not) and unions true | false into boolean. The [T] extends [pattern] idiom from Conditional Types applies here too, testing the whole union as a single comparison.',
   },
 ];
 
