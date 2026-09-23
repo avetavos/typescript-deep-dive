@@ -194,7 +194,11 @@ function splitTopLevelObjects(arrBody) {
 
 function parseQuizzes(src) {
   const questions = [];
-  const re = /export const quiz\w*\s*=\s*\[/g;
+  // Quiz arrays are found by usage (`<Quiz ... questions={name}`) so a differently named
+  // export (e.g. `indexQuiz`) is still checked; `quiz*` names are kept as a fallback.
+  const used = [...src.matchAll(/questions=\{(\w+)\}/g)].map((m) => m[1]);
+  const names = used.length ? used : ['quiz\\w*'];
+  const re = new RegExp(`export const (?:${names.join('|')})\\s*=\\s*\\[`, 'g');
   let m;
   while ((m = re.exec(src))) {
     const bodyStart = re.lastIndex;
