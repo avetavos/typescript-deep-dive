@@ -1,0 +1,307 @@
+---
+title: 'Worked review 4: a library''s tsconfig and package.json'
+description: 'A full review of a small library''s broken tsconfig.json and package.json — a missing rootDir, a source-pointing main field, an unsupported require condition, and a non-erasable enum — proven with real tsc, attw, and node output.'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The first three reviews were programs. This one is **config** — the `tsconfig.json` and `package.json` of a tiny library, `wr4-lib`, that exports one `Logger` class. Config bugs don't show up as a wrong console output; they show up as a build that refuses to run, or a consumer whose `require()` call fails for a reason nothing in the source code explains. Every failure below is quoted from a real run in this course's scratch environment — `tsc -p`, `npm pack` + `@arethetypeswrong/cli`, and an actual consumer calling both `require()` and `import()`.
+
+## The source, `tsconfig.json`, and `package.json`
+
+```ts
+export enum LogLevel { Info, Warn, Error }
+
+export class Logger {
+  constructor(public readonly level: LogLevel) {}
+  log(message: string): void {
+    console.log(`[${LogLevel[this.level]}] ${message}`);
+  }
+}
+```
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+```json
+{
+  "name": "wr4-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+## Find the bugs before reading on
+
+None of these three files individually looks obviously wrong — this is what a config review actually feels like. Try to name all four bugs before opening the answers.
+
+<details>
+<summary>Bug 1 — `tsconfig.json` has no `rootDir`</summary>
+
+**Symptom:** `tsc -p tsconfig.json` refuses to build at all.
+
+**Real output:**
+
+```text
+tsconfig.json(7,5): error TS5011: The common source directory of 'tsconfig.json' is
+'./src'. The 'rootDir' setting must be explicitly set to this or another path to
+adjust your output's file layout.
+  Visit https://aka.ms/ts6 for migration information.
+```
+
+**Evidence:** with `outDir` set but no `rootDir`, `tsc` cannot decide how to mirror `src/index.ts` into `dist/` without guessing — and TypeScript 7 turned that guess into a hard error instead of the silent `dist/src/index.js` layout older versions produced.
+
+**Fix:** set `rootDir` explicitly:
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — `"main": "./src/index.ts"` points at raw source</summary>
+
+**Symptom:** the package's `main` field — the classic entry point every pre-`exports` tool still reads — points directly at TypeScript source, not a built file.
+
+**Evidence:** modern Node ignores `main` entirely once `exports` is present, so this specific package still resolves correctly for `import`/`require` today — but any tool that resolves the classic way (an older bundler, a monorepo task runner that reads `main` directly, TypeScript's own `moduleResolution: "node10"` for a *consumer* project) would be handed a `.ts` file no JavaScript runtime can execute directly. Confirmed directly: running that exact file with Node's own TypeScript support fails immediately (see Bug 4) — precisely the failure a stray `main` field this pointed can hand to the wrong tool.
+
+**Fix:** point `main` at the actual build output:
+
+```json
+"main": "./dist/index.js"
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — `exports` has no `require` condition, but `main` implies one</summary>
+
+**Symptom:** a `main` field has historically meant "this is how CommonJS consumers load this package" — but this package's `exports` map offers no `require` condition at all, only `import`.
+
+**Real output** (an actual consumer package, in scratch, calling both):
+
+```text
+$ node -e "require('wr4-lib')"
+Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: No "exports" main defined in
+.../node_modules/wr4-lib/package.json
+
+$ node --input-type=module -e "import('wr4-lib').then(m => new m.Logger(m.LogLevel.Warn).log('hi'))"
+[Warn] hi
+```
+
+`require()` fails outright; dynamic `import()` works. `@arethetypeswrong/cli --pack` confirms the same gap from the package's own published shape:
+
+```text
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and
+some bundlers. CommonJS consumers will need to use a dynamic import.
+
+┌───────────────────┬──────────────────────────────┐
+│ node10            │ 🟢                            │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS) │ ⚠️ ESM (dynamic import only)  │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM) │ 🟢 (ESM)                      │
+├───────────────────┼──────────────────────────────┤
+│ bundler           │ 🟢                            │
+└───────────────────┴──────────────────────────────┘
+```
+
+**Fix:** this package genuinely is ESM-only. The fix is not to fake CJS support with no build for it — that would need a real second build target (`dist/index.cjs` plus a `.d.cts` declaration, referenced from a `"require"` condition). The actual, honest fix here is to stop implying CJS support the package never had: once `main` correctly points at `dist/index.js` (Bug 2's fix), the package is at least *consistent* about being ESM-only, and this warning becomes a documented, understood trade-off instead of an accidental side effect of a stray field — write it down in the README rather than leaving a consumer to discover it via a production crash. If real dual CJS/ESM support is required, the standard remedy is exactly the `.d.mts`/`.d.cts` split this course's [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/) lesson covers.
+
+</details>
+
+<details>
+<summary>Bug 4 — the source uses a numeric `enum` and a parameter property</summary>
+
+**Symptom:** both compile perfectly under `tsc --strict` — this is exactly the erasable-syntax gap this course's [AI Bug Catalog](/typescript/en/reading-typescript/ai-bug-catalog/) covers (patterns 20 and 21).
+
+**Real output** (`node --experimental-strip-types src/index.ts`, run directly on the source — exactly what Bug 2's stray `main` field could hand a tool):
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+**Fix:** an `as const` union instead of `enum`, and an explicit field instead of a parameter property — both erasable, no emit required beyond ordinary object/class syntax:
+
+```ts
+export const LogLevel = { Info: "Info", Warn: "Warn", Error: "Error" } as const;
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+export class Logger {
+  readonly level: LogLevel;
+  constructor(level: LogLevel) {
+    this.level = level;
+  }
+  log(message: string): void {
+    console.log(`[${this.level}] ${message}`);
+  }
+}
+```
+
+</details>
+
+## The fixed config
+
+```ts
+export const LogLevel = { Info: "Info", Warn: "Warn", Error: "Error" } as const;
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+export class Logger {
+  readonly level: LogLevel;
+  constructor(level: LogLevel) {
+    this.level = level;
+  }
+  log(message: string): void {
+    console.log(`[${this.level}] ${message}`);
+  }
+}
+```
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+```json
+{
+  "name": "wr4-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}
+```
+
+**Proof, real output, in order:**
+
+```text
+$ tsc -p tsconfig.json
+(no output -- exit 0)
+
+$ node --experimental-strip-types src/index.ts
+(no output -- parses and runs cleanly, no enum/parameter-property syntax left to reject)
+
+$ node -e "import('wr4-lib').then(m => new m.Logger(m.LogLevel.Warn).log('all good'))"
+[Warn] all good
+```
+
+`tsc -p` now builds without a single flag missing; the source itself is plain, erasable syntax that runs the same whether it goes through `tsc`, Node's strip-types, or any other transform; and the package resolves and runs exactly as its `exports` map promises. The `node16 (from CJS)` warning from `attw` is unchanged — because this package genuinely, deliberately does not support `require()` — but it is no longer contradicted by a `main` field that implied otherwise.
+
+## What the tools caught
+
+| Bug | Tool | Real signal |
+|---|---|---|
+| 1. Missing `rootDir` | `tsc -p`, directly | `TS5011`, refuses to build at all |
+| 2. `main` points at source | Nothing automated | Only surfaces when some other tool actually tries to resolve via `main` |
+| 3. No `require` condition | `@arethetypeswrong/cli`, directly; confirmed by a real `require()` call | `CJSResolvesToESM` warning; `ERR_PACKAGE_PATH_NOT_EXPORTED` |
+| 4. `enum` / parameter property | Nothing via `tsc --strict`; only running the source | `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` under `node --experimental-strip-types` |
+
+Only one of these four is a `tsc` error a build simply cannot ignore. The other three are exactly the kind of thing this module has trained you to check for by hand — or with `attw`, which exists specifically because nothing else in the ladder looks at a package from a consumer's point of view.
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`tsc -p` catches a missing `rootDir` outright; a `main` field pointing at source, a missing `require` condition, and non-erasable syntax in a published library all compile clean and only fail once something — a consumer, a stray tool, `attw` — actually tries to use the package the way it claims to be usable.
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: "`tsc -p tsconfig.json` fails immediately with TS5011 on the original config. What specifically is missing, and why does TypeScript 7 treat it as a hard error instead of guessing?",
+    options: [
+      "The 'declaration' option is missing",
+      "'rootDir' is not set -- with outDir configured but no explicit rootDir, tsc cannot determine how to mirror the source layout into the output directory without an assumption that TypeScript 7 no longer makes silently",
+      "The 'strict' option is missing",
+      "The tsconfig.json file has invalid JSON syntax"
+    ],
+    answer: 1,
+    explain: "TS5011 fires specifically because outDir plus multiple possible source roots creates ambiguity about output layout. Older TypeScript versions guessed (often producing a surprising dist/src/ nesting); TypeScript 7 requires rootDir to be explicit instead."
+  },
+  {
+    q: "The package's exports map has only an 'import' condition, and require('wr4-lib') fails with ERR_PACKAGE_PATH_NOT_EXPORTED. Why does the presence of a 'main' field pointing at a real file not rescue the require() call?",
+    options: [
+      "main is completely ignored by Node in every situation",
+      "Once a package.json defines an 'exports' field at all, Node's package-exports-aware resolution stops consulting 'main' as a fallback -- only the conditions actually listed inside 'exports' (here, just 'import') determine what resolves",
+      "require() only works for packages published before 2015",
+      "The main field's file path had a typo"
+    ],
+    answer: 1,
+    explain: "The presence of 'exports' opts a package into strict, exports-only resolution for tools that respect it -- 'main' is only consulted as a fallback by resolvers that don't understand 'exports' at all. Since 'exports' here defines no 'require' condition, a CJS require() has nothing to resolve to, regardless of what 'main' says."
+  },
+  {
+    q: "Both the enum and the parameter property in the original source compile with zero tsc --strict errors, but node --experimental-strip-types src/index.ts fails immediately. What does this prove about the relationship between 'compiles' and 'runs' for this kind of syntax?",
+    options: [
+      "tsc has a bug and should reject this syntax",
+      "tsc --strict only verifies type correctness -- it says nothing about whether a given runtime's type-stripping transform can execute the file's syntax, which is a separate, non-type-related property called erasability",
+      "node --experimental-strip-types is broken and should support enums",
+      "This only happens when the file has no exports"
+    ],
+    answer: 1,
+    explain: "Erasable syntax is about whether a construct can be removed by deleting type annotations alone, with no code generation needed. enum and parameter properties both require real emitted code (an object, an assignment), so a tool that only strips types -- rather than fully compiling -- cannot run them, regardless of how cleanly they type-check."
+  },
+  {
+    q: "After the fix, `attw --pack` still shows the same 'node16 (from CJS): ESM (dynamic import only)' warning it showed before. Why is this now considered an acceptable, documented state rather than an unfixed bug?",
+    options: [
+      "The warning is a false positive that should be ignored",
+      "The package is genuinely, deliberately ESM-only; the actual bug was that 'main' pointed at raw source, implying inconsistent packaging -- once main correctly points at the real build output, the package is honestly and consistently ESM-only, which is a valid choice as long as it's documented, not an accident",
+      "attw always shows this warning regardless of package configuration",
+      "The warning will disappear once the package is republished"
+    ],
+    answer: 1,
+    explain: "Making a package CJS-compatible would require an actual second build target (a .cjs file plus a .d.cts declaration) -- out of scope for this fix. The real problem being fixed was the contradiction between a main field that implied more than the package actually delivered; a consistently ESM-only package that says so is a legitimate, common choice, not a defect."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-4" />

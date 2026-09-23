@@ -1,0 +1,1194 @@
+---
+title: The AI bug catalog
+description: '24 bugs AI-generated TypeScript produces constantly — the wrong code, the real symptom, the fix, and which tool (if any) catches it.'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+Every pattern below was written to look exactly like the TypeScript an AI assistant actually produces, compiled with `tsc --strict` (TypeScript 7.0.2), and — where the bug is a runtime symptom rather than a diagnostic — run with `node --experimental-strip-types` and quoted verbatim, not reconstructed from memory. Each entry ends with **Caught by**, naming the one tool that actually flags it, or stating plainly that nothing does.
+
+The 24 patterns are grouped the same way as the **[Review Checklist](/typescript/en/reading-typescript/review-checklist/)** that follows this lesson: boundaries & unsafe casts, nullability & falsy checks, async & control flow, generics & variance, erasure & config, and indexing & keys.
+
+<TSPlayground code={floatingPromiseCode} id="catalog-lead-demo" title="Zero type errors, wrong order" />
+
+export const floatingPromiseCode = `async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+function handleRequest(id: number): string {
+  saveAuditLog(\`request \${id} handled\`); // missing await -- a floating promise
+  return \`response-\${id}\`;
+}
+
+console.log(handleRequest(1));
+`.trim();
+
+This first pattern is the one worth running yourself before reading any further — the playground above compiles with **zero errors** under `--strict`, and prints `response-1` *before* `saved: request 1 handled`, because the missing `await` let `handleRequest` return before the log call ever settled. Everything below follows the same rule: real code, real output, no exceptions.
+
+## Boundaries & unsafe casts
+
+### 1. `as` on `JSON.parse`
+
+<TSPlayground code={jsonParseAsCode} id="catalog-1" title="as User compiles; the shape was never checked" />
+
+export const jsonParseAsCode = `interface User { id: number; name: string }
+
+const raw = '{"id": 1}'; // "name" is missing from the actual payload
+const user = JSON.parse(raw) as User;
+console.log(user.name.toUpperCase());
+`.trim();
+
+`JSON.parse` returns `any`; `as User` overwrites that with a type the checker never verifies against the actual parsed value.
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+**Fix:** replace the assertion with an actual runtime check — a hand-written type guard, or a schema library:
+
+```ts
+interface User { id: number; name: string }
+
+function isUser(value: unknown): value is User {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.id === "number" && typeof v.name === "string";
+}
+
+const raw = '{"id": 1}';
+const parsed: unknown = JSON.parse(raw);
+if (isUser(parsed)) {
+  console.log(parsed.name.toUpperCase());
+} else {
+  console.log("invalid user shape");
+}
+```
+
+**Caught by:** nothing — `as` is an assertion, not a check; no tool in this course's list inspects whether an asserted type matches the actual runtime shape. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+### 2. `any` leaking from an untyped library
+
+```ts
+// @run
+function loadConfigFromUntypedLib(): any {
+  // stands in for a real untyped JS dependency with no .d.ts -- TypeScript can't check its shape
+  return { port: "3000" };
+}
+
+const config = loadConfigFromUntypedLib();
+const nextPort = config.port + 1; // any -- no error, but config.port is actually a string here
+console.log(nextPort);
+console.log(typeof nextPort);
+```
+
+Once a value is typed `any`, every operation on it — property access, arithmetic, further assignment — is unchecked, and that lost precision propagates through every expression that touches it.
+
+**Symptom — real output:**
+
+```text
+30001
+string
+```
+
+`"3000" + 1` is string concatenation, not addition — `nextPort` is the string `"30001"`, not the number `3001`, and nothing about the type system noticed.
+
+**Fix:** give the boundary a real return type, and validate before trusting it:
+
+```ts
+interface LibConfig { port: number }
+
+function loadConfigFromUntypedLib(): LibConfig {
+  const raw: unknown = { port: "3000" };
+  const r = raw as Record<string, unknown>;
+  if (typeof r.port !== "number") throw new Error("expected numeric port");
+  return { port: r.port };
+}
+```
+
+**Caught by:** `typescript-eslint`'s typed `no-unsafe-member-access` rule, directly — `config.port` is a member access on a value typed `any`. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+### 3. `!` on a value from an API
+
+```ts
+// @run
+interface Session { user?: { name: string } }
+
+function renderGreeting(session: Session): string {
+  return `Hello, ${session.user!.name.toUpperCase()}`;
+}
+
+console.log(renderGreeting({}));
+```
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'name')
+```
+
+**Fix:** check, don't assert:
+
+```ts
+interface Session { user?: { name: string } }
+
+function renderGreeting(session: Session): string {
+  if (!session.user) return "Hello, guest";
+  return `Hello, ${session.user.name.toUpperCase()}`;
+}
+
+console.log(renderGreeting({}));
+```
+
+**Caught by:** `typescript-eslint`'s `no-non-null-assertion`, directly — but it only flags the presence of `!`, not whether this particular one is safe. See **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**.
+
+### 4. `@ts-ignore` instead of a real fix
+
+```ts
+// @run
+interface Point { x: number; y: number }
+
+function distance(a: Point, b: Point): number {
+  // @ts-ignore -- suppresses "Property 'z' does not exist on type 'Point'"
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + a.z);
+}
+
+console.log(distance({ x: 0, y: 0 }, { x: 3, y: 4 }));
+```
+
+`@ts-ignore` silences whatever error was about to appear on the next line — here, a real one: `Point` has no `z`. The comment turns a compile-time error into a silent `undefined`.
+
+**Symptom — real output:**
+
+```text
+NaN
+```
+
+`a.z` is `undefined`; `undefined` added to a number is `NaN`, and `Math.sqrt(NaN)` is `NaN`.
+
+**Fix:** delete the suppression and the bad field access:
+
+```ts
+interface Point { x: number; y: number }
+
+function distance(a: Point, b: Point): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+
+console.log(distance({ x: 0, y: 0 }, { x: 3, y: 4 }));
+```
+
+**Caught by:** `typescript-eslint`'s `ban-ts-comment`, directly, on the suppression comment itself; `tsc` catches the real bug the instant `@ts-ignore` is deleted (`error TS2339: Property 'z' does not exist on type 'Point'.`). See **[Why TypeScript](/typescript/en/foundations/why-typescript/)**.
+
+### 5. `Record<string, any>` instead of a schema
+
+```ts
+// @run
+type Flags = Record<string, any>;
+
+function isEnabled(flags: Flags, name: string): boolean {
+  return flags[name];
+}
+
+const flags: Flags = { darkMdoe: true }; // typo -- "darkMdoe" not "darkMode"
+console.log(isEnabled(flags, "darkMode"));
+```
+
+`Record<string, any>` accepts any key, spelled any way, with any value — the typo in the object literal and the typo-free lookup are both "correct" as far as the type is concerned.
+
+**Symptom — real output:**
+
+```text
+undefined
+```
+
+**Fix:** name the real keys:
+
+```ts
+interface FeatureFlags { darkMode: boolean; betaBanner: boolean }
+
+function isEnabled(flags: FeatureFlags, name: keyof FeatureFlags): boolean {
+  return flags[name];
+}
+
+const flags: FeatureFlags = { darkMode: true, betaBanner: false };
+console.log(isEnabled(flags, "darkMode"));
+```
+
+With `FeatureFlags`, the typo`ed key (`darkMdoe`) would itself be a compile error (`TS2561`/excess property check), and `isEnabled(flags, "drakMode")` would fail with `TS2345` on the `keyof FeatureFlags` parameter.
+
+**Caught by:** nothing for this specific bug — `typescript-eslint`'s `no-explicit-any` flags the `any` inside the `Record` itself, but not the typo it silently permits. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+### 6. `catch (e) { e.message }`
+
+```ts
+// @expect-error TS18046
+function parseAmount(input: string): number {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    console.log(e.message);
+    return 0;
+  }
+}
+```
+
+**tsc output — real:**
+
+```text
+error TS18046: 'e' is of type 'unknown'.
+```
+
+Since `useUnknownInCatchVariables` (part of the `strict` family), a caught value is typed `unknown`, not `any` — accessing `.message` on it without narrowing is a compile error, not a runtime crash waiting to happen.
+
+**Fix:** narrow before use:
+
+```ts
+// @run
+function parseAmount(input: string): number {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    console.log(e instanceof Error ? e.message : String(e));
+    return 0;
+  }
+}
+
+console.log(parseAmount("{not json"));
+```
+
+**Real output:**
+
+```text
+Expected property name or '}' in JSON at position 1 (line 1 column 2)
+0
+```
+
+**Caught by:** `tsc` directly — `error TS18046`, no configuration needed beyond `--strict`. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+## Nullability & falsy checks
+
+### 7. Optional + `if (x)` treats a valid `0` as missing
+
+```ts
+// @run
+interface Product { stockCount?: number }
+
+function availability(product: Product): string {
+  if (product.stockCount) {
+    return `${product.stockCount} in stock`;
+  }
+  return "unknown availability"; // meant for "field not provided", but 0 hits it too
+}
+
+console.log(availability({ stockCount: 0 }));
+```
+
+`stockCount: 0` is a perfectly valid, present value — "zero in stock" — but `if (product.stockCount)` treats `0` exactly like `undefined`.
+
+**Symptom — real output:**
+
+```text
+unknown availability
+```
+
+That should say "out of stock," not "unknown" — the field was provided, and the code cannot tell the difference between "not provided" and "provided as zero."
+
+**Fix:** check presence explicitly:
+
+```ts
+interface Product { stockCount?: number }
+
+function availability(product: Product): string {
+  if (product.stockCount === undefined) return "unknown availability";
+  return product.stockCount > 0 ? `${product.stockCount} in stock` : "out of stock";
+}
+
+console.log(availability({ stockCount: 0 }));
+```
+
+**Caught by:** nothing in this course's default rule set — `--strict` has no opinion on a truthiness check against a `number | undefined`, and the opt-in `strict-boolean-expressions` typed rule that would flag it is not part of the six typed rules this course installs. See **[Narrowing](/typescript/en/everyday-types/narrowing/)**.
+
+### 8. `||` instead of `??`
+
+<TSPlayground code={orVsNullishCode} id="catalog-8" title="0 retries silently becomes 3" />
+
+export const orVsNullishCode = `interface Settings { retries?: number }
+
+function getRetries(settings: Settings): number {
+  return settings.retries || 3;
+}
+
+console.log(getRetries({ retries: 0 }));
+`.trim();
+
+`retries: 0` explicitly means "no retries" — but `0 || 3` evaluates to `3`, because `||` falls through on every falsy value, not just `null`/`undefined`.
+
+**Symptom — real output:**
+
+```text
+3
+```
+
+**Fix:** `??` only falls through on `null`/`undefined`:
+
+```ts
+interface Settings { retries?: number }
+
+function getRetries(settings: Settings): number {
+  return settings.retries ?? 3;
+}
+
+console.log(getRetries({ retries: 0 }));
+```
+
+**Real output:**
+
+```text
+0
+```
+
+**Caught by:** `typescript-eslint`'s `prefer-nullish-coalescing`, directly, on `settings.retries || 3`. See **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**.
+
+### 9. `readonly` is shallow
+
+<TSPlayground code={shallowReadonlyCode} id="catalog-9" title="Readonly<T> stops at the top level" />
+
+export const shallowReadonlyCode = `interface Address { city: string }
+interface UserProfile { name: string; address: Address }
+
+function freezeProfile(profile: UserProfile): Readonly<UserProfile> {
+  return profile;
+}
+
+const profile: Readonly<UserProfile> = freezeProfile({ name: "Ada", address: { city: "London" } });
+profile.address.city = "Paris"; // Readonly<T> is shallow -- nested objects stay mutable
+console.log(profile.address.city);
+`.trim();
+
+`Readonly<UserProfile>` only marks `UserProfile`'s own properties readonly — `address` itself cannot be reassigned, but `address`'s properties are exactly as mutable as before.
+
+**Symptom — real output:**
+
+```text
+Paris
+```
+
+The assignment silently succeeds, both at compile time and at runtime — nothing about `Readonly<T>` was violated, because `Readonly<T>` never claimed anything about `T`'s nested objects.
+
+**Fix:** a recursive `DeepReadonly<T>` (and `Object.freeze` at every level, if runtime enforcement matters too):
+
+```ts
+// @expect-error TS2540
+interface Address { city: string }
+interface UserProfile { name: string; address: Address }
+
+type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
+
+function freezeDeep<T extends object>(obj: T): DeepReadonly<T> {
+  Object.freeze(obj);
+  for (const key of Object.keys(obj) as (keyof T)[]) {
+    const value = obj[key];
+    if (value && typeof value === "object") freezeDeep(value as object);
+  }
+  return obj as DeepReadonly<T>;
+}
+
+const profile = freezeDeep<UserProfile>({ name: "Ada", address: { city: "London" } });
+profile.address.city = "Paris";
+```
+
+**tsc output — real:**
+
+```text
+error TS2540: Cannot assign to 'city' because it is a read-only property.
+```
+
+**Caught by:** nothing for plain `Readonly<T>` — `tsc` only catches the nested mutation once the code opts into a recursive `DeepReadonly<T>` type, as shown above. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+### 10. A mutable object shared as a module's default export
+
+```ts
+// @run
+export const defaultSettings = { retries: 3, timeoutMs: 1000 };
+
+function loadFeatureA(overrides: Partial<typeof defaultSettings> = {}) {
+  Object.assign(defaultSettings, overrides); // mutates the SHARED default object
+  return defaultSettings;
+}
+
+function loadFeatureB() {
+  return defaultSettings; // sees whatever loadFeatureA last mutated
+}
+
+loadFeatureA({ retries: 0 });
+console.log(loadFeatureB());
+```
+
+`defaultSettings` is one object, imported by every caller. `Object.assign(defaultSettings, overrides)` does not create a per-call copy — it mutates the single shared object every future import will also see.
+
+**Symptom — real output:**
+
+```text
+{ retries: 0, timeoutMs: 1000 }
+```
+
+`loadFeatureB`, which never asked for any overrides, now reports `retries: 0` too — feature A's one-off override leaked into every other consumer of the same module.
+
+**Fix:** a factory function that returns a fresh object every call:
+
+```ts
+// @run
+function createDefaultSettings() {
+  return { retries: 3, timeoutMs: 1000 };
+}
+
+function loadFeatureA(overrides: Partial<ReturnType<typeof createDefaultSettings>> = {}) {
+  return { ...createDefaultSettings(), ...overrides };
+}
+
+function loadFeatureB() {
+  return createDefaultSettings();
+}
+
+console.log(loadFeatureA({ retries: 0 }));
+console.log(loadFeatureB());
+```
+
+**Real output:**
+
+```text
+{ retries: 0, timeoutMs: 1000 }
+{ retries: 3, timeoutMs: 1000 }
+```
+
+**Caught by:** nothing — this is a shared-mutable-module-state bug, invisible to a type checker (the type of `defaultSettings` does not change) and to every typed lint rule in this course's list. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+## Async & control flow
+
+### 11. Forgotten `await` (floating promise)
+
+The lead demo at the top of this page is this pattern — see it there. `saveAuditLog(...)` without `await` compiles clean and returns before its own log line runs.
+
+**Fix:** `await` it, or make the caller `async` all the way up:
+
+```ts
+async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+async function handleRequest(id: number): Promise<string> {
+  await saveAuditLog(`request ${id} handled`);
+  return `response-${id}`;
+}
+
+handleRequest(1).then((r) => console.log(r));
+```
+
+**Caught by:** `typescript-eslint`'s `no-floating-promises`, directly — a typed rule that specifically flags a `Promise`-returning expression statement with no `await`, no `.catch`, and no `void` operator. See **[Performance & Pitfalls](/typescript/en/practical-mastery/performance-and-pitfalls/)**.
+
+### 12. `Promise.all` on a widened array, not a tuple
+
+```ts
+// @expect-error TS2339
+interface User { name: string }
+
+function fetchUser(): Promise<User> { return Promise.resolve({ name: "Ada" }); }
+function fetchCount(): Promise<number> { return Promise.resolve(42); }
+
+async function loadDashboard() {
+  const tasks = [fetchUser(), fetchCount()]; // inferred Promise<User | number>[], not a tuple
+  const [user, count] = await Promise.all(tasks);
+  console.log(user.name); // User | number -- the positional types were lost
+}
+```
+
+Passed inline, `Promise.all([fetchUser(), fetchCount()])` keeps each position's own type. Built first into `const tasks = [...]`, the array is inferred as `Promise<User | number>[]` — a homogeneous array type, not a tuple — and `Promise.all` on it returns `(User | number)[]`, discarding which position held which type.
+
+**tsc output — real:**
+
+```text
+error TS2339: Property 'name' does not exist on type 'number | User'.
+  Property 'name' does not exist on type 'number'.
+```
+
+**Fix:** pass the tuple inline, so its positions are preserved:
+
+```ts
+interface User { name: string }
+
+function fetchUser(): Promise<User> { return Promise.resolve({ name: "Ada" }); }
+function fetchCount(): Promise<number> { return Promise.resolve(42); }
+
+async function loadDashboard() {
+  const [user, count] = await Promise.all([fetchUser(), fetchCount()]);
+  console.log(user.name, count);
+}
+
+loadDashboard();
+```
+
+**Caught by:** `tsc` directly (`TS2339`) — but only reactively, once code tries to use a field the widened type no longer has; nothing warns about the precision loss itself when `tasks` is first built. See **[Performance & Pitfalls](/typescript/en/practical-mastery/performance-and-pitfalls/)**.
+
+### 13. Exhaustive switch with no `never` check
+
+<TSPlayground code={noNeverCheckCode} id="catalog-13" title="A forgotten case, no error, wrong answer" />
+
+export const noNeverCheckCode = `type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function describeShape(shape: Shape): string {
+  let label = "unknown shape";
+  switch (shape.kind) {
+    case "circle":
+      label = "circle";
+      break;
+    case "square":
+      label = "square";
+      break;
+    // "triangle" forgotten -- no default, no never check, no error
+  }
+  return label;
+}
+
+console.log(describeShape({ kind: "triangle", base: 3, height: 4 }));
+`.trim();
+
+The function always returns *something*, so there is no "missing return" for `tsc` to flag — a forgotten case just silently falls through to the default label.
+
+**Symptom — real output:**
+
+```text
+unknown shape
+```
+
+**Fix:** a `default` branch that assigns the remaining value to a variable typed `never` — this is what actually turns a future missed case into a compile error:
+
+```ts
+// @expect-error TS2322
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function describeShape(shape: Shape): string {
+  switch (shape.kind) {
+    case "circle":
+      return "circle";
+    case "square":
+      return "square";
+    default: {
+      const exhaustiveCheck: never = shape;
+      return exhaustiveCheck;
+    }
+  }
+}
+```
+
+With the `triangle` case still missing, the `never` check itself now fails to compile — `error TS2322: Type '{ kind: "triangle"; ...}' is not assignable to type 'never'.` — exactly the signal a reviewer wants the moment a union grows.
+
+**Caught by:** `typescript-eslint`'s `switch-exhaustiveness-check`, directly — it flags the missing `"triangle"` case on the switch itself, with no manual `never` check required; `tsc` alone only catches a future missed case once a `never` check like the one above is added by hand. See **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**.
+
+### 14. `this` lost when a method is passed as a callback
+
+```ts
+// @run
+class Counter {
+  count = 0;
+  increment(): void {
+    this.count++;
+  }
+}
+
+const counter = new Counter();
+const handler = counter.increment; // detached from its instance
+[1, 2, 3].forEach(handler);
+console.log(counter.count);
+```
+
+`counter.increment` is just a function value once read off the instance — passing it to `forEach` calls it with `this` bound to whatever `forEach` uses internally, not `counter`.
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'count')
+```
+
+**Fix:** an arrow-function class field captures `this` lexically at construction:
+
+```ts
+// @run
+class Counter {
+  count = 0;
+  increment = (): void => {
+    this.count++;
+  };
+}
+
+const counter = new Counter();
+const handler = counter.increment;
+[1, 2, 3].forEach(handler);
+console.log(counter.count);
+```
+
+**Real output:**
+
+```text
+3
+```
+
+**Caught by:** `typescript-eslint`'s `unbound-method`, directly — a typed rule that flags `counter.increment` the moment it is referenced without being called or bound. See **[`this`, Polymorphism & Binding](/typescript/en/classes-and-oop/this-types-and-polymorphism/)**.
+
+## Generics & variance
+
+### 15. `Array<Dog>` passed where `Array<Animal>` is expected
+
+<TSPlayground code={arrayVarianceCode} id="catalog-15" title="Dog[] accepted as Animal[], then corrupted" />
+
+export const arrayVarianceCode = `class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function addACat(animals: Animal[]): void {
+  animals.push(new Cat()); // perfectly legal for Animal[]
+}
+
+const dogs: Dog[] = [new Dog(), new Dog()];
+addACat(dogs); // compiles -- Dog[] is assignable to Animal[]
+for (const d of dogs) {
+  console.log(d.bark());
+}
+`.trim();
+
+`Dog[]` is assignable to `Animal[]` because arrays (and their `push` method, written in shorthand syntax in `lib.d.ts`) are checked the same permissive, bivariant way this course's variance section covers for a hand-written `Stack<T>` — this is the built-in `Array` hitting the identical hole.
+
+**Symptom — real output:**
+
+```text
+woof
+woof
+TypeError: d.bark is not a function
+```
+
+`addACat` pushed a `Cat` into what `dogs` still believes is an all-`Dog` array — the third element breaks the very next `.bark()` call.
+
+**Fix:** if the function only needs to read, accept `readonly Animal[]` — a covariant type that has no `push` to exploit:
+
+```ts
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function describeAll(animals: readonly Animal[]): void {
+  for (const a of animals) console.log(a.speak());
+}
+
+const dogs: Dog[] = [new Dog(), new Dog()];
+describeAll(dogs);
+for (const d of dogs) {
+  console.log(d.bark());
+}
+```
+
+**Caught by:** nothing — this is the same deliberate, documented unsoundness (array covariance plus method-shorthand bivariance) this course's variance section already demonstrates on a hand-written class. See **[Generic Classes & Interfaces — Variance](/typescript/en/generics/generic-classes-and-interfaces/)**.
+
+### 16. A type predicate that returns `true` unconditionally
+
+<TSPlayground code={liarPredicateCode} id="catalog-16" title="isAdmin always says yes" />
+
+export const liarPredicateCode = `interface Admin { role: "admin"; permissions: string[] }
+
+function isAdmin(user: unknown): user is Admin {
+  return true; // always claims true -- the shape is never actually checked
+}
+
+function grantAccess(user: unknown): void {
+  if (isAdmin(user)) {
+    console.log(user.permissions.join(", ")); // tsc trusts the predicate completely
+  }
+}
+
+grantAccess({ name: "definitely not an admin" });
+`.trim();
+
+A user-defined type predicate's *signature* (`user is Admin`) is all the checker looks at — it never inspects whether the *body* actually proves that claim.
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'join')
+```
+
+**Fix:** implement a real runtime check that matches the claimed shape:
+
+```ts
+// @run
+interface Admin { role: "admin"; permissions: string[] }
+
+function isAdmin(user: unknown): user is Admin {
+  return typeof user === "object" && user !== null
+    && (user as Record<string, unknown>).role === "admin"
+    && Array.isArray((user as Record<string, unknown>).permissions);
+}
+
+function grantAccess(user: unknown): void {
+  if (isAdmin(user)) {
+    console.log(user.permissions.join(", "));
+  } else {
+    console.log("access denied");
+  }
+}
+
+grantAccess({ name: "definitely not an admin" });
+```
+
+**Real output:**
+
+```text
+access denied
+```
+
+**Caught by:** nothing — a type predicate is trusted unconditionally by every downstream check; no tool in this course's list evaluates whether a predicate's body actually proves what its signature claims. See **[Narrowing](/typescript/en/everyday-types/narrowing/)**.
+
+### 17. An `interface` with one implementer and a generic used once
+
+```ts
+interface UserRecord { id: number; name: string }
+
+interface Repository<T> {
+  save(item: T): void;
+}
+
+class UserRepository implements Repository<UserRecord> {
+  save(item: UserRecord): void {
+    console.log("saving", item);
+  }
+}
+
+new UserRepository().save({ id: 1, name: "Ada" });
+```
+
+`Repository<T>` has exactly one implementer, ever, and `T` is used in exactly one position — this generic interface buys no polymorphism and no reuse; it is pure indirection an AI assistant added because "repositories implement interfaces" is a familiar shape, not because this codebase needs one.
+
+**Symptom:** no crash, no diagnostic — the cost is a reader now has to open two declarations (`Repository<T>` and `UserRepository`) to understand what one class does, and a second implementer never actually shows up to justify the abstraction.
+
+**Fix:** delete the interface; keep the concrete class:
+
+```ts
+interface UserRecord { id: number; name: string }
+
+class UserRepository {
+  save(item: UserRecord): void {
+    console.log("saving", item);
+  }
+}
+
+new UserRepository().save({ id: 1, name: "Ada" });
+```
+
+**Caught by:** nothing directly — `knip`'s unused-exports report can surface `Repository` as an export referenced from only one place, which is a signal worth investigating, but no tool identifies "this generic parameter provides no actual reuse" on its own. See **[Generic Functions & Constraints](/typescript/en/generics/generic-functions-and-constraints/)**.
+
+### 18. `Omit` on a union collapses to `{}`
+
+<TSPlayground code={omitOnUnionCode} id="catalog-18" title="ShapeWithoutKind accepts anything" />
+
+export const omitOnUnionCode = `type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+type ShapeWithoutKind = Omit<Shape, "kind">; // Omit does not distribute over a union
+
+const bogus: ShapeWithoutKind = { anything: "whatever", nonsense: 123 };
+console.log(bogus);
+`.trim();
+
+`Omit<T, K>` is `Pick<T, Exclude<keyof T, K>>`, and `keyof` on a union is the **intersection** of each member's keys — here, only `"kind"` is common to both branches. `Exclude<"kind", "kind">` is `never`, so `Pick<Shape, never>` is `{}`: an empty object type that accepts any object at all.
+
+**Symptom — real output:**
+
+```text
+{ anything: 'whatever', nonsense: 123 }
+```
+
+`ShapeWithoutKind` was clearly meant to mean "a `Shape` without its `kind` tag" — `{ radius: number } | { side: number }` — but it silently means "any object," and `tsc` accepts a completely unrelated shape without complaint.
+
+**Fix:** a distributive helper that runs `Omit` once per union member, matching what the author actually intended:
+
+```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+type ShapeWithoutKind = DistributiveOmit<Shape, "kind">;
+
+const s1: ShapeWithoutKind = { radius: 5 };
+const s2: ShapeWithoutKind = { side: 4 };
+console.log(s1, s2);
+```
+
+With the naked type parameter `T` in a conditional, the union now distributes; passing the same `bogus` object from above is rejected: `error TS2353: Object literal may only specify known properties, and 'anything' does not exist in type 'ShapeWithoutKind'.`
+
+**Caught by:** nothing — `Omit`/`Pick` silently failing to distribute over a union is a well-known trap with no diagnostic; the only way to notice is reading (or probing with an `Equal` check) what the alias actually resolves to. See **[The Utility Types](/typescript/en/type-level-programming/utility-types/)**.
+
+### 19. A recursive type instantiated too deep
+
+```ts
+// @expect-error TS2589
+type BuildTuple<N extends number, R extends unknown[] = []> =
+  R["length"] extends N ? R : BuildTuple<N, [...R, unknown]>;
+
+type Deep = BuildTuple<1200>;
+```
+
+**tsc output — real:**
+
+```text
+error TS2589: Type instantiation is excessively deep and possibly infinite.
+```
+
+A recursive conditional type like this one has a compiler-enforced depth limit — this course's recursive-types lesson measures the exact boundary (tail-recursive forms succeed up to 999 levels and fail at 1000; this naive form fails far earlier).
+
+**Fix:** stay well under the measured limit, or restructure to avoid unbounded recursion on user-controlled input:
+
+```ts
+type BuildTuple<N extends number, R extends unknown[] = []> =
+  R["length"] extends N ? R : BuildTuple<N, [...R, unknown]>;
+
+type Safe = BuildTuple<200>;
+declare const t: Safe;
+console.log(t.length);
+```
+
+**Caught by:** `tsc` directly (`TS2589`), with no configuration needed — but only once the depth is actually exceeded; nothing warns as the recursion grows toward the limit. See **[Recursive Types](/typescript/en/type-level-programming/recursive-types/)**.
+
+## Erasure & config
+
+### 20. `enum` in an erasable-syntax codebase
+
+```ts
+// @run
+enum Direction { Up, Down, Left, Right }
+
+function move(direction: Direction): string {
+  return Direction[direction];
+}
+
+console.log(move(Direction.Up));
+```
+
+This compiles under `tsc --strict` with **zero errors** — `enum` is completely ordinary TypeScript. The problem only appears when something other than `tsc` tries to run the file directly, because a numeric `enum` needs real emitted code (an object with a reverse mapping), not just erased type annotations.
+
+**Symptom — real output** (`node --experimental-strip-types` on the exact file above):
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+**Fix:** an `as const` object plus its derived union type is erasable — no special runtime support needed, because it is just an ordinary object literal:
+
+```ts
+// @run
+const Direction = { Up: "Up", Down: "Down", Left: "Left", Right: "Right" } as const;
+type Direction = typeof Direction[keyof typeof Direction];
+
+function move(direction: Direction): string {
+  return direction;
+}
+
+console.log(move(Direction.Up));
+```
+
+**Real output:**
+
+```text
+Up
+```
+
+**Caught by:** nothing via `tsc --strict` or any typed lint rule this course installs — only actually running the file (`node --experimental-strip-types`, or compiling with `--erasableSyntaxOnly`) surfaces the failure. See **[Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/)**.
+
+### 21. A parameter property under strip-types
+
+```ts
+// @run
+class Point2 {
+  constructor(public readonly px: number, public readonly py: number) {}
+}
+
+const pt = new Point2(3, 4);
+console.log(pt.px, pt.py);
+```
+
+A **parameter property** (`public readonly px: number` inside a constructor signature) is TypeScript-only shorthand for declaring the field *and* assigning it in the constructor body — real code has to be emitted for the assignment, so, like `enum`, it is not erasable.
+
+**Symptom — real output:**
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript parameter property is not supported in strip-only mode
+```
+
+**Fix:** declare the field and assign it explicitly:
+
+```ts
+// @run
+class Point2 {
+  readonly px: number;
+  readonly py: number;
+  constructor(px: number, py: number) {
+    this.px = px;
+    this.py = py;
+  }
+}
+
+const pt = new Point2(3, 4);
+console.log(pt.px, pt.py);
+```
+
+**Real output:**
+
+```text
+3 4
+```
+
+**Caught by:** nothing via `tsc --strict` — the same gap as pattern 20: it compiles clean and only fails when something other than `tsc` (`node --experimental-strip-types`, `esbuild`, `swc`) tries to run it directly. See **[Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/)**.
+
+### 22. `const enum` reverse mapping and cross-file boundaries
+
+```ts
+// @expect-error TS2476
+const enum LogLevel { Info, Warn, Error }
+
+function label(level: LogLevel): string {
+  return LogLevel[level];
+}
+```
+
+**tsc output — real:**
+
+```text
+error TS2476: A const enum member can only be accessed using a string literal.
+```
+
+A `const enum` is inlined at every use site and erased entirely — there is no runtime object left to do a reverse lookup (`LogLevel[level]`) against, which is exactly what `TS2476` reports. The same "no runtime object survives" property is why single-file transpilers (`esbuild`, `swc`, and `tsc --isolatedModules` in the general case) cannot support a `const enum` imported from another file: inlining its value requires seeing the enum's own declaration, which a per-file compilation pass does not have.
+
+**Fix:** an `as const` object, the same erasable-and-inlinable-safe pattern as pattern 20:
+
+```ts
+// @run
+const LogLevel = { Info: 0, Warn: 1, Error: 2 } as const;
+type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+function label(level: LogLevel): string {
+  return level === LogLevel.Warn ? "WARN" : "OTHER";
+}
+
+console.log(label(LogLevel.Warn));
+```
+
+**Real output:**
+
+```text
+WARN
+```
+
+**Caught by:** `tsc` directly (`TS2476`) for the reverse-mapping form shown above; the cross-file/single-file-transpiler failure mode is a build-tool limitation, not something `tsc --strict` itself reports. See **[Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/)**.
+
+### 23. `import` instead of `import type` under `verbatimModuleSyntax`
+
+```ts
+// @skip-verify two-file demo (./types.ts) plus --verbatimModuleSyntax; real tsc output quoted below
+import { UserRecord } from "./types.js"; // value-style import of a type-only symbol
+
+export function greet(user: UserRecord): string {
+  return `Hello, ${user.name}`;
+}
+```
+
+With `verbatimModuleSyntax` enabled, every import is emitted exactly as written — an ordinary `import { UserRecord }` for a name that is only ever used as a type produces a real runtime import of something that may not even exist as a value export.
+
+**tsc output — real** (compiling this file plus a sibling `types.ts` exporting `interface UserRecord`, with `--verbatimModuleSyntax`):
+
+```text
+error TS1484: 'UserRecord' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+```
+
+**Fix:** mark the import type-only:
+
+```ts
+// @skip-verify two-file demo (./types.ts) plus --verbatimModuleSyntax
+import type { UserRecord } from "./types.js";
+
+export function greet(user: UserRecord): string {
+  return `Hello, ${user.name}`;
+}
+```
+
+**Caught by:** `tsc` directly (`TS1484`) once `verbatimModuleSyntax` is on; `typescript-eslint`'s `consistent-type-imports`, directly, catches the same mistake proactively even with the flag off. See **[`tsconfig` Deep Dive](/typescript/en/compiler-and-tooling/tsconfig-deep/)**.
+
+## Indexing & keys
+
+### 24. `Object.keys(obj).forEach(k => obj[k])`
+
+```ts
+// @expect-error TS7053
+interface Config { host: string; port: number }
+
+function logAll(config: Config): void {
+  Object.keys(config).forEach((key) => {
+    console.log(key, config[key]);
+  });
+}
+```
+
+`Object.keys` always returns `string[]`, regardless of the object's actual type — `Config` has no index signature accepting an arbitrary `string`, so indexing it with one is unsound as far as the checker is concerned, and it says so.
+
+**tsc output — real:**
+
+```text
+error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type 'Config'.
+  No index signature with a parameter of type 'string' was found on type 'Config'.
+```
+
+**Fix:** assert the array of keys back to `(keyof Config)[]` — safe here because `Object.keys` only ever returns `Config`'s own enumerable keys:
+
+```ts
+interface Config { host: string; port: number }
+
+function logAll(config: Config): void {
+  (Object.keys(config) as (keyof Config)[]).forEach((key) => {
+    console.log(key, config[key]);
+  });
+}
+
+logAll({ host: "localhost", port: 3000 });
+```
+
+**Caught by:** `tsc` directly (`TS7053`, part of `noImplicitAny` under `--strict`) — one of the few entries in this catalog `tsc` rejects outright with no extra tooling. See **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**.
+
+## Mental Model
+
+```text
+24 patterns, sorted by who actually catches them:
+
+tsc --strict, directly       -> 6 (TS18046), 12 (TS2339, reactively), 19 (TS2589), 22 (TS2476),
+                                 23 (TS1484, only with verbatimModuleSyntax), 24 (TS7053)
+typescript-eslint (typed)    -> 2 (no-unsafe-member-access), 3 (no-non-null-assertion),
+                                 4 (ban-ts-comment), 8 (prefer-nullish-coalescing),
+                                 11 (no-floating-promises), 13 (switch-exhaustiveness-check),
+                                 14 (unbound-method), 23 (consistent-type-imports, proactively)
+Only by actually running it  -> 20, 21 (node --experimental-strip-types /
+                                 --erasableSyntaxOnly; tsc --strict is silent)
+knip (indirect signal only)  -> 17 (single-reference export -- a hint, not a direct catch)
+Nothing                      -> 1, 5, 7, 9 (for plain Readonly<T>), 10, 15, 16, 18 --
+                                 a third of the catalog
+```
+
+<Callout title="สรุปหนึ่งบรรทัด">
+A third of this catalog has no automated safety net at all, and several more are only caught reactively, after the mistake is already used — tooling narrows what you have to read for by eye, it never replaces reading.
+</Callout>
+
+export const quizAiBugCatalog = [
+  {
+    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\nIf `raw` is `'{\"id\": 1}'` (no `name` field), what does `tsc --strict` report, and what happens at runtime?",
+    options: [
+      "tsc reports an error; the code never runs",
+      "tsc reports zero errors; at runtime, `user.name.toUpperCase()` throws because `name` is undefined",
+      "tsc reports zero errors; at runtime, name defaults to an empty string",
+      "tsc reports a warning only, and the code prints undefined"
+    ],
+    answer: 1,
+    explain: "`as User` tells tsc to stop checking the parsed value's shape. The file compiles clean, and at runtime `user.name` is undefined, so `.toUpperCase()` throws a TypeError."
+  },
+  {
+    q: "Why does `settings.retries || 3` return `3` even when `settings.retries` is explicitly `0`, and how does `??` differ?",
+    options: [
+      "|| and ?? behave identically in every case",
+      "|| falls through on any falsy value (0, \"\", NaN, null, undefined); ?? falls through only on null/undefined, so 0 is preserved",
+      "|| only works with booleans, not numbers",
+      "?? is deprecated in favor of ||"
+    ],
+    answer: 1,
+    explain: "0 is falsy, so `0 || 3` evaluates to 3 -- || cannot distinguish \"explicitly zero\" from \"missing.\" `??` checks specifically for null/undefined, so `0 ?? 3` correctly stays 0."
+  },
+  {
+    q: "`Readonly<UserProfile>` is applied to a `UserProfile` with a nested `address: Address` field. What does `Readonly<T>` actually protect?",
+    options: [
+      "Every property at every depth, recursively",
+      "Only UserProfile's own top-level properties -- address itself cannot be reassigned, but address.city can still be mutated freely",
+      "Nothing -- Readonly<T> has no effect at compile time",
+      "Only string properties, not object properties"
+    ],
+    answer: 1,
+    explain: "Readonly<T> is a shallow mapped type -- it adds `readonly` to T's own properties only. A nested object's own properties are a different type entirely, with no readonly modifier applied by this wrapper."
+  },
+  {
+    q: "A type predicate is declared `function isAdmin(user: unknown): user is Admin` but its body is just `return true;`. What does `tsc` verify about this?",
+    options: [
+      "tsc runs the function body symbolically to confirm the predicate is truthful",
+      "Nothing -- tsc trusts the declared predicate signature completely; the body's actual logic is never checked against the claim",
+      "tsc requires at least one property check inside a type predicate function, or it fails to compile",
+      "tsc replaces the predicate with a runtime check automatically"
+    ],
+    answer: 1,
+    explain: "A user-defined type predicate's signature is a pure assertion as far as the checker is concerned. Nothing inspects whether the function body actually proves what `user is Admin` claims -- `return true` narrows just as confidently as a real check would."
+  },
+  {
+    q: "`type ShapeWithoutKind = Omit<Shape, \"kind\">` where `Shape` is a union of two object types that only share the `kind` key. What does `ShapeWithoutKind` actually resolve to, and why?",
+    options: [
+      "The union of both shapes with kind removed, e.g. { radius: number } | { side: number }, because Omit distributes over unions automatically",
+      "{} -- because keyof a union is the intersection of each member's keys (here, only \"kind\"), so Exclude<keyof Shape, \"kind\"> is never, and Pick<Shape, never> is the empty object type",
+      "never, because Omit cannot be applied to a union at all",
+      "A compile error, because Omit requires a non-union first argument"
+    ],
+    answer: 1,
+    explain: "keyof (A | B) is keyof A & keyof B -- the intersection, not the union, of keys. With only \"kind\" shared, Exclude<\"kind\", \"kind\"> is never, and Pick<Shape, never> collapses to {}, an empty type that accepts any object at all."
+  },
+  {
+    q: "`enum Direction { Up, Down, Left, Right }` compiles with zero errors under `tsc --strict`. What happens when the exact same file is run with `node --experimental-strip-types`?",
+    options: [
+      "It runs identically to how tsc would emit it",
+      "It fails with SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX], because a numeric enum needs real emitted runtime code (an object with a reverse mapping), which strip-only mode cannot produce",
+      "Node automatically converts the enum to a plain object at runtime",
+      "It runs, but Direction.Up is undefined"
+    ],
+    answer: 1,
+    explain: "Node's --experimental-strip-types only erases type annotations -- it cannot emit the actual object enum declarations compile to. tsc --strict has no opinion on this (enum is ordinary syntax to it), so the failure only appears the moment something other than tsc tries to run the file directly."
+  },
+  {
+    q: "Why does `const enum LogLevel { Info, Warn, Error }` used as `LogLevel[level]` (reverse mapping) fail to compile with TS2476, while a regular `enum` compiles fine for the same code?",
+    options: [
+      "const enum is just a stylistic alias for enum with no functional difference",
+      "A const enum is fully inlined at every use site and has no runtime object left to index into by value -- there is nothing for LogLevel[level] to look up, which is exactly what TS2476 reports",
+      "TS2476 is unrelated to const enum and happens for any enum reverse mapping",
+      "const enum requires an explicit --constEnum flag to support reverse mapping"
+    ],
+    answer: 1,
+    explain: "const enum values are erased and substituted directly at each usage -- no runtime object is emitted at all. A regular enum does emit an object (including the reverse mapping), which is why the identical LogLevel[level] expression is legal there but not for a const enum."
+  },
+  {
+    q: "`Object.keys(config).forEach(key => console.log(config[key]))` fails to compile with TS7053 even though `config` is a well-typed `Config` interface. Why?",
+    options: [
+      "Object.keys is broken in TypeScript and should never be used",
+      "Object.keys always returns string[] regardless of the object's actual type, and Config has no index signature accepting an arbitrary string key -- indexing config with one is unsound as far as the checker can prove",
+      "forEach cannot be used with typed objects",
+      "This only fails when noImplicitAny is turned off"
+    ],
+    answer: 1,
+    explain: "TypeScript cannot narrow Object.keys's return type to keyof Config -- it stays string[] by design, since at runtime an object could have extra enumerable keys the type doesn't know about. Indexing Config with a bare string is flagged directly by noImplicitAny (part of --strict) as TS7053, unless the keys are asserted back to (keyof Config)[]."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-typescript/ai-bug-catalog" />

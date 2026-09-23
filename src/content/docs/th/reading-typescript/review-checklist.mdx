@@ -1,0 +1,173 @@
+---
+title: The review checklist
+description: 'checklist หนึ่งหน้า หกกลุ่ม สำหรับรีวิว TypeScript ที่ไม่ได้เขียนเอง — boundary, nullability, async, generics, erasure, tooling — แต่ละข้อ link กลับไปบทที่อธิบาย'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+นี่คือ checklist ที่โมดูลนี้สร้างมาตลอด: หนึ่งหน้า หกกลุ่ม ทุกข้อเขียนเป็นคำถามที่ตอบได้จริงจากการอ่าน diff — ไม่ใช่คำเตือนคลุมเครือให้ "ระวังไว้" แต่ละคำถาม link กลับไปบท (ในโมดูลนี้หรือบทก่อนหน้า) ที่อธิบายว่าทำไมมันถึงสำคัญ พร้อมโค้ดที่ compile ผ่านแต่ผิดที่มันจับได้
+
+## Boundaries & assertions
+
+- ทุก `as`: มัน assert shape ที่ถูก validate จริงอยู่ใกล้ ๆ หรือ assertion นี้คือสิ่งเดียวที่กันบรรทัดนี้จากการพัง? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+- ทุก `any` — ไม่ว่าจะระบุตรง ๆ หรือรั่วมาจาก return type ที่ infer จาก import ที่ไม่มี type: มันหยุดตรงไหน แล้วอะไรข้าม boundary นั้นไปโดยไม่ถูกตรวจเลย? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+- ทุก `!`: คำกล่าวอ้างว่าไม่ null มี runtime check รองรับอยู่ใกล้ ๆ หรือแค่หวังไว้เฉย ๆ? — **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+- ทุก `@ts-ignore` หรือ `@ts-expect-error` ที่ไม่ระบุ code: มันซ่อน error อะไรอยู่ แล้วถ้าลบออกจะยัง reproduce error นั้นได้อยู่ไหม? — **[Why TypeScript](/typescript/th/foundations/why-typescript/)**
+- ทุก `catch (e)`: `e` ถูก narrow (`instanceof Error`) ก่อนอ่าน `.message`/`.stack` หรือเปล่า? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+- ทุก `Record<string, any>` หรือ `object` เปล่า ๆ ที่ทำหน้าที่แทนข้อมูลจริง: interface ที่ concrete จะจับ typo หรือ shape ที่ไม่ตรงที่โค้ดนี้พึ่งพาอยู่ได้ไหม? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+## Nullability & defaults
+
+- ทุก optional field ที่เช็คด้วย `if (x)`: `0`, `""`, หรือ `false` ที่ถูกต้อง ต้องแยกจาก "field หายไป" หรือเปล่า? — **[Narrowing](/typescript/th/everyday-types/narrowing/)**
+- ทุก `||` ที่ใช้ใส่ default: ควรเป็น `??` เพื่อให้ falsy value ที่ตั้งใจไว้รอดหรือเปล่า? — **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+- ทุก `Readonly<T>` / `readonly T[]`: โค้ดรอบ ๆ สมมติ (ผิด ๆ) ว่าความคุ้มครองนี้ไปถึง nested object ด้วยหรือเปล่า? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+- ทุก object literal ระดับ module ที่ใช้เป็น "default" ที่แชร์กัน: มันเคยถูก caller แก้แทนที่จะ copy หรือเปล่า? — **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+## Async
+
+- ทุก call ไปหา `async` function หรืออะไรก็ตามที่คืน `Promise`: มันถูก `await`, `.catch`, หรือทิ้งไปตรง ๆ ด้วย `void` หรือเปล่า? — **[Performance & Pitfalls](/typescript/th/practical-mastery/performance-and-pitfalls/)**
+- ทุก `Promise.all(...)`: array ถูกส่ง inline (เก็บ type ของแต่ละตำแหน่งไว้) หรือสร้างเป็นตัวแปรก่อน (ที่อาจ widen เป็น union แบบเงียบ ๆ)? — **[Performance & Pitfalls](/typescript/th/practical-mastery/performance-and-pitfalls/)**
+- ทุก `switch`/`if`-chain บน union: มี branch `default` ที่ assign ส่วนที่เหลือให้ตัวแปร type เป็น `never` หรือเปล่า? — **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+- ทุก method ที่อ่านออกมาจาก instance แล้วส่งต่อไปที่อื่นแบบ bare reference (`obj.method` ไม่มี `.bind` ไม่มี arrow): body ของมันใช้ `this` หรือเปล่า? — **[`this`, Polymorphism & Binding](/typescript/th/classes-and-oop/this-types-and-polymorphism/)**
+
+## Generics & variance
+
+- ทุก parameter ของ function ที่ type เป็น `T[]`/`Array<T>` ที่แค่อ่านอย่างเดียว: ใช้ `readonly T[]` แทนได้ไหม เพื่อปิดช่อง covariance บวก `push`? — **[Generic Classes & Interfaces — Variance](/typescript/th/generics/generic-classes-and-interfaces/)**
+- ทุก type predicate ที่เขียนเอง (`x is T`): body ของ function เช็คทุก field ที่ predicate กล่าวอ้างจริงหรือแค่ return `true`? — **[Narrowing](/typescript/th/everyday-types/narrowing/)**
+- ทุก generic `interface`/`class` ที่มี implementer เดียวและ type parameter ใช้ตำแหน่งเดียว: มันคุ้มกับ abstraction ที่ใส่ไปหรือเป็นแค่ indirection ที่ไม่มี reuse payoff? — **[Generic Functions & Constraints](/typescript/th/generics/generic-functions-and-constraints/)**
+- ทุก `Omit`/`Pick`/`Exclude` ที่ใช้กับสิ่งที่อาจเป็น union: เคยถูกเช็คแล้วว่ามันกระจายตามที่ผู้เขียนสมมติไว้จริงหรือเปล่า? — **[The Utility Types](/typescript/th/type-level-programming/utility-types/)**
+- ทุก recursive conditional type ที่ลึกมากบน input ที่ผู้ใช้ควบคุมได้: เคยเช็คกับ depth limit ที่วัดไว้ของ compiler หรือเปล่า? — **[Recursive Types](/typescript/th/type-level-programming/recursive-types/)**
+
+## Erasure & config
+
+- ทุก `enum` (numeric หรือ string): runner จริงของ codebase นี้ (`node --experimental-strip-types`, `esbuild`, `swc`) รองรับมันไหม หรือ compile ผ่านแค่ตอนใช้ `tsc`? — **[Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/)**
+- ทุก parameter property (`constructor(public x: number)`): คำถามเดียวกัน — runtime ที่ใช้รันไฟล์นี้จริง ๆ รองรับ emit ที่มันต้องการหรือเปล่า? — **[Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/)**
+- ทุก `const enum`: เคยถูก import ข้ามไฟล์หรือข้าม package ที่ single-file transpiler จะ process ทีละไฟล์เองหรือเปล่า? — **[Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/)**
+- ทุก `import { X }` ธรรมดาที่ `X` ถูกใช้เป็น type อย่างเดียว: ควรเป็น `import type { X }` หรือเปล่า? — **[`tsconfig` Deep Dive](/typescript/th/compiler-and-tooling/tsconfig-deep/)**
+
+## Tooling
+
+- `tsc --noEmit --strict` ถูกรันกับ diff นี้จริง ๆ หรือเปล่า — ไม่ใช่แค่สมมติว่าสะอาดเพราะ editor ไม่ขึ้นเส้นสีแดง? — **[Verification Tools](/typescript/th/reading-typescript/verification-tools/)**
+- typed rule set ของ `typescript-eslint` ถูกรันหรือเปล่า ไม่ใช่แค่ default ที่ไม่ typed ที่ starter config ส่วนใหญ่ติดตั้งมาให้? — **[Verification Tools](/typescript/th/reading-typescript/verification-tools/)**
+- สำหรับ package ที่ publish: `@arethetypeswrong/cli` รายงานปัญหา resolution หรือ `exports` อะไรไหม? — **[Verification Tools](/typescript/th/reading-typescript/verification-tools/)**
+- `knip` รายงาน export ที่ diff นี้ควรลบออก หรือ dependency ที่ไม่ต้องใช้แล้วไหม? — **[Verification Tools](/typescript/th/reading-typescript/verification-tools/)**
+
+## The short version
+
+ปักไว้บนสุดของ PR template — checklist เดียวกัน ย่อเหลือบรรทัดเดียวต่อกลุ่ม:
+
+```text
+[ ] Boundaries   -- every as/any/!/@ts-ignore/catch(e): asserted, or actually checked?
+[ ] Nullability  -- every falsy-check/||/Readonly/shared-default: does 0 survive, is it deep, is it copied?
+[ ] Async        -- every promise call: awaited? Promise.all inline? every union switch: never-checked? every bare method ref: bound?
+[ ] Generics     -- every T[] param: readonly enough? every predicate: really checked? every generic: earning its keep? every Omit/Pick: distributes? every recursion: under the limit?
+[ ] Erasure      -- every enum/parameter property/const enum: does the actual runtime support it? every type-only import: import type?
+[ ] Tooling      -- tsc --strict run? typed eslint run? attw/knip run on a package?
+```
+
+และ grep เดียวที่เผยส่วนใหญ่ของ diff ที่ควรช้าลงให้ดู:
+
+```text
+grep -nE 'as |: any|!\.|!;|!\)|@ts-|JSON\.parse|\.json\(\)|enum |Object\.keys' <changed-files>
+```
+
+## Mental Model
+
+```text
+หกกลุ่ม หนึ่งหน้า:
+
+1. Boundaries & assertions -- ทุกจุดที่ type กับความจริงได้รับอนุญาตให้ต่างกัน
+2. Nullability & defaults  -- ทุกจุดที่ falsy value หรือ object ที่แชร์กันจัดการผิดได้ง่าย
+3. Async                   -- ทุกจุดที่ Promise หรือ union จัดการผิดแบบเงียบ ๆ ได้
+4. Generics & variance     -- ทุกจุดที่ abstraction คุ้มค่าหรือเปิดช่อง unsoundness
+5. Erasure & config        -- ทุกจุดที่ "compile ผ่าน" กับ "รันได้" อาจต่างกัน
+6. Tooling                 -- มีอะไรนอกจากการอ่านของตัวเองตรวจสิ่งนี้จริงหรือเปล่า?
+
+ทุกคำถามตอบได้จากการอ่าน diff -- ไม่มีข้อไหนต้องรันโปรแกรมก่อนถึงจะตอบได้
+```
+
+## Trade-offs
+
+| ได้อะไร | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| checklist หกกลุ่มตายตัว | coverage สม่ำเสมอทุก reviewer ทุก PR ไม่ใช่ "อะไรก็ตามที่นึกได้วันนี้" | checklist ที่ทำตามแบบเครื่องจักรโดยไม่เข้าใจว่าทำไมแต่ละข้อถึงสำคัญ กลายเป็นแค่ tick กล่อง |
+| คำถามแทนคำเตือน | แต่ละข้อมีคำตอบ yes/no ที่ชัดเจน อ่านได้จาก diff | บางคำถาม (variance, distribution, recursion depth) ต้องใช้พื้นฐานจากบทที่ link ถึงจะตอบถูก |
+| short version บรรทัดเดียวต่อกลุ่ม | เร็วพอจะ paste ลง PR template แล้วใช้จริงทุกครั้ง | ย่อจนอาจเสีย "ทำไม" ไป — เก็บ full version link ไว้ใกล้ ๆ |
+| grep one-liner เดียว | จับจุดที่เป็น syntax hot spot ส่วนใหญ่ได้ในไม่กี่วินาที ก่อนอ่าน logic แม้แต่บรรทัดเดียว | เจอจาก grep ไม่ได้แปลว่าเป็น bug อัตโนมัติ — ทุกจุดที่เจอยังต้องใช้วิจารณญาณที่ checklist ที่เหลือฝึกไว้ |
+
+## Common Misconceptions
+
+- **"checklist แทนวิจารณญาณได้"** ทุกข้อในนี้ยังต้องอ่านโค้ดรอบ ๆ จุดนั้นจริง ๆ — checklist บอกแค่ว่า *ต้องดูตรงไหน* ไม่ได้บอกว่าจะเจออะไร
+- **"grep ไม่เจออะไร แปลว่า diff สะอาด"** grep list จับแค่ syntax pattern; หลาย pattern ในแคตาล็อกของโมดูลนี้ (mutable default ที่แชร์กัน, type predicate ที่โกหก, `Omit` บน union) ไม่ทิ้ง token ให้ match เลย
+- **"หกกลุ่ม แปลว่าต้องอ่านหกรอบแยกกัน"** ในทางปฏิบัติ การอ่าน diff รอบเดียวตอบคำถามส่วนใหญ่ได้พร้อมกัน — หกกลุ่มจัดระเบียบว่าต้องมองหาอะไร ไม่ใช่ต้องอ่านกี่รอบ
+- **"checklist นี้ใช้กับโค้ดที่ AI เขียนเท่านั้น"** ทุกคำถามในนี้ใช้กับ PR ของคนได้เท่ากัน — โค้ดที่ AI เขียนแค่ผลิตการละเมิดในปริมาณที่เยอะกว่าและมี comment ที่ดูมั่นใจกว่า
+
+<Callout title="สรุปหนึ่งบรรทัด">
+หกกลุ่ม คำถามเดียวต่อกลุ่ม ทุกคำตอบอ่านได้จาก diff — boundary, nullability, async, generics, erasure, tooling
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "ทำไม checklist แต่ละข้อถึงเขียนเป็นคำถาม yes/no (\"e ถูก narrow ก่อนอ่าน .message หรือเปล่า?\") แทนที่จะเป็นคำเตือนทั่วไป (\"ระวัง catch block\")?",
+    options: [
+      "คำถามพิมพ์สั้นกว่าคำเตือน",
+      "คำถาม yes/no มีคำตอบชัดเจนที่อ่านได้ตรงจาก diff ในขณะที่คำเตือนทั่วไปไม่มีทางรู้ว่าเช็คจริงหรือเปล่า",
+      "คำเตือนมีประโยชน์แค่กับ developer มือใหม่เท่านั้น",
+      "สองแบบนี้ไม่ต่างกันจริง ๆ"
+    ],
+    answer: 1,
+    explain: "คำถามที่เขียนเป็นรูปแบบบังคับให้มีคำตอบที่ชัดเจน: e ถูก narrow อยู่ใกล้ ๆ หรือไม่ถูก คำเตือนคลุมเครือแบบ 'ระวังไว้' ไม่มีเงื่อนไข pass/fail เลย reviewer เลยรู้สึกว่าทำตามแล้วได้ทั้งที่ไม่ได้แก้อะไรจริง"
+  },
+  {
+    q: "```ts\ntype Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };\ntype Bare = Omit<Shape, \"kind\">;\n```\ncำถามของ checklist กลุ่มไหนจะจับได้ว่า `Bare` อาจไม่ได้แปลว่าสิ่งที่ผู้เขียนตั้งใจไว้?",
+    options: [
+      "Async",
+      "Generics & variance -- \"ทุก Omit/Pick/Exclude ที่ใช้กับสิ่งที่อาจเป็น union: เคยถูกเช็คแล้วว่ามันกระจายตามที่ผู้เขียนสมมติไว้จริงหรือเปล่า?\"",
+      "Tooling",
+      "Erasure & config"
+    ],
+    answer: 1,
+    explain: "นี่คือกับดัก Omit-บน-union จากแคตาล็อกโดยตรง -- Omit ไม่กระจายบน Shape เลย Bare ยุบเหลือ {} แบบเงียบ ๆ คำถามของกลุ่ม Generics & variance เกี่ยวกับการกระจายของ Omit/Pick/Exclude เขียนขึ้นมาเพื่อจับสิ่งนี้ก่อนจะ ship ออกไปพอดี"
+  },
+  {
+    q: "reviewer รัน grep one-liner จาก short version ของหน้านี้แล้วได้ผลลัพธ์เป็นศูนย์บน diff หนึ่งชิ้น สรุปอะไรได้บ้าง?",
+    options: [
+      "diff นี้ไม่มี bug จากแคตาล็อกของโมดูลนี้เลย",
+      "สรุปได้แค่ว่า diff ไม่มี syntax token เฉพาะที่ grep มองหาเลย -- หลาย pattern ในแคตาล็อก (default export ที่ mutable และแชร์กัน, type predicate ที่โกหก, Omit บน union) ไม่สร้าง token ให้ match เลย",
+      "diff นี้รับประกันว่าผ่าน tsc --strict",
+      "diff นี้ไม่ต้องรีวิวเพิ่มแล้ว"
+    ],
+    answer: 1,
+    explain: "grep คือ filter ทาง syntax ที่เร็ว ไม่ใช่ filter ทาง semantic pattern อย่าง object ที่ mutable ถูกแชร์เป็น default export หรือ type predicate ที่ return true เสมอ ไม่มี as /any/!/@ts-/JSON.parse/.json()/enum /Object.keys เลยสักตัว -- grep ที่สะอาดไม่ได้บอกอะไรเกี่ยวกับ pattern เหล่านั้น"
+  },
+  {
+    q: "ทำไม checklist ถึงแยก 'Erasure & config' เป็นกลุ่มของตัวเอง แทนที่จะรวมคำถามเรื่อง enum/parameter-property/const-enum เข้ากับคำถาม type-safety ทั่วไป?",
+    options: [
+      "ไม่มีความต่างที่มีความหมาย การแยกเป็นเรื่องสุ่ม",
+      "คำถามเรื่อง erasure เกี่ยวกับว่า *compile ผ่าน tsc* กับ *รันได้จริงบน runtime ของโปรเจกต์นี้* อาจต่างกัน -- คนละ failure mode กับว่า type อธิบายค่าได้แม่นยำหรือเปล่า",
+      "erasure สำคัญแค่กับ codebase ขนาดใหญ่มาก ๆ เท่านั้น",
+      "tsc ปฏิเสธ syntax ที่ erase ไม่ได้เสมอ กลุ่มนี้เลยซ้ำซ้อน"
+    ],
+    answer: 1,
+    explain: "enum หรือ parameter property compile ผ่านโดยไม่มี tsc --strict error เลยได้ แล้วก็ยังพังได้ทันทีที่มีอะไรอื่นที่ไม่ใช่ tsc (node --experimental-strip-types, esbuild, swc) พยายามรันมัน -- ช่องว่างระหว่าง 'ผ่านการตรวจ type' กับ 'รันได้' ที่คำถามเรื่อง boundary/assertion (ว่า type ตรงกับความจริงหรือเปล่า) ไม่ได้พูดถึงเลย"
+  },
+  {
+    q: "กลุ่ม Tooling ถามว่า typed rule set ของ typescript-eslint ถูกรันหรือเปล่า โดยเน้นเป็นพิเศษว่ามันต่างจาก 'default ที่ไม่ typed ที่ starter config ส่วนใหญ่ติดตั้งมาให้' ทำไมความต่างนี้ถึงสำคัญ?",
+    options: [
+      "typed กับ untyped rule set เป็นแค่ชื่อสองชื่อของ check ชุดเดียวกัน",
+      "untyped rule ทำงานกับ syntax อย่างเดียว มองไม่เห็นข้อมูล type ข้ามไฟล์ rule อย่าง no-floating-promises หรือ no-unsafe-member-access -- ที่ต้องรู้ type จริงของค่า -- รันได้ก็ต่อเมื่อใช้ config แบบ typed เท่านั้น",
+      "typed rule set ช้ากว่าเสมอ เลยไม่คุ้มที่จะรัน",
+      "untyped rule ใช้กับไฟล์ JavaScript เท่านั้น ไม่ใช่ TypeScript"
+    ],
+    answer: 1,
+    explain: "typed rule ของ typescript-eslint (no-floating-promises, no-unsafe-* และอื่น ๆ ในแคตาล็อกของโมดูลนี้) ต้องใช้ข้อมูล type จริงจาก program ที่มี tsconfig รองรับถึงจะประเมินได้ -- มันแทบไม่มีความหมายเป็น check เลยใน config แบบ untyped ที่เน้น syntax อย่างเดียว ที่ starter template ส่วนใหญ่เปิดมาให้ default"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-typescript/review-checklist" />

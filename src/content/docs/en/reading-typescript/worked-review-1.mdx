@@ -1,0 +1,288 @@
+---
+title: 'Worked review 1: a fetch-and-render service'
+description: 'A full review of a small AI-style service that fetches a user and renders a profile — four planted bugs, real diagnostics, real crashes, and a clean fixed version.'
+sidebar:
+  order: 5
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+This is the first of four full reviews. Each one gives you a complete, AI-style program, asks you to find the planted bugs using the last four lessons' habits, then shows the real tools' real output and a fixed version that actually compiles and runs correctly. This one is a small service that fetches a user record and renders a welcome message — a boundary, a floating promise, a non-null assertion, and a default value, all in about 35 lines.
+
+## The program
+
+<TSPlayground code={wr1BuggyCode} id="wr1-buggy" title="Review this before reading further" />
+
+export const wr1BuggyCode = `// @run
+interface User { id: number; name: string; nickname?: string }
+
+async function fetchUserJson(id: number): Promise<string> {
+  // stands in for a real fetch(\`/api/users/\${id}\`).then(r => r.text())
+  return id === 1
+    ? '{"id": 1, "name": "Ada"}'
+    : '{"id": 2, "name": "Grace", "nickname": "Amazing Grace"}';
+}
+
+async function fetchUser(id: number): Promise<User> {
+  const raw = await fetchUserJson(id);
+  return JSON.parse(raw) as User; // BUG 1: as -- shape never validated
+}
+
+async function logAccessAsync(id: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log(\`access logged for user \${id}\`);
+}
+
+async function renderProfile(id: number): Promise<string> {
+  logAccessAsync(id); // BUG 2: floating promise -- missing await
+  const user = await fetchUser(id);
+  const displayName = user.nickname!.toUpperCase(); // BUG 3: non-null assertion on optional field
+  return \`Welcome, \${displayName}\`;
+}
+
+interface RenderOptions { retries?: number }
+
+function getRetryCount(options: RenderOptions): number {
+  return options.retries || 3; // BUG 4: || instead of ?? -- explicit 0 silently becomes 3
+}
+
+async function main(): Promise<void> {
+  console.log("retries for explicit 0:", getRetryCount({ retries: 0 }));
+  console.log(await renderProfile(2));
+  console.log(await renderProfile(1)); // user 1 has no nickname -- crashes
+}
+
+main();
+`.trim();
+
+Click **Check types**: `tsc --strict` reports **zero errors**. Click **Run**: it prints two lines, then crashes.
+
+**Real output:**
+
+```text
+retries for explicit 0: 3
+Welcome, AMAZING GRACE
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+    at renderProfile (...)
+```
+
+Notice what is missing from that output entirely: `access logged for user 2` never prints. `logAccessAsync(2)`'s 5ms timer never gets the chance to fire, because the process crashes first — the exact danger a floating promise creates: its side effect can simply vanish, with nothing to show it was ever supposed to happen.
+
+## Find the bugs before reading on
+
+Four planted bugs, one boundary, one async, two nullability. Try to name all four — with a line number and what actually goes wrong — before opening the answers below.
+
+<details>
+<summary>Bug 1 — line 12, `JSON.parse(raw) as User`</summary>
+
+**Symptom:** `fetchUser` compiles as if it always returns a real `User`, but nothing checks that the parsed JSON actually has an `id` and a `name`.
+
+**Evidence:** it happens to work for both ids in this program only because both fake payloads are well-formed — the moment the boundary function returns something else (a `404` HTML page, an error object, a partial record from a flaky backend), `as User` still compiles and still hands the caller a value it will treat as trustworthy.
+
+**Fix:** a real type guard, checked against the parsed value before it is trusted:
+
+```ts
+interface User { id: number; name: string; nickname?: string }
+
+function isUser(value: unknown): value is User {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.id === "number" && typeof v.name === "string";
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — line 21, `logAccessAsync(id);` with no `await`</summary>
+
+**Symptom:** the access-log side effect is fired and immediately forgotten; `renderProfile` moves on to the next line without waiting for it.
+
+**Evidence:** the real output above proves it directly — `access logged for user 2` never printed at all, because the process crashed on the very next call to `renderProfile` before the 5ms timer had a chance to fire. In a longer-running server this would just as easily lose the log silently with no crash at all, just an unlucky ordering.
+
+**Fix:** `await` it.
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+async function renderProfile(id: number): Promise<string> {
+  await logAccessAsync(id);
+  // ...
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — line 23, `user.nickname!.toUpperCase()`</summary>
+
+**Symptom:** `nickname` is typed `string | undefined` for a reason — not every user has one — and `!` tells the checker to ignore that entirely.
+
+**Evidence:** the real crash. User `1`'s payload has no `nickname`; `user.nickname!` is `undefined` at runtime, and `.toUpperCase()` throws `TypeError: Cannot read properties of undefined (reading 'toUpperCase')`.
+
+**Fix:** fall back to something that is always present, like `name`:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+const displayName = (user.nickname ?? user.name).toUpperCase();
+```
+
+</details>
+
+<details>
+<summary>Bug 4 — line 30, `options.retries || 3`</summary>
+
+**Symptom:** a caller who explicitly passes `retries: 0` (meaning "do not retry at all") silently gets `3` instead.
+
+**Evidence:** the first line of real output above — `retries for explicit 0: 3`, not `0`.
+
+**Fix:** `??` only falls through on `null`/`undefined`, not on every falsy value:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function getRetryCount(options: RenderOptions): number {
+  return options.retries ?? 3;
+}
+```
+
+</details>
+
+## The fixed version
+
+```ts
+// @run
+interface User { id: number; name: string; nickname?: string }
+
+function isUser(value: unknown): value is User {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.id === "number" && typeof v.name === "string";
+}
+
+async function fetchUserJson(id: number): Promise<string> {
+  return id === 1
+    ? '{"id": 1, "name": "Ada"}'
+    : '{"id": 2, "name": "Grace", "nickname": "Amazing Grace"}';
+}
+
+async function fetchUser(id: number): Promise<User> {
+  const raw = await fetchUserJson(id);
+  const parsed: unknown = JSON.parse(raw);
+  if (!isUser(parsed)) throw new Error(`invalid user payload for id ${id}`);
+  return parsed;
+}
+
+async function logAccessAsync(id: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log(`access logged for user ${id}`);
+}
+
+async function renderProfile(id: number): Promise<string> {
+  await logAccessAsync(id);
+  const user = await fetchUser(id);
+  const displayName = (user.nickname ?? user.name).toUpperCase();
+  return `Welcome, ${displayName}`;
+}
+
+interface RenderOptions { retries?: number }
+
+function getRetryCount(options: RenderOptions): number {
+  return options.retries ?? 3;
+}
+
+async function main(): Promise<void> {
+  console.log("retries for explicit 0:", getRetryCount({ retries: 0 }));
+  console.log(await renderProfile(2));
+  console.log(await renderProfile(1));
+}
+
+main();
+```
+
+**Real output:**
+
+```text
+retries for explicit 0: 0
+access logged for user 2
+Welcome, AMAZING GRACE
+access logged for user 1
+Welcome, ADA
+```
+
+Every log line now appears, in the right order, and user `1` — who has no `nickname` — falls back to their `name` instead of crashing.
+
+## What the tools caught
+
+`tsc --strict` on the buggy version: **zero errors**, on both the buggy and fixed versions — this entire review is invisible to the compiler alone.
+
+`typescript-eslint`'s typed rules, run on the buggy version:
+
+```text
+21:3   error  Promises must be awaited, end with a call to .catch, end with a call to .then
+              with a rejection handler or be explicitly marked as ignored with the `void`
+              operator                                          @typescript-eslint/no-floating-promises
+23:23  error  Forbidden non-null assertion                       @typescript-eslint/no-non-null-assertion
+30:26  error  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`),
+              as it is a safer operator                          @typescript-eslint/prefer-nullish-coalescing
+
+✖ 3 problems (3 errors, 0 warnings)
+```
+
+Three of the four bugs, caught directly and specifically. Bug 1 — the `as User` boundary cast — is the one no tool in this course's ladder catches; it took actually reading the boundary, and running the code, to find it.
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Three of four bugs here are a one-line `eslint --fix`-adjacent finding away; the fourth — an unvalidated `as` at a boundary — needed a human to read the boundary and a real crash to prove it.
+</Callout>
+
+export const quizWorkedReview1 = [
+  {
+    q: "The buggy version of this program compiles with zero tsc --strict errors. Which single planted bug is the only one no tool in this lesson's ladder (tsc or typed eslint) catches?",
+    options: [
+      "The missing await on logAccessAsync",
+      "The as User assertion on the parsed JSON boundary -- no tool validates that the asserted shape actually matches the parsed data",
+      "The non-null assertion on user.nickname",
+      "The || instead of ?? on retries"
+    ],
+    answer: 1,
+    explain: "no-floating-promises, no-non-null-assertion, and prefer-nullish-coalescing each catch one of the other three bugs directly. Nothing in this course's tool ladder checks whether an as assertion's claimed type actually matches the real shape of the value -- that gap can only be closed by a real runtime check."
+  },
+  {
+    q: "In the real output, 'access logged for user 2' never printed at all, even though logAccessAsync(2) was called. Why?",
+    options: [
+      "logAccessAsync only logs for odd-numbered ids",
+      "The call was a floating promise -- its 5ms timer never got the chance to fire because the very next call to renderProfile(1) crashed the process first",
+      "console.log calls are buffered and never flushed in Node",
+      "The function has a bug unrelated to async handling"
+    ],
+    answer: 1,
+    explain: "Without await, renderProfile moved on immediately after calling logAccessAsync(2), and the program crashed shortly after on renderProfile(1)'s non-null assertion -- ending the process before the abandoned 5ms timer had a chance to complete and log its message."
+  },
+  {
+    q: "Why does `getRetryCount({ retries: 0 })` return 3 in the buggy version instead of 0?",
+    options: [
+      "TypeScript rounds 0 up to the default value",
+      "options.retries || 3 falls through to 3 whenever retries is any falsy value, and 0 is falsy -- there is no way for || to distinguish 'explicitly zero' from 'not provided'",
+      "retries: 0 is invalid syntax and gets ignored",
+      "The bug only appears when RenderOptions is imported from another file"
+    ],
+    answer: 1,
+    explain: "|| treats 0, \"\", NaN, null, and undefined identically -- all falsy, all triggering the fallback. Only ?? checks specifically for null/undefined, which is why switching to ?? lets an explicit 0 survive."
+  },
+  {
+    q: "The fixed version replaces `JSON.parse(raw) as User` with a call to a function `isUser`. What does that change actually add that the assertion didn't have?",
+    options: [
+      "Nothing functionally different -- it's just a style preference",
+      "A real runtime check of the parsed value's actual shape (that id is a number and name is a string) before the rest of the program is allowed to trust it as a User",
+      "It makes JSON.parse itself throw on invalid JSON syntax, which it didn't do before",
+      "It changes fetchUser's return type from Promise<User> to Promise<unknown>"
+    ],
+    answer: 1,
+    explain: "isUser actually inspects the parsed value's fields at runtime and only lets code proceed treating it as a User if those fields genuinely match -- unlike as User, which asserts the type without checking anything at all."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-1" questions={quizWorkedReview1} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-1" />

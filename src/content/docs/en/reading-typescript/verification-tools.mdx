@@ -1,0 +1,381 @@
+---
+title: Verification tools
+description: 'The real ladder of tools that check TypeScript beyond tsc — tsgo, typed typescript-eslint rules, expectTypeOf, @arethetypeswrong/cli, and knip — with real output and a table of which catalog pattern each one catches.'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+The **[AI Bug Catalog](/typescript/en/reading-typescript/ai-bug-catalog/)** ended with an uncomfortable fact: a third of its 24 patterns are caught by nothing this course covers. This lesson runs every tool that *does* catch something — for real, on real code, with real output quoted below — so you know exactly what each rung of the ladder buys you, and where the ladder simply ends and a human has to read.
+
+## Rung 1: `tsc --noEmit --strict`
+
+This is the floor everything else builds on. Run directly against the self-contained sample below (no lint config, just the compiler):
+
+```ts
+interface Settings { retries?: number }
+
+async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+export function handleRequest(id: number): string {
+  saveAuditLog(`request ${id} handled`); // missing await -- floating promise
+  return `response-${id}`;
+}
+
+export function getRetries(settings: Settings): number {
+  return settings.retries || 3; // should be ??
+}
+
+function loadConfigFromUntypedLib(): any {
+  return { port: "3000" };
+}
+
+export function readPort(): number {
+  const config = loadConfigFromUntypedLib();
+  return config.port; // unsafe member access on any
+}
+
+export class Counter {
+  count = 0;
+  increment(): void {
+    this.count++;
+  }
+}
+
+const counter = new Counter();
+export const handler = counter.increment; // unbound method
+
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+export function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    // missing "square" case -- switch-exhaustiveness-check should flag this
+  }
+  return 0;
+}
+```
+
+**Real output:** nothing — `tsc --strict` exits `0` on this file. Six catalog-style bugs (a floating promise, `||` instead of `??`, `any` leaking from an untyped call, an unbound method reference, and a non-exhaustive switch) all sit in code the compiler considers perfectly fine. `--strict` catches contradictions between declared types; every bug above is a *behavioral* mistake that no declared type disagrees with.
+
+## Rung 2: `tsgo` — same checker, different runtime
+
+`tsgo` (`@typescript/native-preview`) is TypeScript's native-Go-ported checker, run the same way:
+
+```text
+node_modules/.bin/tsgo --noEmit --strict ...   (identical flags to tsc above)
+```
+
+On the sample above, `tsgo` agrees with `tsc` exactly — `0` errors, same as rung 1. That agreement is expected but worth stating plainly, since the two are no longer as different as their history suggests: **in this course's installed versions, `tsc` itself already *is* the native, Go-ported compiler** (`typescript@7.0.2` ships the native binary as its `tsc`), and `tsgo` is that same rewrite's preview CLI. Timed on an 800-line synthetic file (400 generic functions), both finished in the same **~30–35ms**, dominated entirely by Node process startup, not by checking time — there is no meaningful speed gap to observe at this scale, because there is barely anything to check.
+
+The dramatic **10x** difference this course cited back in [Why TypeScript](/typescript/en/foundations/why-typescript/) — VS Code's own tsc run dropping from 17.5s to 1.3s, Canva's from 58s to 4.8s — compared the *classic*, JavaScript-implemented `tsc` (TypeScript 5.x/6.x) against the native preview, on real, large, multi-file codebases. Confirmed the same way here: `typescript@6.0.3`'s classic `tsc` finished the same 800-line file in **38ms**, essentially tied with `tsgo`'s 32ms — because even a large-by-this-lesson's-standards single file is still too small to separate the two engines. The 10x gap is real, but it shows up on whole projects at incremental-build scale, not on a single small `.ts` file — and it has already closed for any project (like this one) whose `tsc` itself is TypeScript 7.
+
+**Table so far:** `tsgo` catches exactly what `tsc` catches, on identical flags — it changes compile speed on a large project, not which of the 24 catalog patterns get caught.
+
+## Rung 3: `typescript-eslint`, typed rules
+
+The compiler alone missed six bugs in the sample above. This is exactly the gap typed `typescript-eslint` rules close — but they need real type information from a `tsconfig`-backed program, which is why they only exist as a **typed** rule set, distinct from the untyped, syntax-only rules most starter configs ship. This course's repo does not install `typescript-eslint` (it targets TypeScript 7.0.2, which `typescript-eslint@8.70.1` does not yet support — see the note below); the run below used a side-by-side scratch install pinned to `typescript@6.0.3`, exactly the "run typescript-eslint using the TS 6 API" workaround the tool itself prints when it detects TS 7:
+
+```text
+$ node_modules/.bin/eslint lintdemo/self_contained.ts --no-config-lookup
+typescript-eslint does not support TS 7.0.
+Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
+```
+
+**Flat config used** (`eslint.config.mjs`, six of this course's named rules plus the closely related `no-unsafe-*` family):
+
+```text
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config({
+  files: ['lintdemo/**/*.ts'],
+  languageOptions: {
+    parserOptions: { project: './lintdemo/tsconfig.json', tsconfigRootDir: import.meta.dirname },
+  },
+  extends: [...tseslint.configs.recommendedTypeChecked],
+  rules: {
+    '@typescript-eslint/no-floating-promises': 'error',
+    '@typescript-eslint/no-misused-promises': 'error',
+    '@typescript-eslint/no-unsafe-assignment': 'error',
+    '@typescript-eslint/no-unsafe-member-access': 'error',
+    '@typescript-eslint/no-explicit-any': 'error',
+    '@typescript-eslint/switch-exhaustiveness-check': 'error',
+    '@typescript-eslint/consistent-type-imports': 'error',
+    '@typescript-eslint/unbound-method': 'error',
+    '@typescript-eslint/prefer-nullish-coalescing': 'error',
+  },
+});
+```
+
+**Real output**, run against the exact sample from rung 1:
+
+```text
+  9:3   error  Promises must be awaited, end with a call to .catch, end with a call to
+               .then with a rejection handler or be explicitly marked as ignored with
+               the `void` operator                             @typescript-eslint/no-floating-promises
+ 14:27  error  Prefer using nullish coalescing operator (`??`) instead of a logical
+               or (`||`), as it is a safer operator             @typescript-eslint/prefer-nullish-coalescing
+ 17:38  error  Unexpected any. Specify a different type          @typescript-eslint/no-explicit-any
+ 22:9   error  Unsafe assignment of an `any` value               @typescript-eslint/no-unsafe-assignment
+ 23:3   error  Unsafe return of a value of type `any`            @typescript-eslint/no-unsafe-return
+ 23:17  error  Unsafe member access .port on an `any` value      @typescript-eslint/no-unsafe-member-access
+ 34:24  error  A method that is not declared with `this: void`
+               may cause unintentional scoping of `this` when
+               separated from its object.                        @typescript-eslint/unbound-method
+ 41:11  error  Switch is not exhaustive. Cases not matched:
+               "square"                                          @typescript-eslint/switch-exhaustiveness-check
+
+✖ 8 problems (8 errors, 0 warnings)
+```
+
+Every one of the six bugs `tsc --strict` missed is here, plus the extra `no-unsafe-*` diagnostics that came free from `any`'s spread. Two more of this course's named rules — `no-misused-promises` (a `Promise` returned from `Array.prototype.forEach`'s callback, which ignores it) and `consistent-type-imports` (a value-style import of a type-only name) — fire the same way on code that exercises them; they produce no output above only because the trimmed sample doesn't contain that shape.
+
+## Rung 4: `expectTypeOf` (vitest / `expect-type`)
+
+Every tool so far checks *values*. `expectTypeOf` checks *types themselves* — useful for the exact "claim ระดับ type ต้องพิสูจน์" rule this course has followed since Phase 1: does a utility type actually resolve to what its author believes?
+
+```ts
+// @skip-verify vitest typecheck test, not a plain tsc fence -- real output quoted below
+import { test, expectTypeOf } from "vitest";
+
+type MyNonNullable<T> = T & {};
+
+test("MyNonNullable strips null and undefined (passes)", () => {
+  expectTypeOf<MyNonNullable<string | null | undefined>>().toEqualTypeOf<string>();
+});
+
+test("MyNonNullable does NOT turn into number (fails on purpose)", () => {
+  expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>();
+});
+```
+
+**Real output** (`vitest --run --typecheck`):
+
+```text
+ ❯  TS  typetest/nonNullable.test-d.ts (2 tests | 1 failed)
+   × MyNonNullable does NOT turn into number (fails on purpose)
+
+FAIL typetest/nonNullable.test-d.ts:9 > MyNonNullable does NOT turn into number (fails on purpose)
+TypeCheckError: Type 'number' does not satisfy the constraint '"Expected number, Actual string"'.
+  10|   expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>();
+
+Test Files  1 failed (1)
+     Tests  1 failed | 1 passed (2)
+```
+
+The first test passes silently; the second — deliberately wrong, to prove the check is real — fails with a message that names exactly what was expected versus actual. This is the only tool in this lesson that can fail on a *type* being wrong even when every value in the program is perfectly fine.
+
+## Rung 5: `@arethetypeswrong/cli`, on a built package
+
+`attw` inspects a package's actual published output — `package.json`, `exports`, and the `.d.ts`/`.js` files a `npm pack` tarball would ship — the way a *consumer's* resolver sees it, not the way the source tree looks.
+
+```json
+{
+  "name": "attw-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+**Real output** (`attw --pack` on the packed tarball):
+
+```text
+attw-demo v1.0.0
+
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and
+some bundlers. CommonJS consumers will need to use a dynamic import.
+
+┌───────────────────┬──────────────────────────────┐
+│                   │ "attw-demo"                   │
+├───────────────────┼──────────────────────────────┤
+│ node10            │ 🟢                            │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS) │ ⚠️ ESM (dynamic import only)  │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM) │ 🟢 (ESM)                      │
+├───────────────────┼──────────────────────────────┤
+│ bundler           │ 🟢                            │
+└───────────────────┴──────────────────────────────┘
+```
+
+This package never declared a `require` condition, and `main` points at an ESM file — `attw` catches, from the outside, exactly the kind of dual-package hazard that compiles perfectly and only breaks for a consumer's bundler or `require()` call, months after publish.
+
+## Rung 6: `knip`, unused exports
+
+```text
+Unused exports (1)
+formatUserVerbose  function  format.ts:8:17
+```
+
+`knip` traced every import starting from the declared entry point and found one exported function nothing ever imports — the same signal, generalized, that this module's catalog uses for pattern 17 (an interface with one implementer): an export used from exactly one place, or from none at all, is worth a second look, even though `knip` never says *why* the abstraction is unnecessary, only that it is unreferenced.
+
+## Rung 7: `tsc --extendedDiagnostics`
+
+```text
+Files:              89
+Lines:           59924
+Identifiers:     55831
+Symbols:         35922
+Types:            3941
+Parse time:     0.013s
+Bind time:      0.005s
+Check time:     0.002s
+Emit time:      0.000s
+Total time:     0.020s
+```
+
+This doesn't catch a bug — it tells you *where the compiler's own time goes*, which is what actually explains a slow `tsc` run: parse vs. bind vs. check vs. emit. A ballooning `Types`/`Instantiations` count on a real project, not this trivial sample, is the first place to look when type-level code (recursive conditionals, huge unions) starts making CI slow.
+
+## Which rung catches which catalog pattern
+
+| # | Pattern | Rung that catches it |
+|---|---|---|
+| 1 | `as` on `JSON.parse` | None |
+| 2 | `any` leaking from a library | `typescript-eslint` `no-unsafe-member-access` |
+| 3 | `!` on a value from an API | `typescript-eslint` `no-non-null-assertion` (flags the assertion, not the bug) |
+| 4 | `@ts-ignore` instead of a fix | `typescript-eslint` `ban-ts-comment`; `tsc` once the comment is removed |
+| 5 | `Record<string, any>` instead of a schema | None (`no-explicit-any` flags the `any`, not the typo it permits) |
+| 6 | `catch (e) { e.message }` | `tsc` directly (`TS18046`) |
+| 7 | Optional + `if (x)` treats `0` as missing | None |
+| 8 | `\|\|` instead of `??` | `typescript-eslint` `prefer-nullish-coalescing` |
+| 9 | `readonly` is shallow | None for plain `Readonly<T>`; `tsc` only with a hand-written `DeepReadonly<T>` |
+| 10 | Mutable object shared as a default export | None |
+| 11 | Forgotten `await` (floating promise) | `typescript-eslint` `no-floating-promises` |
+| 12 | `Promise.all` on a widened array | `tsc` directly (`TS2339`, reactively) |
+| 13 | Exhaustive switch with no `never` check | `typescript-eslint` `switch-exhaustiveness-check` (directly, no manual `never` check needed); `tsc` alone only once one is added by hand |
+| 14 | `this` lost in a callback | `typescript-eslint` `unbound-method` |
+| 15 | `Array<Dog>` into `Array<Animal>` | None |
+| 16 | Type predicate that lies | None |
+| 17 | Interface + generic used once | `knip` (indirect — an unreferenced/single-reference export) |
+| 18 | `Omit` on a union | None |
+| 19 | Recursive type too deep | `tsc` directly (`TS2589`) |
+| 20 | `enum` under erasable syntax | None via `tsc`/`eslint` — only running the file |
+| 21 | Parameter property under strip-types | None via `tsc`/`eslint` — only running the file |
+| 22 | `const enum` reverse mapping | `tsc` directly (`TS2476`) |
+| 23 | `import` vs `import type` | `tsc` (`TS1484`, flag-gated); `typescript-eslint` `consistent-type-imports` (proactive) |
+| 24 | `Object.keys(obj).forEach` | `tsc` directly (`TS7053`) |
+
+## One command for the whole ladder
+
+For a real project with all these tools installed as dev dependencies:
+
+```text
+npx tsc --noEmit --strict && npx eslint . --max-warnings 0 && npx vitest run --typecheck && npx knip
+```
+
+Run `npx attw --pack` separately, only on packages you actually publish — it inspects a built tarball, not source.
+
+## Mental Model
+
+```text
+Seven rungs, each catching something the one before it missed:
+
+1. tsc --strict          -> contradictions between declared types
+2. tsgo                  -> the same contradictions, at large-project speed (once tsc itself is native, the gap closes)
+3. typed eslint rules     -> behavioral misuse of correctly-typed values (floating promises, any, ||, unbound this, non-exhaustive switch)
+4. expectTypeOf           -> whether a TYPE resolves to what its author believes, independent of any runtime value
+5. attw                   -> whether a published package's exports actually resolve the way its package.json claims
+6. knip                   -> exports/dependencies nothing in the project still references
+7. --extendedDiagnostics  -> where the compiler's own time goes, on a real slow build
+
+A third of the AI bug catalog survives every rung -- that gap is what the rest of this module trains you to read for by eye.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Running `tsc --strict` alone | Fast, zero extra dependencies, catches every contradiction between declared types | Misses every *behavioral* bug this lesson demonstrated -- six in one small file |
+| Adding typed `typescript-eslint` rules | Closes most of the behavioral gap `tsc` leaves | Needs a full `tsconfig`-backed program to run (slower than syntax-only lint); as of this course's TypeScript version, needs a side-by-side TS 6 install |
+| Adding `expectTypeOf` type tests | The only rung that can fail on a wrong *type*, even with a perfectly working runtime | Extra test files to write and maintain, on top of ordinary runtime tests |
+| Adding `attw`/`knip` | Catches packaging and dead-export problems invisible from inside the source tree | Only useful for published packages (`attw`) or projects with a clear entry point (`knip`) — noisy or meaningless otherwise |
+| Chaining all of them in CI | The closest this course gets to "checked everything a tool can check" | Still leaves a third of the catalog uncaught -- tooling narrows, never replaces, reading |
+
+## Common Misconceptions
+
+- **"`tsc --strict` passing means the code is safe."** Six bugs in this lesson's own sample file prove otherwise — `--strict` only rules out contradictions between declared types, never behavioral mistakes a correctly-typed value can still cause.
+- **"`tsgo` is always 10x faster than `tsc`."** True for the classic, JS-implemented `tsc` on a large project — not true here, where this course's `tsc` is already the native compiler, and not observable at all on a single small file.
+- **"Typed `typescript-eslint` rules are just stricter versions of the untyped defaults."** They are a different category entirely — untyped rules see syntax; typed rules see the actual resolved types behind that syntax, which is why `no-floating-promises` needs a `tsconfig`, not just a parser.
+- **"If every tool in this ladder passes, the code is correct."** A third of the AI bug catalog is explicitly designed to survive every rung here — passing tooling narrows what's left to read for, it does not certify correctness.
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Seven rungs, each catching a different failure mode — tsc for type contradictions, typed eslint for behavioral misuse, expectTypeOf for wrong types, attw/knip for packaging — and a third of the catalog that survives every one of them.
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "The sample file in this lesson's rung 1 has six catalog-style bugs (floating promise, || instead of ??, any leaking, unbound method, non-exhaustive switch) but `tsc --strict` reports zero errors on it. Why?",
+    options: [
+      "tsc has a bug and should report these",
+      "--strict only checks for contradictions between declared types; none of these six bugs make any declared type disagree with how it's used -- they are behavioral mistakes a type checker alone cannot see",
+      "The sample file must have a syntax error preventing full checking",
+      "--strict only applies to files with no async functions"
+    ],
+    answer: 1,
+    explain: "Every one of the six bugs involves code that is perfectly well-typed -- a Promise is still a Promise whether or not it's awaited, || is valid on any type, any is explicitly allowed to bypass checking, an unbound method reference is still a valid function value, and a non-exhaustive switch with no missing-return path compiles fine. None of that contradicts a declared type."
+  },
+  {
+    q: "This lesson measured tsc 7.0.2 and tsgo finishing an 800-line file in nearly identical time (~30-35ms), while the official blog numbers this course cites elsewhere claim roughly a 10x speedup from the native compiler. How are both true?",
+    options: [
+      "The blog numbers are wrong",
+      "The blog's 10x gap compared the CLASSIC, JavaScript-implemented tsc (TS 5.x/6.x) against the native preview on large real projects; this course's own tsc is already TypeScript 7's native compiler, so tsc and tsgo are now close siblings, and a single small file is too tiny to show any checking-time gap at all",
+      "tsgo only shows a speedup on files under 100 lines",
+      "The measurement in this lesson used a different flag set than the blog's benchmark"
+    ],
+    answer: 1,
+    explain: "TypeScript 7 made tsc itself the native, Go-ported compiler -- the exact rewrite tsgo previewed. The 10x figures describe classic tsc vs. that rewrite on large multi-file codebases; once a project's tsc IS the rewrite, and the test file is small enough that Node startup dominates, there's no gap left to observe."
+  },
+  {
+    q: "Why does `typescript-eslint`'s `no-floating-promises` rule require a typed configuration (a real tsconfig-backed program), while a rule like `no-var` does not?",
+    options: [
+      "no-floating-promises is actually untyped too -- this is a trick question",
+      "Determining whether an expression is a Promise-returning call requires knowing the actual resolved type of that expression -- information only a real type-checking program has, unlike no-var, which is a pure syntax check on how a variable was declared",
+      "Typed rules are simply a marketing term with no functional difference",
+      "no-floating-promises only works on async functions, never on any other kind of Promise-returning function"
+    ],
+    answer: 1,
+    explain: "no-var can be enforced by looking at the token `var` in the source -- no type information needed. no-floating-promises must determine whether an arbitrary expression's TYPE is a Promise, which requires the full type-checking machinery a typed ESLint configuration wires in via a real tsconfig."
+  },
+  {
+    q: "`expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>()` fails with a real TypeCheckError in this lesson's vitest run. What kind of program state does this specifically prove is wrong, that a normal runtime test cannot?",
+    options: [
+      "That a runtime value is undefined",
+      "That the TYPE MyNonNullable<string | null> resolves to something other than number -- a fact that can be wrong even in a program where every runtime value behaves perfectly correctly",
+      "That the code throws an exception when run",
+      "That the function is never called anywhere in the codebase"
+    ],
+    answer: 1,
+    explain: "expectTypeOf operates entirely at the type level, independent of any runtime execution -- it can catch a utility type resolving to the wrong type even in a program that runs flawlessly, which is exactly the kind of claim ('this type resolves to X') this course has required proof for since Phase 1."
+  },
+  {
+    q: "The attw output in this lesson shows a real warning for a package whose exports map lists only an `import` condition (no `require`) while `main` points at an ESM file. What does this warning actually predict will fail, and for whom?",
+    options: [
+      "The package will fail to install for anyone",
+      "A CommonJS consumer calling require('attw-demo') will fail (or need a dynamic import instead) -- a failure that never appears from inside the package's own source tree or its own ESM-only tests",
+      "The package's own build script will fail",
+      "TypeScript will refuse to compile the package's source code"
+    ],
+    answer: 1,
+    explain: "attw inspects the package the way an external consumer's resolver would. A require() call resolving to an ESM file is a real Node error for CommonJS consumers specifically -- invisible if the package is only ever tested by importing it with ESM syntax, which is exactly the packaging-boundary problem attw exists to catch before a consumer hits it months after publish."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-typescript/verification-tools" />

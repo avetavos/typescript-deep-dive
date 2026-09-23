@@ -1,0 +1,381 @@
+---
+title: Verification tools
+description: 'ลำดับเครื่องมือจริงที่ตรวจ TypeScript ได้มากกว่า tsc — tsgo, typed rule ของ typescript-eslint, expectTypeOf, @arethetypeswrong/cli, และ knip — พร้อม output จริง และตารางว่า pattern ไหนในแคตาล็อกถูกจับโดยตัวไหน'
+sidebar:
+  order: 4
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+**[The AI Bug Catalog](/typescript/th/reading-typescript/ai-bug-catalog/)** จบด้วยความจริงที่ไม่ค่อยสบายใจ: หนึ่งในสามของ 24 pattern ไม่มีเครื่องมือไหนในคอร์สนี้จับได้เลย บทนี้รันทุกเครื่องมือที่ *จับได้จริง* — บนโค้ดจริง พร้อม output จริงที่ quote ไว้ด้านล่าง — เพื่อให้รู้ชัดว่าแต่ละขั้นของบันไดให้อะไรจริง ๆ แล้วบันไดหมดตรงไหนที่คนต้องอ่านเอง
+
+## ขั้นที่ 1: `tsc --noEmit --strict`
+
+นี่คือพื้นฐานที่ทุกอย่างต่อยอดขึ้นมา รันตรง ๆ กับ sample ที่ self-contained ด้านล่าง (ไม่มี lint config แค่ compiler):
+
+```ts
+interface Settings { retries?: number }
+
+async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+export function handleRequest(id: number): string {
+  saveAuditLog(`request ${id} handled`); // missing await -- floating promise
+  return `response-${id}`;
+}
+
+export function getRetries(settings: Settings): number {
+  return settings.retries || 3; // should be ??
+}
+
+function loadConfigFromUntypedLib(): any {
+  return { port: "3000" };
+}
+
+export function readPort(): number {
+  const config = loadConfigFromUntypedLib();
+  return config.port; // unsafe member access on any
+}
+
+export class Counter {
+  count = 0;
+  increment(): void {
+    this.count++;
+  }
+}
+
+const counter = new Counter();
+export const handler = counter.increment; // unbound method
+
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+export function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle":
+      return Math.PI * shape.radius ** 2;
+    // missing "square" case -- switch-exhaustiveness-check should flag this
+  }
+  return 0;
+}
+```
+
+**Real output:** ไม่มีอะไรเลย — `tsc --strict` exit `0` บนไฟล์นี้ bug สไตล์แคตาล็อกหกตัว (floating promise, `||` แทน `??`, `any` รั่วจาก call ที่ไม่มี type, method reference ที่ไม่ bind, switch ที่ไม่ exhaustive) ทั้งหมดอยู่ในโค้ดที่ compiler มองว่าโอเคเป๊ะ `--strict` จับความขัดแย้งระหว่าง declared type; bug ข้างบนทุกตัวเป็นความผิดพลาดเชิง *พฤติกรรม* ที่ไม่มี declared type ไหนขัดแย้งด้วยเลย
+
+## ขั้นที่ 2: `tsgo` — checker เดียวกัน runtime ต่างกัน
+
+`tsgo` (`@typescript/native-preview`) คือ checker ของ TypeScript ที่ port เป็น native Go แล้ว รันแบบเดียวกัน:
+
+```text
+node_modules/.bin/tsgo --noEmit --strict ...   (flag เหมือน tsc ข้างบนทุกประการ)
+```
+
+บน sample ข้างบน `tsgo` เห็นตรงกับ `tsc` เป๊ะ — `0` error เหมือนขั้นที่ 1 ความตรงกันนี้คาดไว้อยู่แล้ว แต่ควรพูดตรง ๆ เพราะสองตัวนี้ไม่ต่างกันมากเท่าประวัติของมันบอกไว้อีกต่อไป: **ใน version ที่คอร์สนี้ติดตั้ง `tsc` เองก็เป็น native compiler ที่ port เป็น Go แล้ว** (`typescript@7.0.2` ส่ง native binary มาเป็น `tsc` ของมันเลย) และ `tsgo` ก็คือ preview CLI ของการ rewrite ตัวเดียวกันนั้น วัดเวลาบนไฟล์สังเคราะห์ 800 บรรทัด (400 generic function) ทั้งคู่เสร็จในเวลาเท่ากัน **~30–35ms** ซึ่งถูกครอบงำด้วย Node process startup ทั้งหมด ไม่ใช่เวลาตรวจ — ไม่มีช่องว่างความเร็วที่มีความหมายให้สังเกตในสเกลนี้ เพราะแทบไม่มีอะไรให้ตรวจเลย
+
+ความต่างแบบ **10 เท่า** ที่คอร์สนี้อ้างไว้ใน [Why TypeScript](/typescript/th/foundations/why-typescript/) — tsc ของ VS Code เองลดจาก 17.5 วินาทีเหลือ 1.3 วินาที ของ Canva จาก 58 วินาทีเหลือ 4.8 วินาที — เทียบ `tsc` แบบ *classic* ที่เขียนด้วย JavaScript (TypeScript 5.x/6.x) กับ native preview บน codebase จริงขนาดใหญ่หลายไฟล์ ยืนยันแบบเดียวกันที่นี่: `typescript@6.0.3` แบบ classic `tsc` จบไฟล์ 800 บรรทัดเดียวกันใน **38ms** ซึ่งแทบเสมอกับ `tsgo` ที่ 32ms — เพราะแม้แต่ไฟล์เดียวที่ "ใหญ่" ตามมาตรฐานบทนี้ ก็ยังเล็กเกินกว่าจะแยกสอง engine ออกจากกันได้ ช่องว่าง 10 เท่านั้นจริง แต่มันโผล่มาตอนทั้งโปรเจกต์ที่ scale ของ incremental build ไม่ใช่บนไฟล์ `.ts` เดียวเล็ก ๆ — และมันปิดไปแล้วสำหรับโปรเจกต์ไหนก็ตาม (เหมือนโปรเจกต์นี้) ที่ `tsc` เองเป็น TypeScript 7
+
+**ตารางเท่าที่มีตอนนี้:** `tsgo` จับเหมือนกับ `tsc` เป๊ะ บน flag เดียวกัน — มันเปลี่ยนความเร็ว compile บนโปรเจกต์ใหญ่ ไม่ได้เปลี่ยนว่า pattern ไหนใน 24 ตัวถูกจับ
+
+## ขั้นที่ 3: `typescript-eslint` typed rule
+
+compiler อย่างเดียวพลาด bug ไปหกตัวใน sample ข้างบน นี่คือช่องว่างพอดีที่ typed rule ของ `typescript-eslint` ปิดได้ — แต่มันต้องการข้อมูล type จริงจาก program ที่มี `tsconfig` รองรับ ซึ่งเป็นเหตุผลที่มันมีอยู่เป็นแค่ typed rule set ต่างหาก แยกจาก rule ที่ไม่ typed ใช้แค่ syntax ที่ starter config ส่วนใหญ่ติดตั้งมาให้ repo ของคอร์สนี้ไม่ได้ติดตั้ง `typescript-eslint` เลย (เพราะเล็งไปที่ TypeScript 7.0.2 ซึ่ง `typescript-eslint@8.70.1` ยังไม่รองรับ — ดู note ด้านล่าง) การรันด้านล่างใช้การติดตั้งแยกใน scratch ที่ pin ไว้กับ `typescript@6.0.3` ตรงตามที่ตัวเครื่องมือเองพิมพ์แนะนำเมื่อเจอ TS 7 ("run typescript-eslint using the TS 6 API"):
+
+```text
+$ node_modules/.bin/eslint lintdemo/self_contained.ts --no-config-lookup
+typescript-eslint does not support TS 7.0.
+Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
+```
+
+**Flat config ที่ใช้** (`eslint.config.mjs` หกตัวจาก rule ที่คอร์สนี้ตั้งชื่อไว้ บวก `no-unsafe-*` family ที่เกี่ยวข้องใกล้ ๆ):
+
+```text
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config({
+  files: ['lintdemo/**/*.ts'],
+  languageOptions: {
+    parserOptions: { project: './lintdemo/tsconfig.json', tsconfigRootDir: import.meta.dirname },
+  },
+  extends: [...tseslint.configs.recommendedTypeChecked],
+  rules: {
+    '@typescript-eslint/no-floating-promises': 'error',
+    '@typescript-eslint/no-misused-promises': 'error',
+    '@typescript-eslint/no-unsafe-assignment': 'error',
+    '@typescript-eslint/no-unsafe-member-access': 'error',
+    '@typescript-eslint/no-explicit-any': 'error',
+    '@typescript-eslint/switch-exhaustiveness-check': 'error',
+    '@typescript-eslint/consistent-type-imports': 'error',
+    '@typescript-eslint/unbound-method': 'error',
+    '@typescript-eslint/prefer-nullish-coalescing': 'error',
+  },
+});
+```
+
+**Real output** รันกับ sample เดียวกับขั้นที่ 1 ตรง ๆ:
+
+```text
+  9:3   error  Promises must be awaited, end with a call to .catch, end with a call to
+               .then with a rejection handler or be explicitly marked as ignored with
+               the `void` operator                             @typescript-eslint/no-floating-promises
+ 14:27  error  Prefer using nullish coalescing operator (`??`) instead of a logical
+               or (`||`), as it is a safer operator             @typescript-eslint/prefer-nullish-coalescing
+ 17:38  error  Unexpected any. Specify a different type          @typescript-eslint/no-explicit-any
+ 22:9   error  Unsafe assignment of an `any` value               @typescript-eslint/no-unsafe-assignment
+ 23:3   error  Unsafe return of a value of type `any`            @typescript-eslint/no-unsafe-return
+ 23:17  error  Unsafe member access .port on an `any` value      @typescript-eslint/no-unsafe-member-access
+ 34:24  error  A method that is not declared with `this: void`
+               may cause unintentional scoping of `this` when
+               separated from its object.                        @typescript-eslint/unbound-method
+ 41:11  error  Switch is not exhaustive. Cases not matched:
+               "square"                                          @typescript-eslint/switch-exhaustiveness-check
+
+✖ 8 problems (8 errors, 0 warnings)
+```
+
+bug ทั้งหกที่ `tsc --strict` พลาดโผล่ที่นี่ครบ บวก diagnostic เพิ่มจาก `no-unsafe-*` ที่ได้มาฟรีจากการแพร่ของ `any` อีกสอง rule ที่คอร์สนี้ตั้งชื่อไว้ — `no-misused-promises` (`Promise` ที่คืนจาก callback ของ `Array.prototype.forEach` ซึ่งไม่สนใจมัน) กับ `consistent-type-imports` (value-style import ของชื่อที่ใช้เป็น type อย่างเดียว) — ก็ยิงแบบเดียวกันบนโค้ดที่มี shape นั้นจริง ๆ มันไม่มี output ข้างบนแค่เพราะ sample ที่ตัดมาไม่มี shape นั้นเท่านั้นเอง
+
+## ขั้นที่ 4: `expectTypeOf` (vitest / `expect-type`)
+
+ทุกเครื่องมือที่ผ่านมาตรวจ *ค่า* `expectTypeOf` ตรวจ *type เอง* — มีประโยชน์พอดีกับกฎ "claim ระดับ type ต้องพิสูจน์" ที่คอร์สนี้ยึดมาตั้งแต่ Phase 1: utility type ตัวหนึ่ง resolve เป็นสิ่งที่ผู้เขียนเชื่อจริงหรือเปล่า?
+
+```ts
+// @skip-verify vitest typecheck test, not a plain tsc fence -- real output quoted below
+import { test, expectTypeOf } from "vitest";
+
+type MyNonNullable<T> = T & {};
+
+test("MyNonNullable strips null and undefined (passes)", () => {
+  expectTypeOf<MyNonNullable<string | null | undefined>>().toEqualTypeOf<string>();
+});
+
+test("MyNonNullable does NOT turn into number (fails on purpose)", () => {
+  expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>();
+});
+```
+
+**Real output** (`vitest --run --typecheck`):
+
+```text
+ ❯  TS  typetest/nonNullable.test-d.ts (2 tests | 1 failed)
+   × MyNonNullable does NOT turn into number (fails on purpose)
+
+FAIL typetest/nonNullable.test-d.ts:9 > MyNonNullable does NOT turn into number (fails on purpose)
+TypeCheckError: Type 'number' does not satisfy the constraint '"Expected number, Actual string"'.
+  10|   expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>();
+
+Test Files  1 failed (1)
+     Tests  1 failed | 1 passed (2)
+```
+
+test แรกผ่านแบบเงียบ ๆ; test ที่สอง — ตั้งใจเขียนให้ผิด เพื่อพิสูจน์ว่า check นี้ตรวจจริง — พังด้วย message ที่บอกตรง ๆ ว่าคาดหวังอะไรกับได้อะไรจริง นี่คือเครื่องมือเดียวในบทนี้ที่พังได้เพราะ *type* ผิด แม้ทุกค่าในโปรแกรมจะทำงานถูกต้องสมบูรณ์ก็ตาม
+
+## ขั้นที่ 5: `@arethetypeswrong/cli` บน package ที่ build แล้ว
+
+`attw` ตรวจ output ที่ publish จริงของ package — `package.json`, `exports`, และไฟล์ `.d.ts`/`.js` ที่ tarball จาก `npm pack` จะส่งออกไป — ในมุมที่ resolver ของ *consumer* มองเห็น ไม่ใช่หน้าตาของ source tree
+
+```json
+{
+  "name": "attw-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+**Real output** (`attw --pack` บน tarball ที่ pack แล้ว):
+
+```text
+attw-demo v1.0.0
+
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and
+some bundlers. CommonJS consumers will need to use a dynamic import.
+
+┌───────────────────┬──────────────────────────────┐
+│                   │ "attw-demo"                   │
+├───────────────────┼──────────────────────────────┤
+│ node10            │ 🟢                            │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS) │ ⚠️ ESM (dynamic import only)  │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM) │ 🟢 (ESM)                      │
+├───────────────────┼──────────────────────────────┤
+│ bundler           │ 🟢                            │
+└───────────────────┴──────────────────────────────┘
+```
+
+package นี้ไม่เคยประกาศ `require` condition เลย แล้ว `main` ก็ชี้ไปที่ไฟล์ ESM — `attw` จับจากภายนอกได้พอดีว่านี่คือ dual-package hazard แบบที่ compile ผ่านสมบูรณ์แต่พังเฉพาะตอน consumer ใช้ bundler หรือ `require()` เท่านั้น หลาย เดือนหลัง publish
+
+## ขั้นที่ 6: `knip` unused exports
+
+```text
+Unused exports (1)
+formatUserVerbose  function  format.ts:8:17
+```
+
+`knip` ตาม import ทุกตัวเริ่มจาก entry point ที่ประกาศไว้ แล้วเจอ exported function หนึ่งตัวที่ไม่มีใคร import เลย — สัญญาณเดียวกัน แต่ทั่วไปกว่า ที่แคตาล็อกของโมดูลนี้ใช้กับ pattern 17 (interface ที่มี implementer เดียว): export ที่ถูกใช้จากที่เดียว หรือไม่ถูกใช้เลย ควรไปดูอีกที แม้ `knip` จะไม่บอกว่า *ทำไม* abstraction นั้นไม่จำเป็น บอกแค่ว่ามันไม่มีใครอ้างถึง
+
+## ขั้นที่ 7: `tsc --extendedDiagnostics`
+
+```text
+Files:              89
+Lines:           59924
+Identifiers:     55831
+Symbols:         35922
+Types:            3941
+Parse time:     0.013s
+Bind time:      0.005s
+Check time:     0.002s
+Emit time:      0.000s
+Total time:     0.020s
+```
+
+ตัวนี้ไม่จับ bug — มันบอกว่า *เวลาของ compiler เองไปอยู่ที่ไหน* ซึ่งเป็นสิ่งที่อธิบายจริง ๆ ว่าทำไม `tsc` ถึงช้า: parse vs. bind vs. check vs. emit ตัวเลข `Types`/`Instantiations` ที่พองขึ้นเรื่อย ๆ บนโปรเจกต์จริง (ไม่ใช่ sample เล็ก ๆ นี้) คือจุดแรกที่ควรดูเมื่อโค้ดระดับ type (recursive conditional, union ใหญ่ ๆ) เริ่มทำให้ CI ช้า
+
+## pattern ไหนในแคตาล็อกถูกจับโดยขั้นไหน
+
+| # | Pattern | ขั้นที่จับได้ |
+|---|---|---|
+| 1 | `as` บน `JSON.parse` | ไม่มี |
+| 2 | `any` รั่วจาก library | `typescript-eslint` `no-unsafe-member-access` |
+| 3 | `!` บนค่าจาก API | `typescript-eslint` `no-non-null-assertion` (จับที่มี `!` อยู่ ไม่ได้จับว่า bug จริง) |
+| 4 | `@ts-ignore` แทนการแก้จริง | `typescript-eslint` `ban-ts-comment`; `tsc` ทันทีที่ลบ comment ออก |
+| 5 | `Record<string, any>` แทน schema | ไม่มี (`no-explicit-any` จับ `any` ไม่ได้จับ typo ที่มันปล่อยผ่าน) |
+| 6 | `catch (e) { e.message }` | `tsc` โดยตรง (`TS18046`) |
+| 7 | optional + `if (x)` มอง `0` ว่าหายไป | ไม่มี |
+| 8 | `\|\|` แทน `??` | `typescript-eslint` `prefer-nullish-coalescing` |
+| 9 | `readonly` ตื้น | ไม่มีสำหรับ `Readonly<T>` ธรรมดา; `tsc` จับได้เฉพาะเมื่อเขียน `DeepReadonly<T>` เอง |
+| 10 | object ที่ mutable แชร์เป็น default export | ไม่มี |
+| 11 | ลืม `await` (floating promise) | `typescript-eslint` `no-floating-promises` |
+| 12 | `Promise.all` บน array ที่ widen | `tsc` โดยตรง (`TS2339` แบบ reactive) |
+| 13 | switch exhaustive ไม่มี `never` check | `typescript-eslint` `switch-exhaustiveness-check` (จับโดยตรง ไม่ต้องเขียน `never` check เอง); `tsc` อย่างเดียวจับได้ก็ต่อเมื่อมี `never` check ที่เขียนเองอยู่แล้ว |
+| 14 | `this` หลุดใน callback | `typescript-eslint` `unbound-method` |
+| 15 | `Array<Dog>` เข้า `Array<Animal>` | ไม่มี |
+| 16 | type predicate ที่โกหก | ไม่มี |
+| 17 | interface + generic ใช้ครั้งเดียว | `knip` (ทางอ้อม — export ที่ไม่ถูกอ้าง/ถูกอ้างที่เดียว) |
+| 18 | `Omit` บน union | ไม่มี |
+| 19 | recursive type ลึกเกิน | `tsc` โดยตรง (`TS2589`) |
+| 20 | `enum` ใต้ erasable syntax | ไม่มีผ่าน `tsc`/`eslint` — รันไฟล์จริงเท่านั้น |
+| 21 | parameter property ใต้ strip-types | ไม่มีผ่าน `tsc`/`eslint` — รันไฟล์จริงเท่านั้น |
+| 22 | `const enum` reverse mapping | `tsc` โดยตรง (`TS2476`) |
+| 23 | `import` แทน `import type` | `tsc` (`TS1484` ต้องเปิด flag); `typescript-eslint` `consistent-type-imports` (จับล่วงหน้า) |
+| 24 | `Object.keys(obj).forEach` | `tsc` โดยตรง (`TS7053`) |
+
+## คำสั่งเดียวรันบันไดทั้งหมด
+
+สำหรับโปรเจกต์จริงที่ติดตั้งเครื่องมือเหล่านี้เป็น dev dependency ครบ:
+
+```text
+npx tsc --noEmit --strict && npx eslint . --max-warnings 0 && npx vitest run --typecheck && npx knip
+```
+
+รัน `npx attw --pack` แยกต่างหาก เฉพาะ package ที่ publish จริงเท่านั้น — มันตรวจ tarball ที่ build แล้ว ไม่ใช่ source
+
+## Mental Model
+
+```text
+เจ็ดขั้น แต่ละขั้นจับสิ่งที่ขั้นก่อนหน้าพลาด:
+
+1. tsc --strict          -> ความขัดแย้งระหว่าง declared type
+2. tsgo                  -> ความขัดแย้งเดียวกัน ที่ความเร็วระดับโปรเจกต์ใหญ่ (พอ tsc เองเป็น native แล้ว ช่องว่างปิด)
+3. typed eslint rule      -> การใช้ค่าที่ type ถูกต้องแล้วผิดเชิงพฤติกรรม (floating promise, any, ||, this ไม่ bind, switch ไม่ exhaustive)
+4. expectTypeOf           -> TYPE resolve ตรงกับที่ผู้เขียนเชื่อหรือเปล่า ไม่เกี่ยวกับค่า runtime เลย
+5. attw                   -> exports ของ package ที่ publish resolve ตามที่ package.json อ้างจริงหรือเปล่า
+6. knip                   -> export/dependency ที่ไม่มีอะไรในโปรเจกต์อ้างถึงแล้ว
+7. --extendedDiagnostics  -> เวลาของ compiler เองไปอยู่ที่ไหน บน build ที่ช้าจริง
+
+หนึ่งในสามของแคตาล็อกรอดทุกขั้น -- ช่องว่างนั้นคือสิ่งที่โมดูลที่เหลือฝึกให้อ่านด้วยตา
+```
+
+## Trade-offs
+
+| ได้อะไร | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| รัน `tsc --strict` อย่างเดียว | เร็ว ไม่ต้องมี dependency เพิ่ม จับทุกความขัดแย้งระหว่าง declared type | พลาดทุก bug เชิงพฤติกรรมที่บทนี้แสดง -- หกตัวในไฟล์เล็ก ๆ ไฟล์เดียว |
+| เพิ่ม typed rule ของ `typescript-eslint` | ปิดช่องว่างเชิงพฤติกรรมที่ `tsc` เหลือไว้ส่วนใหญ่ | ต้องมี program ที่มี `tsconfig` เต็มรูปแบบถึงจะรันได้ (ช้ากว่า lint แบบ syntax อย่างเดียว); ณ version TypeScript ของคอร์สนี้ ต้องติดตั้ง TS 6 แยกต่างหาก |
+| เพิ่ม `expectTypeOf` type test | ขั้นเดียวที่พังได้เพราะ *type* ผิด แม้ runtime จะทำงานสมบูรณ์ | มีไฟล์ test เพิ่มให้เขียนและดูแล นอกเหนือจาก runtime test ปกติ |
+| เพิ่ม `attw`/`knip` | จับปัญหา packaging กับ export ที่ตายแล้ว ที่มองไม่เห็นจากใน source tree | มีประโยชน์แค่กับ package ที่ publish (`attw`) หรือโปรเจกต์ที่มี entry point ชัดเจน (`knip`) — นอกนั้น noisy หรือไม่มีความหมาย |
+| ต่อทุกตัวเข้า CI | ใกล้เคียงที่สุดที่คอร์สนี้ทำได้กับ "ตรวจทุกอย่างที่เครื่องมือตรวจได้" | ยังเหลือหนึ่งในสามของแคตาล็อกที่ไม่ถูกจับ -- เครื่องมือแค่ทำให้แคบลง ไม่เคยแทนการอ่าน |
+
+## Common Misconceptions
+
+- **"`tsc --strict` ผ่าน แปลว่าโค้ดปลอดภัย"** bug หกตัวใน sample file ของบทนี้เองพิสูจน์ตรงข้าม — `--strict` ตัดแค่ความขัดแย้งระหว่าง declared type ไม่เคยตัดความผิดพลาดเชิงพฤติกรรมที่ค่าซึ่ง type ถูกต้องก็ยังก่อได้
+- **"`tsgo` เร็วกว่า `tsc` 10 เท่าเสมอ"** จริงสำหรับ `tsc` แบบ classic ที่เขียนด้วย JS บนโปรเจกต์ใหญ่ — ไม่จริงที่นี่ ที่ `tsc` ของคอร์สนี้เป็น native compiler อยู่แล้ว และสังเกตไม่ได้เลยบนไฟล์เล็ก ๆ ไฟล์เดียว
+- **"typed rule ของ `typescript-eslint` เป็นแค่เวอร์ชันเข้มกว่าของ default ที่ไม่ typed"** มันเป็นคนละ category กันเลย — rule ที่ไม่ typed เห็นแค่ syntax; typed rule เห็น type จริงที่ resolve อยู่หลัง syntax นั้น ซึ่งเป็นเหตุผลที่ `no-floating-promises` ต้องการ `tsconfig` ไม่ใช่แค่ parser
+- **"ถ้าทุกเครื่องมือในบันไดนี้ผ่านหมด โค้ดถูกต้อง"** หนึ่งในสามของแคตาล็อก AI bug ถูกออกแบบมาให้รอดทุกขั้นในนี้โดยเจตนา — เครื่องมือผ่านหมดแค่ทำให้สิ่งที่ต้องอ่านต่อแคบลง ไม่ได้รับรองความถูกต้อง
+
+<Callout title="สรุปหนึ่งบรรทัด">
+เจ็ดขั้น แต่ละขั้นจับ failure mode คนละแบบ — tsc จับความขัดแย้งของ type, typed eslint จับการใช้งานผิดเชิงพฤติกรรม, expectTypeOf จับ type ที่ผิด, attw/knip จับปัญหา packaging — และหนึ่งในสามของแคตาล็อกที่รอดทุกขั้น
+</Callout>
+
+export const quizVerificationTools = [
+  {
+    q: "sample file ในขั้นที่ 1 ของบทนี้มี bug สไตล์แคตาล็อกหกตัว (floating promise, || แทน ??, any รั่ว, method ไม่ bind, switch ไม่ exhaustive) แต่ `tsc --strict` รายงานว่าไม่มี error เลย ทำไม?",
+    options: [
+      "tsc มี bug ควรรายงานสิ่งเหล่านี้",
+      "--strict ตรวจแค่ความขัดแย้งระหว่าง declared type เท่านั้น; ไม่มี bug ทั้งหกตัวนี้ทำให้ declared type ไหนขัดแย้งกับการใช้งานเลย -- มันเป็นความผิดพลาดเชิงพฤติกรรมที่ type checker อย่างเดียวมองไม่เห็น",
+      "sample file ต้องมี syntax error ที่ทำให้ตรวจไม่ครบ",
+      "--strict ใช้ได้แค่กับไฟล์ที่ไม่มี async function"
+    ],
+    answer: 1,
+    explain: "bug ทั้งหกตัวเป็นโค้ดที่ type ถูกต้องสมบูรณ์ -- Promise ก็ยังเป็น Promise ไม่ว่าจะ await หรือไม่, || ใช้ได้กับทุก type, any ได้รับอนุญาตให้ข้ามการตรวจอย่างชัดเจน, method reference ที่ไม่ bind ก็ยังเป็น function value ที่ valid, switch ที่ไม่ exhaustive แต่ไม่มี return path ที่ขาดก็ compile ผ่านสบาย ๆ ไม่มีอันไหนขัดแย้งกับ declared type เลย"
+  },
+  {
+    q: "บทนี้วัด tsc 7.0.2 กับ tsgo เสร็จไฟล์ 800 บรรทัดในเวลาที่แทบเท่ากัน (~30-35ms) ในขณะที่ตัวเลขจาก blog อย่างเป็นทางการที่คอร์สนี้อ้างที่อื่นบอกว่า native compiler เร็วขึ้นราว 10 เท่า ทั้งสองอย่างจริงพร้อมกันได้ยังไง?",
+    options: [
+      "ตัวเลขจาก blog ผิด",
+      "ช่องว่าง 10 เท่าของ blog เทียบ tsc แบบ CLASSIC ที่เขียนด้วย JavaScript (TS 5.x/6.x) กับ native preview บนโปรเจกต์จริงขนาดใหญ่; tsc ของคอร์สนี้เองเป็น native compiler ของ TypeScript 7 อยู่แล้ว เลย tsc กับ tsgo ตอนนี้ใกล้เคียงกันมาก แล้วไฟล์เดียวเล็ก ๆ ก็เล็กเกินกว่าจะเห็นช่องว่างเวลาตรวจเลย",
+      "tsgo เร็วขึ้นแค่กับไฟล์ที่ต่ำกว่า 100 บรรทัดเท่านั้น",
+      "การวัดในบทนี้ใช้ flag ต่างจาก benchmark ของ blog"
+    ],
+    answer: 1,
+    explain: "TypeScript 7 ทำให้ tsc เองเป็น native compiler ที่ port เป็น Go แล้ว -- คือตัว rewrite เดียวกับที่ tsgo เคย preview ตัวเลข 10 เท่าอธิบาย tsc แบบ classic เทียบกับ rewrite นั้นบน codebase จริงหลายไฟล์ขนาดใหญ่; พอ tsc ของโปรเจกต์เป็นตัว rewrite เอง แล้วไฟล์ทดสอบก็เล็กพอที่ Node startup จะครอบงำ ก็ไม่เหลือช่องว่างให้สังเกตแล้ว"
+  },
+  {
+    q: "ทำไม rule `no-floating-promises` ของ `typescript-eslint` ต้องการ config แบบ typed (program ที่มี tsconfig จริงรองรับ) ในขณะที่ rule อย่าง `no-var` ไม่ต้องการ?",
+    options: [
+      "จริง ๆ แล้ว no-floating-promises ก็ไม่ typed เหมือนกัน -- นี่เป็นคำถามหลอก",
+      "การตัดสินว่า expression หนึ่งเป็น call ที่คืน Promise หรือเปล่า ต้องรู้ type ที่ resolve จริงของ expression นั้น -- ข้อมูลที่มีแค่ program ที่ตรวจ type จริงเท่านั้นถึงจะมี ต่างจาก no-var ที่เป็นแค่ syntax check ว่าตัวแปรถูกประกาศยังไง",
+      "typed rule เป็นแค่คำการตลาด ไม่มีความต่างด้าน functionality จริง",
+      "no-floating-promises ใช้ได้แค่กับ async function เท่านั้น ไม่ใช้กับ function อื่นที่คืน Promise"
+    ],
+    answer: 1,
+    explain: "no-var บังคับได้แค่ดู token `var` ใน source -- ไม่ต้องมีข้อมูล type เลย no-floating-promises ต้องตัดสินว่า TYPE ของ expression หนึ่งเป็น Promise หรือเปล่า ซึ่งต้องใช้กลไกตรวจ type เต็มรูปแบบที่ config แบบ typed ของ ESLint เชื่อมเข้ามาผ่าน tsconfig จริง"
+  },
+  {
+    q: "`expectTypeOf<MyNonNullable<string | null>>().toEqualTypeOf<number>()` พังด้วย TypeCheckError จริงใน vitest run ของบทนี้ มันพิสูจน์ว่า program state แบบไหนผิด ที่ runtime test ปกติพิสูจน์ไม่ได้?",
+    options: [
+      "ว่าค่า runtime ตัวหนึ่งเป็น undefined",
+      "ว่า TYPE MyNonNullable<string | null> resolve เป็นอะไรที่ไม่ใช่ number -- ข้อเท็จจริงที่ผิดได้แม้ในโปรแกรมที่ทุกค่า runtime ทำงานถูกต้องสมบูรณ์",
+      "ว่าโค้ด throw exception ตอนรัน",
+      "ว่า function นี้ไม่เคยถูกเรียกที่ไหนในโปรเจกต์เลย"
+    ],
+    answer: 1,
+    explain: "expectTypeOf ทำงานที่ระดับ type ล้วน ๆ ไม่เกี่ยวกับการรันจริงเลย -- มันจับได้ว่า utility type ตัวหนึ่ง resolve เป็น type ที่ผิด แม้ในโปรแกรมที่รันได้สมบูรณ์แบบ ซึ่งตรงกับคำกล่าวอ้างแบบ ('type นี้ resolve เป็น X') ที่คอร์สนี้บังคับให้พิสูจน์มาตั้งแต่ Phase 1"
+  },
+  {
+    q: "output ของ attw ในบทนี้แสดง warning จริงสำหรับ package ที่ exports map มีแค่ condition `import` (ไม่มี `require`) ในขณะที่ `main` ชี้ไปที่ไฟล์ ESM warning นี้ทำนายว่าอะไรจะพัง แล้วพังสำหรับใคร?",
+    options: [
+      "package จะติดตั้งไม่ได้เลยสำหรับทุกคน",
+      "consumer ที่เป็น CommonJS เรียก require('attw-demo') จะพัง (หรือต้องใช้ dynamic import แทน) -- ความล้มเหลวที่ไม่เคยโผล่จากภายใน source tree ของ package เองหรือ test ที่เป็น ESM ล้วนของมันเอง",
+      "build script ของ package เองจะพัง",
+      "TypeScript จะปฏิเสธ compile source code ของ package"
+    ],
+    answer: 1,
+    explain: "attw ตรวจ package ในมุมที่ resolver ของ consumer ภายนอกมองเห็น การเรียก require() ที่ resolve ไปเจอไฟล์ ESM เป็น Node error จริงเฉพาะกับ consumer ที่เป็น CommonJS -- มองไม่เห็นเลยถ้า package ถูก test แค่ด้วยการ import แบบ ESM ซึ่งเป็นปัญหา packaging-boundary พอดีที่ attw มีไว้จับก่อนที่ consumer จะเจอเองหลาย เดือนหลัง publish"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/verification-tools" questions={quizVerificationTools} />
+
+<ProgressTracker client:visible id="reading-typescript/verification-tools" />

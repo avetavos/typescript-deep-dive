@@ -1,0 +1,303 @@
+---
+title: 'Worked review 3: a generic cache and repository'
+description: 'รีวิวเต็มของ generic cache กับ repository สไตล์ AI — backing store ที่ type เป็น any, ช่อง variance, generic interface ที่ไม่จำเป็น, และ floating promise พร้อม diagnostic จริงและ version ที่แก้แล้ว'
+sidebar:
+  order: 7
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+domain ของรีวิวนี้คือ generics ในสามระดับความมั่นใจที่ต่างกัน: generic class ที่ internal ของตัวเองยอมแพ้กับ type safety แบบเงียบ ๆ, generic parameter ที่ใช้ถูกต้องแต่ถูก variance เจาะ, และ generic interface ที่ไม่จำเป็นต้องมีอยู่เลยตั้งแต่แรก
+
+## โปรแกรม
+
+<TSPlayground code={wr3BuggyCode} id="wr3-buggy" title="Review this before reading further" />
+
+export const wr3BuggyCode = `// @run
+interface UserRecord { id: number; name: string }
+
+class DataCache<T> {
+  private store: Record<string, any> = {}; // BUG 1: any -- the cache's own storage loses precision immediately
+  set(key: string, value: T): void {
+    this.store[key] = value;
+  }
+  get(key: string): T | undefined {
+    return this.store[key];
+  }
+}
+
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function seedWithCat(cache: DataCache<Animal>): void {
+  cache.set("pet", new Cat());
+}
+
+const dogCache = new DataCache<Dog>();
+dogCache.set("pet", new Dog());
+seedWithCat(dogCache); // BUG 2: variance -- DataCache<Dog> accepted where DataCache<Animal> is expected
+
+interface Repository<T> {
+  findById(id: number): T | undefined;
+}
+
+class UserCacheRepository implements Repository<UserRecord> { // BUG 3: single implementer, generic used once
+  private cache = new DataCache<UserRecord>();
+  save(id: number, record: UserRecord): void {
+    this.cache.set(String(id), record);
+  }
+  findById(id: number): UserRecord | undefined {
+    return this.cache.get(String(id));
+  }
+}
+
+async function persistToRemote(entry: UserRecord): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log("persisted:", entry.name);
+}
+
+function cacheAndPersist(repo: UserCacheRepository, entry: UserRecord): void {
+  repo.save(entry.id, entry);
+  persistToRemote(entry); // BUG 4: floating promise -- never awaited
+}
+
+const repo = new UserCacheRepository();
+cacheAndPersist(repo, { id: 1, name: "Ada" });
+console.log(repo.findById(1));
+
+const pet = dogCache.get("pet");
+console.log(pet?.bark()); // pet is actually a Cat now -- crashes
+`.trim();
+
+กด **Check types**: `tsc --strict` รายงาน **ไม่มี error เลย** กด **Run**:
+
+```text
+{ id: 1, name: 'Ada' }
+TypeError: pet?.bark is not a function
+    at ...
+```
+
+`repo.findById(1)` ทำงานถูกต้อง — ไม่มีอะไรผิดใน logic ของ repository เองเลย การ crash เกิดจากสิ่งที่ถูกยอมให้เข้าไปใน cache instance *อีกตัว* ทั้งหมด และ `persisted: Ada` ไม่เคยพิมพ์เลย ด้วยเหตุผลเดียวกับที่ log line ในเบื้องหลังหายไปใน [Worked Review 1](/typescript/th/reading-typescript/worked-review-1/): process จบก่อนที่ timer ของ promise ที่ถูกทิ้งไว้จะยิง
+
+## ลองหา bug ก่อนอ่านต่อ
+
+สองในนี้เป็น generics-specific ในแบบที่รีวิวก่อน ๆ ไม่มี ลองบอกให้ครบทั้งสี่ก่อนเปิดเฉลย
+
+<details>
+<summary>Bug 1 — บรรทัด 4, `private store: Record<string, any>`</summary>
+
+**Symptom:** public API ของ `DataCache<T>` (`set(key, value: T)`, `get(key): T | undefined`) แม่นยำสมบูรณ์ — แต่ storage *ภายใน* ของมันยอมแพ้กับ `T` ไปเลย type ค่าที่เก็บทุกตัวเป็น `any`
+
+**Evidence:** ไม่มีอะไร crash จากบรรทัดนี้อย่างเดียวในโปรแกรมนี้ แต่มันคือสิ่งที่ทำให้ Bug 2 มองไม่เห็นจากข้างใน: `this.store[key] = value` ไม่เคยบ่นไม่ว่าจะมีอะไรถูก assign จริง เพราะ `any` รับทุกอย่างแบบเงียบ ๆ
+
+**Fix:** container ที่เป็น generic จริง — `Map<string, T>` — เก็บ `T` แม่นยำตลอดสาย:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+class DataCache<T> {
+  private store: Map<string, T> = new Map();
+  set(key: string, value: T): void {
+    this.store.set(key, value);
+  }
+  get(key: string): T | undefined {
+    return this.store.get(key);
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — บรรทัด 24, `seedWithCat(dogCache)`</summary>
+
+**Symptom:** `dogCache` เป็น `DataCache<Dog>`; `seedWithCat` คาดหวัง `DataCache<Animal>` TypeScript ยอมให้ assign ได้ เพราะ `set(key: string, value: T): void` เขียนด้วย **method-shorthand syntax** ซึ่งถูกตรวจแบบ bivariant — ช่องเดียวกันเป๊ะกับที่บท variance ของคอร์สนี้แสดงบน `Stack<T>` ที่เขียนเอง
+
+**Evidence:** การ crash จริง `seedWithCat` push `Cat` เข้าไปในสิ่งที่ข้างใต้คือ `dogCache` เอง; `dogCache.get("pet")` ทีหลังคืน `Cat` นั้น type เป็น `Dog` แล้ว `.bark()` ก็ throw
+
+**Fix:** ถ้า function แค่ต้องการ *อ่าน* จาก generic container ให้รับ type ที่ mutate ผ่านไม่ได้ — ตรงนี้คือ `ReadonlyMap<string, Animal>` — เพื่อไม่ให้มี `set` ให้ใช้ประโยชน์ตั้งแต่แรก:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function describeAnimals(cache: ReadonlyMap<string, Animal>): void {
+  for (const animal of cache.values()) console.log(animal.speak());
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — บรรทัด 26, `interface Repository<T>` ที่มี implementer เดียว</summary>
+
+**Symptom:** `Repository<T>` ถูก implement โดย class เดียวตลอดกาล และ `T` โผล่แค่ตำแหน่งเดียว (return type ของ `findById`) มันเพิ่ม declaration ตัวที่สองที่ผู้อ่านต้องเปิดเพื่อเข้าใจ `UserCacheRepository` โดยไม่ได้ polymorphism อะไรจริงเลย
+
+**Evidence:** ไม่มี crash ไม่มี diagnostic — ต้นทุนเป็นเชิงโครงสร้างล้วน ๆ ไม่มีอะไรในโปรแกรมนี้เคยรับ `Repository<T>` ที่ `UserCacheRepository` แบบ concrete ทำหน้าที่แทนไม่ได้ดีเท่ากันเลย
+
+**Fix:** ลบ interface ทิ้ง เก็บแค่ class ที่ concrete
+
+</details>
+
+<details>
+<summary>Bug 4 — บรรทัด 45, `persistToRemote(entry);` ไม่มี `await`</summary>
+
+**Symptom:** call ที่ persist ไปยัง remote ถูกยิงแล้วลืม `cacheAndPersist` return ทันที ก่อนที่ `persistToRemote` จะทำอะไรที่สังเกตได้เลย
+
+**Evidence:** `persisted: Ada` ไม่เคยพิมพ์ใน real output — process crash ที่ bug variance ของ cache ที่ไม่เกี่ยวข้องกันก่อนที่ timer 5ms ที่ถูกทิ้งไว้จะมีโอกาสยิง
+
+**Fix:** `await` มัน แล้วทำให้ `cacheAndPersist` เองเป็น `async`:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+async function cacheAndPersist(repo: UserRepository, entry: UserRecord): Promise<void> {
+  repo.save(entry.id, entry);
+  await persistToRemote(entry);
+}
+```
+
+</details>
+
+## Version ที่แก้แล้ว
+
+```ts
+// @run
+interface UserRecord { id: number; name: string }
+
+class DataCache<T> {
+  private store: Map<string, T> = new Map();
+  set(key: string, value: T): void {
+    this.store.set(key, value);
+  }
+  get(key: string): T | undefined {
+    return this.store.get(key);
+  }
+}
+
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function describeAnimals(cache: ReadonlyMap<string, Animal>): void {
+  for (const animal of cache.values()) console.log(animal.speak());
+}
+
+const dogCache = new DataCache<Dog>();
+dogCache.set("pet", new Dog());
+// describeAnimals only reads, and only accepts a read-only view -- no way to sneak a Cat in
+
+class UserRepository {
+  private cache = new DataCache<UserRecord>();
+  save(id: number, record: UserRecord): void {
+    this.cache.set(String(id), record);
+  }
+  findById(id: number): UserRecord | undefined {
+    return this.cache.get(String(id));
+  }
+}
+
+async function persistToRemote(entry: UserRecord): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log("persisted:", entry.name);
+}
+
+async function cacheAndPersist(repo: UserRepository, entry: UserRecord): Promise<void> {
+  repo.save(entry.id, entry);
+  await persistToRemote(entry);
+}
+
+async function main(): Promise<void> {
+  const repo = new UserRepository();
+  await cacheAndPersist(repo, { id: 1, name: "Ada" });
+  console.log(repo.findById(1));
+
+  const pet = dogCache.get("pet");
+  console.log(pet?.bark());
+}
+
+main();
+```
+
+**Real output:**
+
+```text
+persisted: Ada
+{ id: 1, name: 'Ada' }
+woof
+```
+
+ทุกบรรทัดรันตามลำดับ `persisted: Ada` พิมพ์ก่อนที่อะไรจะมารออีก และ `dogCache` ยังเก็บ `Dog` จริงอยู่ — ไม่มีทางแอบใส่ `Cat` เข้าไปได้เลย
+
+## เครื่องมือจับอะไรได้บ้าง
+
+`tsc --strict`: **ไม่มี error เลย** ทั้งสอง version
+
+typed rule ของ `typescript-eslint` รันกับ version ที่มี bug:
+
+```text
+4:33   error  Unexpected any. Specify a different type              @typescript-eslint/no-explicit-any
+9:5    error  Unsafe return of a value of type `any`                 @typescript-eslint/no-unsafe-return
+46:3   error  Promises must be awaited, end with a call to .catch, end with a call to .then
+               with a rejection handler or be explicitly marked as ignored with the `void`
+               operator                                               @typescript-eslint/no-floating-promises
+
+✖ 3 problems (3 errors, 0 warnings)
+```
+
+Bug 1 (`any`) กับ Bug 4 (floating promise) ถูกจับโดยตรง Bug 2 กับ 3 ไม่ถูกจับ: ช่อง variance เป็น unsoundness แบบตั้งใจและมี document ไว้เดียวกับที่บท [Generic Classes & Interfaces](/typescript/th/generics/generic-classes-and-interfaces/) ของคอร์สนี้แสดงไว้ และไม่มี lint rule ไหนตรวจว่า generic interface คุ้มกับ abstraction ที่ใส่ไปหรือเปล่า — มีแค่รายงาน unused-exports ของ `knip` ที่รันบนโปรเจกต์จริงหลายไฟล์เท่านั้นที่จะบอกใบ้ Bug 3 ได้ โดยแสดงว่า `Repository` ถูกอ้างถึงจากที่เดียว
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`any` ข้างใน cache กับ `await` ที่หายไป ห่างจากการเจอแค่ `eslint --fix` ระดับหนึ่ง; ช่อง variance กับ generic interface ที่ไม่จำเป็นทั้งคู่ compile ผ่านสะอาดและต้องให้คนที่อ่านบท variance ของคอร์สนี้มาแล้วถึงจะเห็นมันได้เลย
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: "public API ของ DataCache<T> (set/get) เป็น generic และแม่นยำเต็มที่ แต่ field `store` ที่เป็น private type เป็น `Record<string, any>` ทำไม detail ภายในนี้ถึงสำคัญ ทั้งที่ผู้เรียกไม่เคยเห็นมันตรง ๆ เลย?",
+    options: [
+      "ไม่สำคัญเลย -- private field ไม่มีผลต่อ type safety ภายนอก",
+      "มันแปลว่าไม่มีอะไรข้างใน body ของ class ถูกตรวจกับ T เลย -- การ assign ของ set ไปที่ store[key] ไม่เคยถูกยืนยัน ซึ่งเป็นสิ่งที่ทำให้ค่าที่ T ผิดหลุดเข้ามาได้โดยไม่มี error",
+      "any ข้างใน private field ถูกแปลงเป็น generic parameter ของ class ให้เองอัตโนมัติ",
+      "สิ่งนี้สำคัญแค่ตอน class ถูก export จาก module เท่านั้น"
+    ],
+    answer: 1,
+    explain: "signature สาธารณะสัญญาว่า T ถูกเคารพ แต่ any ข้างในการ implement แปลว่า compiler ไม่เคยตรวจคำสัญญานั้นจริง ๆ ตรงจุดที่การ assign เกิดขึ้นเลย นี่คือสิ่งที่ทำให้ข้างในของ class เป็นจุดง่าย ๆ ให้ mismatch จริง (อย่าง Bug 2) ซ่อนตัวโดยไม่ถูกตรวจพบ"
+  },
+  {
+    q: "ทำไม TypeScript ถึงยอมให้ `seedWithCat(dogCache)` ที่ `dogCache: DataCache<Dog>` และ `seedWithCat` คาดหวัง `DataCache<Animal>` ทั้งที่ Dog กับ Animal ไม่เกี่ยวกับ Cat เลย?",
+    options: [
+      "TypeScript ทำ runtime check ที่ผ่านเสมอสำหรับ class ที่เกี่ยวข้องกัน",
+      "method set ของ DataCache เขียนด้วย method-shorthand syntax ซึ่ง TypeScript ตรวจแบบ bivariant -- ยอมให้ assign ได้ทั้งสองทิศทาง แม้ว่าการทำแบบนั้นจะทำให้ push Cat เข้าไปในสิ่งที่จริง ๆ เป็น cache สำหรับ Dog เท่านั้นได้",
+      "Dog กับ Cat จริง ๆ แล้วเป็น type เดียวกันในโปรแกรมนี้",
+      "การ assign นี้จริง ๆ ถูกปฏิเสธ -- crash มาจากที่อื่น"
+    ],
+    answer: 1,
+    explain: "method shorthand syntax บน class หรือ interface ถูกตรวจแบบ bivariant เป็นการประนีประนอมที่ตั้งใจและมี document ไว้ -- DataCache<Dog> ได้รับอนุญาตให้ทำหน้าที่แทน DataCache<Animal> ทั้งที่การทำแบบนั้นทำให้ค่าที่ type เป็น Animal (อย่าง Cat) ถูกเขียนเข้าไปในสิ่งที่จริง ๆ เป็น cache สำหรับ Dog เท่านั้นข้างใต้"
+  },
+  {
+    q: "ต้นทุนที่เป็นรูปธรรมและวัดได้ของ `interface Repository<T>` ที่มี implementer เดียวและใช้ T แค่ตำแหน่งเดียวคืออะไร ทั้งที่มันไม่สร้าง compile error หรือ crash เลย?",
+    options: [
+      "ไม่มีต้นทุนจริง -- generic interface เป็น practice ที่ดีเสมอไม่ว่าจะใช้งานยังไง",
+      "ผู้อ่านต้องเปิดและเข้าใจ declaration ตัวที่สอง (interface) เพื่อเข้าใจว่า class ที่ concrete ตัวเดียวทำอะไร โดยไม่ได้ polymorphism จริงเลย -- interface นี้ไม่เคยถูกแทนที่ด้วย implementation อื่นที่ไหนในโปรแกรมเลย",
+      "มันสร้าง performance penalty ตอน runtime ที่วัดได้",
+      "มันทำให้โค้ด compile ไม่ผ่านใต้ noUnusedLocals"
+    ],
+    answer: 1,
+    explain: "ต้นทุนตรงนี้เป็นเชิงโครงสร้างและ cognitive ล้วน ๆ: indirection เพิ่มโดยไม่ได้ reuse payoff เลย นี่คือ pattern แบบที่ไม่มี compile error หรือ lint rule ไหนจับได้โดยตรง -- มีแค่สัญญาณ unused-exports ของ knip (interface ที่ถูกอ้างจากที่เดียว) เท่านั้นที่ใบ้ได้ บนโปรเจกต์จริง"
+  },
+  {
+    q: "ใน version ที่แก้แล้ว ทำไม describeAnimals ถึงรับ `ReadonlyMap<string, Animal>` แทนที่จะเป็น `DataCache<Animal>`?",
+    options: [
+      "ReadonlyMap เป็นแค่ความชอบด้าน style ไม่มีความต่างเชิง functionality",
+      "ReadonlyMap ไม่มี method set เลย เลยไม่มีทางที่ function ซึ่งแค่ต้องการอ่านจะ push ค่าที่ type ผิด (โดยไม่ตั้งใจหรือตั้งใจก็ตาม) เข้าไปในสิ่งที่จริง ๆ เป็น cache ที่เจาะจงกว่าข้างใต้ได้",
+      "ReadonlyMap บังคับให้ทุกค่า readonly แบบ recursive แก้ปัญหา shallow-readonly ไปด้วย",
+      "DataCache<Animal> จะสร้าง compile error ถ้าใช้ตรงนี้"
+    ],
+    answer: 1,
+    explain: "การปิดช่อง variance หมายถึงการเอาความสามารถ mutate ผ่าน reference ที่ type กว้างกว่าออกไปทั้งหมด -- type ที่ไม่มี method set/push เลยไม่มีอะไรให้ bivariant method checking ใช้ประโยชน์ ไม่ว่า covariance หรือ contravariance จะอนุญาตอะไรก็ตาม"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-3" />

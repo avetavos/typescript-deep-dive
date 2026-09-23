@@ -1,0 +1,204 @@
+---
+title: How to read TypeScript you did not write
+description: 'A reading order for unfamiliar TypeScript — read the types first, distrust every `as`/`any`/`!`/`@ts-ignore`, follow the boundaries, follow the promises, count the suppressions.'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+Every earlier module taught you to *write* TypeScript. This module teaches the other half of the job: reading TypeScript someone — or something — else wrote, and deciding whether the types are telling the truth. An AI assistant hands you code that compiles with zero errors, looks exactly like the idiomatic examples you have been studying, and is still wrong. `tsc --strict` reporting no errors is not the same as correct — it only means nothing in the file *contradicts itself*, which a well-placed `as` can guarantee no matter what the code actually does. The four habits below are the order experienced TypeScript reviewers actually read code in, and every later lesson in this module drills one of them.
+
+## Read the types first, and distrust every escape hatch
+
+Before reading a single line of logic, read the signatures: what does each function accept, what does it return, what is optional, what is a union? Then, before trusting any of it, find every place the code tells the checker "trust me" instead of proving it:
+
+- **`as X`** — a type assertion. It does not check anything at runtime; it tells `tsc` to stop checking and believe the annotation. `JSON.parse(raw) as User` compiles whether or not `raw` is actually a `User`.
+- **`any`** — not "unknown," but "stop checking, and stop checking everything downstream too." One `any` at a boundary can erase type safety through several function calls before it hits something that finally crashes.
+- **`!`** — the non-null assertion. It tells the checker "this is never `null`/`undefined` here," with no runtime check backing that claim.
+- **`@ts-ignore`** (and an un-coded `@ts-expect-error`) — silences whatever error was about to appear on the next line, without fixing it or even naming which error it expected.
+
+None of these are inherently wrong — sometimes you really do know more than the checker. The point of reading them first is that each one is a place the *type* and the *reality* are allowed to diverge, and that is exactly where AI-generated code hides its mistakes: the code compiles, so it looks reviewed, but an assertion is a claim, not a proof.
+
+## Follow the boundaries
+
+A boundary is any place data enters your program from somewhere the type system cannot see: `JSON.parse`, `fetch(...).json()`, `process.env`, `localStorage.getItem`, a database driver's row type, a webhook body. TypeScript's type for the boundary function itself is often deliberately weak (`JSON.parse` returns `any`) or simply a promise the runtime does not enforce (a `.d.ts` for an HTTP client claiming a response shape it never validates). Reading a boundary well means asking, for each one:
+
+- Is the value actually validated against the type it is annotated or asserted as, or is the annotation just decoration?
+- If it is `as`-cast, what happens if the real data is missing a field the type promises?
+- Does an optional field (`user?.email`) get used later without a check, past the point where the boundary's own optionality should have been narrowed away?
+
+## Follow the promises
+
+Every `async function` call returns a `Promise`, and TypeScript's type system tracks the *shape* of that promise perfectly while saying nothing about whether anyone actually waits for it:
+
+- Is a promise-returning call missing its `await`? The call still runs, but the caller moves on before it settles — a **floating promise** with no compile error to show for it.
+- Does `Promise.all([...])` operate on a tuple written inline (which keeps each position's own type), or on an array built first and passed by reference (which often widens to a union, quietly losing which position was which)?
+- Is a rejected promise ever caught, or does it surface as an "unhandled rejection" the first time this code path actually fails?
+
+## Count the suppressions
+
+Before judging a file's overall quality, count every `as`, every `any`, every `!`, every `@ts-ignore`/`@ts-expect-error`, and every place a broad type (`Record<string, any>`, `object`) stands in for a real shape. That number is a direct estimate of how much of the file's apparent type safety is real versus asserted. A file with zero suppressions that compiles under `--strict` has actually been checked, end to end. A file with fifteen `as` casts compiled just as cleanly — and proves almost nothing.
+
+<TSPlayground code={readingOrderCode} id="reading-order-demo" title="Zero type errors, one runtime crash" />
+
+export const readingOrderCode = `interface Order { id: number; total: number; customer?: { email: string } }
+
+async function loadOrder(raw: string): Promise<Order> {
+  return JSON.parse(raw) as Order; // boundary: trusts the JSON shape completely
+}
+
+async function billCustomer(raw: string): Promise<void> {
+  const order = await loadOrder(raw);
+  const email = order.customer!.email; // non-null assertion: trusts the field is always there
+  console.log(\`billing \${email} for \${order.total}\`);
+}
+
+billCustomer('{"id": 1, "total": 42}'); // no customer in this payload
+`.trim();
+
+Click **Check types** above: zero errors, on `--strict`. Click **Run**: a `TypeError` on `order.customer!.email`, because the payload genuinely has no `customer`. The `as` at the boundary and the `!` at the point of use are the two places this file was allowed to lie, and both of them did.
+
+## Mental Model
+
+<Mermaid code={`flowchart TD
+  A["Read the code"] --> B["Read every signature -- then find every as / any / ! / @ts-ignore"]
+  B --> C["At every boundary (JSON.parse, fetch, env, storage): is the value actually validated?"]
+  C --> D["Follow every promise: awaited? Promise.all on a tuple or a widened array? rejections caught?"]
+  D --> E["Count the suppressions -- that count estimates how much of the file was really checked"]
+  E --> F["Only now: judge correctness"]`} title="Reading order for TypeScript you did not write" />
+
+```text
+Reading order for TypeScript you did not write:
+
+1. Signatures + escape hatches -> every as / any / ! / @ts-ignore is a place types and reality may diverge
+2. Boundaries                  -> JSON.parse / fetch / env / storage: validated, or just annotated?
+3. Promises                    -> awaited? Promise.all on a tuple, or an array that widened? rejections caught?
+4. Suppression count           -> how much of this file's "0 errors" is proven versus asserted?
+
+A clean `tsc --strict` run answers none of these on its own.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| Reading signatures and escape hatches first | Finds every place the file is allowed to lie before you trust its logic | Requires knowing `as`/`any`/`!`/`@ts-ignore` by sight, not just by definition |
+| Following boundaries explicitly | Catches the gap between "annotated as `User`" and "validated as `User`" | Slower than assuming a `.d.ts` or a cast is accurate |
+| Tracing every promise | Finds floating promises and widened `Promise.all` tuples before they surface as flaky failures | Requires holding async control flow in your head while reading |
+| Counting suppressions | Turns "does this feel safe" into a number you can compare across files or PRs | A raw count has no severity weighting — one `any` at a security boundary outweighs ten stylistic `as const` casts |
+
+## Common Misconceptions
+
+- **"It compiled under `--strict`, so it's correct."** Every pattern in this module's catalog compiles under `--strict` — that is exactly what makes each one dangerous. `--strict` catches contradictions, not assertions.
+- **"`as` and `!` are basically the same as a type annotation."** An annotation (`const x: User = ...`) is still checked against the initializer. `as` and `!` both turn checking *off* for that expression.
+- **"If a human wrote it, it doesn't need this scrutiny; only AI code does."** Every pattern in this module's catalog also appears in human-written TypeScript — AI just produces it at a much higher and more confident-looking volume, with comments that make the suppression look deliberate.
+- **"Reading the return type is reading the function."** A function's declared return type is a claim about its own body, not about what boundary data it trusted to get there.
+
+## Reading AI-generated code
+
+When a reviewer opens an AI-generated diff, this module's order becomes a checklist:
+
+1. Grep the diff for `as `, `any`, `!.`/`!;`/`!)`, `@ts-`, `JSON.parse`, `.json()` — every hit is a place to slow down.
+2. For each hit, ask: is this assertion backed by an actual runtime check nearby, or is it the only thing standing between this line and a crash?
+3. For every `async` function called in the diff, confirm the call site `await`s it (or deliberately doesn't, with a comment saying why).
+4. If the diff's `tsc --strict` output is clean, treat that as "no contradictions," not "no bugs."
+
+<SpotTheBug code={`interface Config { retries?: number; endpoint: string }
+
+function buildRequest(raw: unknown): Config {
+  return raw as Config;
+}
+
+function send(raw: unknown): void {
+  const config = buildRequest(raw);
+  console.log(\`sending to \${config.endpoint.toUpperCase()} with \${config.retries} retries\`);
+}
+
+send({ retries: 3 });`}>
+
+`raw as Config` compiles no matter what `raw` actually is — there is no runtime check here at all, just an assertion. The call `send({ retries: 3 })` passes an object with no `endpoint` field; `config.endpoint` is `undefined`, and `.toUpperCase()` throws `TypeError: Cannot read properties of undefined (reading 'toUpperCase')`. `tsc --strict` reports zero errors on this file — the boundary was never actually validated, only asserted.
+
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Read the types, then distrust every `as`/`any`/`!`/`@ts-ignore`, follow the boundaries and the promises, and count the suppressions — a clean `--strict` run proves the file has no contradictions, never that it is correct.
+</Callout>
+
+export const quizReadingTypescriptIndex = [
+  {
+    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\nWhat does `tsc --strict` report for this file, regardless of what `raw` actually contains?",
+    options: [
+      "An error, because JSON.parse's return type can never be a User",
+      "Zero errors -- `as User` tells the checker to stop verifying the shape of the parsed value",
+      "A warning only, never a hard error",
+      "An error only if raw is typed as something other than string"
+    ],
+    answer: 1,
+    explain: "`as User` is a type assertion: it overrides whatever type JSON.parse actually returns (any) with User, and tsc does not verify that override against runtime data. The file compiles clean no matter what raw contains."
+  },
+  {
+    q: "Why does this module recommend reading a function's escape hatches (`as`/`any`/`!`/`@ts-ignore`) before reading its logic?",
+    options: [
+      "Because TypeScript requires escape hatches to be documented first",
+      "Because each one is a place the type and the actual runtime value are allowed to diverge -- exactly where a compiling-but-wrong program hides its bug",
+      "Because escape hatches always indicate a syntax error nearby",
+      "Because logic is always correct if there are no escape hatches, so checking them first saves time only in the negative case"
+    ],
+    answer: 1,
+    explain: "A type assertion, an any, a non-null assertion, or a suppression comment each turn off checking for one expression. Reading them first tells you exactly which parts of the file's apparent safety are asserted rather than proven, before you spend time trusting the logic around them."
+  },
+  {
+    q: "A reviewer sees `const email = order.customer!.email;` where `customer` is typed `{ email: string } | undefined`. What has the `!` proven about whether `customer` is actually present at runtime?",
+    options: [
+      "It proves customer is always present, because TypeScript inserted a runtime check",
+      "Nothing -- `!` only silences the compiler's complaint; if customer is actually undefined at runtime, this line throws a TypeError with no compile-time warning",
+      "It converts customer to a default empty object if it is undefined",
+      "It causes TypeScript to narrow customer to undefined instead"
+    ],
+    answer: 1,
+    explain: "The non-null assertion operator removes null/undefined from the type as far as the checker is concerned, but inserts no runtime check. If customer is genuinely undefined when this line runs, `.email` throws immediately."
+  },
+  {
+    q: "Why can a promise-returning call that is missing its `await` compile with zero errors?",
+    options: [
+      "TypeScript always requires await on any Promise-returning call, so this cannot happen",
+      "A missing await is a valid expression statement -- the call still returns a Promise (which is simply discarded), and nothing about that is a type contradiction",
+      "TypeScript automatically inserts the missing await during compilation",
+      "This only compiles if the function is declared without a return type"
+    ],
+    answer: 1,
+    explain: "`doSomethingAsync();` without await is a perfectly well-typed expression statement -- its Promise<void> result is just discarded. Nothing in that is a type error, which is exactly why a floating promise produces no compiler warning on its own."
+  },
+  {
+    q: "Two files both report 'npm run verify:fences: 0 failed' -- one has zero `as`/`any`/`!`/`@ts-ignore` in it, the other has fifteen. What does the suppression count add that the clean compile result alone does not?",
+    options: [
+      "Nothing -- a clean compile means both files are equally well-checked",
+      "An estimate of how much of each file's apparent type safety was actually verified by the checker versus asserted by the author, since every suppression is a place checking was turned off for one expression",
+      "The suppression count only matters for files that fail to compile",
+      "Fifteen suppressions always means the code is more thoroughly tested"
+    ],
+    answer: 1,
+    explain: "Both files pass the same compile check, but that check only confirms internal consistency. A high suppression count means large parts of the file were never actually checked against those types -- the count is a direct, if unweighted, measure of how much of the file's safety is real."
+  },
+  {
+    q: "What is the difference between a `.d.ts` boundary annotation being *validated* versus merely *asserted*?",
+    options: [
+      "There is no difference -- both mean the same thing to tsc",
+      "Validated means runtime code actually checks the incoming data's shape before trusting it; asserted means only a type-level claim (like `as` or an unchecked .d.ts) exists, with nothing enforcing it against the real value",
+      "Asserted types are always faster than validated types",
+      "Validation only applies to numbers, never to objects"
+    ],
+    answer: 1,
+    explain: "A validated boundary runs real code -- a type guard, a schema parser -- against the actual incoming value before the rest of the program trusts its shape. An asserted boundary just tells the checker to believe an annotation, with no code anywhere confirming it against reality."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/index" questions={quizReadingTypescriptIndex} />
+
+<ProgressTracker client:visible id="reading-typescript/index" />

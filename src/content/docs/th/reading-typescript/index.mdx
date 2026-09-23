@@ -1,0 +1,204 @@
+---
+title: How to read TypeScript you did not write
+description: 'ลำดับการอ่าน TypeScript ที่ไม่ได้เขียนเอง — อ่าน type ก่อน สงสัยทุก `as`/`any`/`!`/`@ts-ignore` ตาม boundary ตาม promise แล้วนับ suppression'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+ทุกโมดูลก่อนหน้านี้สอนให้คุณ *เขียน* TypeScript โมดูลนี้สอนอีกครึ่งหนึ่งของงาน: อ่าน TypeScript ที่คนอื่น — หรือ AI — เขียนไว้ แล้วตัดสินว่า type ที่เห็นพูดความจริงหรือเปล่า AI assistant จะส่งโค้ดที่ compile ผ่านโดยไม่มี error เลย หน้าตาเหมือนตัวอย่างที่คุณเรียนมาทุกอย่าง แต่ยังผิดอยู่ `tsc --strict` รายงานว่าไม่มี error ไม่เท่ากับว่าโค้ดถูกต้อง — มันแปลว่าไม่มีอะไรในไฟล์ *ขัดแย้งกันเอง* เท่านั้น ซึ่ง `as` ที่วางถูกจุดรับประกันได้เสมอไม่ว่าโค้ดจะทำอะไรจริง ๆ นิสัยสี่ข้อด้านล่างคือลำดับที่ reviewer TypeScript มืออาชีพใช้อ่านโค้ดจริง ๆ และทุกบทถัดไปในโมดูลนี้จะฝึกข้อใดข้อหนึ่งอย่างละเอียด
+
+## อ่าน type ก่อน แล้วสงสัยทุกทางลัด
+
+ก่อนอ่าน logic แม้แต่บรรทัดเดียว ให้อ่าน signature ก่อน: แต่ละ function รับอะไร คืนอะไร อะไร optional อะไรเป็น union จากนั้นก่อนจะเชื่ออะไรทั้งนั้น ให้หาทุกจุดที่โค้ดบอก checker ว่า "เชื่อฉันเถอะ" แทนที่จะพิสูจน์:
+
+- **`as X`** — type assertion ไม่ได้ตรวจอะไรตอน runtime เลย มันบอก `tsc` ให้หยุดตรวจแล้วเชื่อ annotation ตามนั้น `JSON.parse(raw) as User` compile ผ่านไม่ว่า `raw` จะเป็น `User` จริงหรือไม่
+- **`any`** — ไม่ใช่ "unknown" แต่คือ "หยุดตรวจ แล้วหยุดตรวจทุกอย่างที่ต่อจากนี้ด้วย" `any` แค่จุดเดียวตรง boundary สามารถลบ type safety ผ่านหลาย function call ก่อนจะไปชนอะไรบางอย่างที่พังจริง ๆ
+- **`!`** — non-null assertion บอก checker ว่า "ตรงนี้ไม่มีทาง `null`/`undefined`" โดยไม่มี runtime check รองรับคำกล่าวอ้างนั้นเลย
+- **`@ts-ignore`** (และ `@ts-expect-error` ที่ไม่ระบุ code) — ปิดปาก error ที่กำลังจะขึ้นบรรทัดถัดไป โดยไม่ได้แก้อะไรเลย แล้วยังไม่บอกด้วยซ้ำว่าคาดหวัง error อะไร
+
+ทั้งหมดนี้ไม่ได้ผิดในตัวมันเอง — บางทีคุณก็รู้มากกว่า checker จริง ๆ ประเด็นของการอ่านมันก่อนคือแต่ละอันคือจุดที่ *type* กับ *ความเป็นจริง* ได้รับอนุญาตให้ต่างกัน และนั่นคือจุดที่โค้ดที่ AI เขียนซ่อนความผิดพลาดไว้พอดี: โค้ด compile ผ่าน เลยดูเหมือนถูกรีวิวแล้ว แต่ assertion คือคำกล่าวอ้าง ไม่ใช่การพิสูจน์
+
+## ตาม boundary
+
+boundary คือจุดไหนก็ตามที่ข้อมูลเข้ามาในโปรแกรมจากที่ที่ type system มองไม่เห็น: `JSON.parse`, `fetch(...).json()`, `process.env`, `localStorage.getItem`, row type จาก database driver, webhook body type ของ function ที่เป็น boundary เองมักถูกออกแบบให้อ่อนโดยตั้งใจ (`JSON.parse` คืน `any`) หรือเป็นแค่คำสัญญาที่ runtime ไม่ได้บังคับ (`.d.ts` ของ HTTP client ที่อ้าง shape ของ response โดยไม่เคย validate จริง) การอ่าน boundary ให้ดีคือถามทุกจุดว่า:
+
+- value ถูก validate กับ type ที่ annotate หรือ assert ไว้จริงหรือไม่ หรือ annotation แค่เป็นของประดับ
+- ถ้าถูก cast ด้วย `as` แล้วถ้าข้อมูลจริงขาด field ที่ type สัญญาไว้จะเกิดอะไรขึ้น
+- optional field (`user?.email`) ถูกใช้ทีหลังโดยไม่เช็คหรือเปล่า ผ่านจุดที่ optionality ของ boundary ควรจะถูก narrow ออกไปแล้ว
+
+## ตาม promise
+
+`async function` ทุกตัวคืน `Promise` และ type system ของ TypeScript track *shape* ของ promise นั้นได้แม่นยำมาก แต่ไม่พูดอะไรเลยว่ามีใคร await มันจริงหรือเปล่า:
+
+- call ที่คืน promise ขาด `await` หรือเปล่า? call ยังรันอยู่ แต่ผู้เรียกเดินหน้าต่อก่อนมันจะ settle — **floating promise** ที่ไม่มี compile error ให้เห็นเลย
+- `Promise.all([...])` ทำงานกับ tuple ที่เขียน inline (ซึ่งเก็บ type ของแต่ละตำแหน่งไว้) หรือกับ array ที่สร้างไว้ก่อนแล้วส่งต่อ (ซึ่งมักจะ widen เป็น union แบบเงียบ ๆ จนแยกไม่ออกว่าตำแหน่งไหนเป็นอะไร)?
+- promise ที่ถูก reject เคยถูก catch หรือเปล่า หรือมันจะโผล่มาเป็น "unhandled rejection" ทันทีที่ code path นี้พังครั้งแรก
+
+## นับ suppression
+
+ก่อนตัดสินคุณภาพโดยรวมของไฟล์ ให้นับทุก `as`, ทุก `any`, ทุก `!`, ทุก `@ts-ignore`/`@ts-expect-error` และทุกจุดที่ type กว้าง ๆ (`Record<string, any>`, `object`) ทำหน้าที่แทน shape จริง ตัวเลขนั้นคือค่าประมาณตรง ๆ ว่า type safety ที่ดูเหมือนมีอยู่จริงในไฟล์นี้เป็นของจริงกี่เปอร์เซ็นต์ เทียบกับที่ถูก assert ไว้เฉย ๆ ไฟล์ที่ไม่มี suppression เลยและ compile ผ่านใต้ `--strict` ถูกตรวจสอบมาแล้วจริง ๆ ตั้งแต่ต้นจนจบ ไฟล์ที่มี `as` สิบห้าจุด compile ผ่านสะอาดพอ ๆ กัน — แต่พิสูจน์อะไรแทบไม่ได้เลย
+
+<TSPlayground code={readingOrderCode} id="reading-order-demo" title="Zero type errors, one runtime crash" />
+
+export const readingOrderCode = `interface Order { id: number; total: number; customer?: { email: string } }
+
+async function loadOrder(raw: string): Promise<Order> {
+  return JSON.parse(raw) as Order; // boundary: trusts the JSON shape completely
+}
+
+async function billCustomer(raw: string): Promise<void> {
+  const order = await loadOrder(raw);
+  const email = order.customer!.email; // non-null assertion: trusts the field is always there
+  console.log(\`billing \${email} for \${order.total}\`);
+}
+
+billCustomer('{"id": 1, "total": 42}'); // no customer in this payload
+`.trim();
+
+กด **Check types** ด้านบน: ไม่มี error เลย บน `--strict` กด **Run**: `TypeError` ที่ `order.customer!.email` เพราะ payload จริง ๆ ไม่มี `customer` เลย `as` ที่ boundary กับ `!` ตรงจุดใช้งานคือสองจุดที่ไฟล์นี้ได้รับอนุญาตให้โกหก และมันก็โกหกทั้งคู่
+
+## Mental Model
+
+<Mermaid code={`flowchart TD
+  A["Read the code"] --> B["Read every signature -- then find every as / any / ! / @ts-ignore"]
+  B --> C["At every boundary (JSON.parse, fetch, env, storage): is the value actually validated?"]
+  C --> D["Follow every promise: awaited? Promise.all on a tuple or a widened array? rejections caught?"]
+  D --> E["Count the suppressions -- that count estimates how much of the file was really checked"]
+  E --> F["Only now: judge correctness"]`} title="ลำดับการอ่าน TypeScript ที่ไม่ได้เขียนเอง" />
+
+```text
+ลำดับการอ่าน TypeScript ที่ไม่ได้เขียนเอง:
+
+1. Signature + escape hatch -> ทุก as / any / ! / @ts-ignore คือจุดที่ type กับความจริงอาจต่างกัน
+2. Boundary                 -> JSON.parse / fetch / env / storage: validate จริง หรือแค่ annotate?
+3. Promise                  -> await แล้วหรือยัง? Promise.all ใช้ tuple หรือ array ที่ widen? catch reject หรือยัง?
+4. นับ suppression          -> "0 error" ของไฟล์นี้พิสูจน์แล้วกี่เปอร์เซ็นต์ กับ assert เอาไว้กี่เปอร์เซ็นต์?
+
+`tsc --strict` ที่ผ่านสะอาด ไม่ได้ตอบคำถามข้อไหนเลยด้วยตัวมันเอง
+```
+
+## Trade-offs
+
+| ได้อะไร | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| อ่าน signature กับ escape hatch ก่อน | หาทุกจุดที่ไฟล์ได้รับอนุญาตให้โกหก ก่อนจะเชื่อ logic ของมัน | ต้องรู้จัก `as`/`any`/`!`/`@ts-ignore` แค่เห็นก็รู้ ไม่ใช่แค่รู้นิยาม |
+| ตาม boundary อย่างชัดเจน | จับช่องว่างระหว่าง "annotate เป็น `User`" กับ "validate เป็น `User`" ได้ | ช้ากว่าการสมมติว่า `.d.ts` หรือ cast นั้นแม่นยำ |
+| ตาม promise ทุกตัว | หา floating promise กับ `Promise.all` ที่ tuple ถูก widen ได้ก่อนมันจะโผล่เป็นความล้มเหลวแบบ flaky | ต้องเก็บ async control flow ไว้ในหัวขณะอ่าน |
+| นับ suppression | เปลี่ยน "รู้สึกว่าปลอดภัย" ให้เป็นตัวเลขที่เทียบข้ามไฟล์หรือข้าม PR ได้ | ตัวเลขดิบไม่มีน้ำหนักความรุนแรง — `any` หนึ่งจุดตรง security boundary สำคัญกว่า `as const` โวหารสิบจุด |
+
+## Common Misconceptions
+
+- **"compile ผ่านใต้ `--strict` แล้ว แปลว่าถูกต้อง"** ทุก pattern ในแคตาล็อกของโมดูลนี้ compile ผ่านใต้ `--strict` ทั้งหมด — นั่นแหละคือสิ่งที่ทำให้แต่ละอันอันตราย `--strict` จับความขัดแย้ง ไม่ใช่จับ assertion
+- **"`as` กับ `!` ก็เหมือน type annotation ธรรมดา"** annotation (`const x: User = ...`) ยังถูกตรวจกับค่าที่ initialize จริง `as` กับ `!` ทั้งคู่ปิดการตรวจสำหรับ expression นั้นไปเลย
+- **"ถ้าคนเขียนเอง ไม่ต้องตรวจละเอียดขนาดนี้ ต้อง AI เท่านั้นถึงต้องตรวจ"** ทุก pattern ในแคตาล็อกของโมดูลนี้เจอในโค้ดที่คนเขียนเองด้วย — AI แค่ผลิตมันในปริมาณที่เยอะกว่ามากและดูมั่นใจกว่ามาก พร้อม comment ที่ทำให้ suppression ดูเหมือนตั้งใจ
+- **"อ่าน return type ก็เท่ากับอ่าน function แล้ว"** return type ที่ประกาศไว้เป็นคำกล่าวอ้างเกี่ยวกับ body ของ function เอง ไม่ใช่เกี่ยวกับว่ามันเชื่อ boundary data อะไรมาถึงจุดนั้น
+
+## Reading AI-generated code
+
+ตอน reviewer เปิด diff ที่ AI เขียน ลำดับของโมดูลนี้กลายเป็น checklist:
+
+1. grep diff หา `as `, `any`, `!.`/`!;`/`!)`, `@ts-`, `JSON.parse`, `.json()` — เจอที่ไหนให้ช้าลงตรงนั้น
+2. สำหรับทุกจุดที่เจอ ถามว่า assertion นี้มี runtime check จริงรองรับอยู่ใกล้ ๆ หรือมันคือสิ่งเดียวที่กันบรรทัดนี้จากการพัง
+3. สำหรับทุก `async` function ที่ถูกเรียกใน diff ตรวจว่าจุดเรียก `await` มันแล้ว (หรือตั้งใจไม่ await โดยมี comment บอกเหตุผล)
+4. ถ้า `tsc --strict` output ของ diff สะอาด ให้ตีความว่า "ไม่มีความขัดแย้ง" ไม่ใช่ "ไม่มี bug"
+
+<SpotTheBug code={`interface Config { retries?: number; endpoint: string }
+
+function buildRequest(raw: unknown): Config {
+  return raw as Config;
+}
+
+function send(raw: unknown): void {
+  const config = buildRequest(raw);
+  console.log(\`sending to \${config.endpoint.toUpperCase()} with \${config.retries} retries\`);
+}
+
+send({ retries: 3 });`}>
+
+`raw as Config` compile ผ่านไม่ว่า `raw` จะเป็นอะไรจริง ๆ ก็ตาม — ไม่มี runtime check เลยตรงนี้ มีแค่ assertion การเรียก `send({ retries: 3 })` ส่ง object ที่ไม่มี field `endpoint` เข้ามา `config.endpoint` เลยเป็น `undefined` แล้ว `.toUpperCase()` ก็ throw `TypeError: Cannot read properties of undefined (reading 'toUpperCase')` `tsc --strict` รายงานว่าไม่มี error เลยบนไฟล์นี้ — boundary ไม่เคยถูก validate จริง มีแต่ assert เอาไว้เฉย ๆ
+
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+อ่าน type ก่อน แล้วสงสัยทุก `as`/`any`/`!`/`@ts-ignore` ตาม boundary กับ promise แล้วนับ suppression — `--strict` ที่ผ่านสะอาดพิสูจน์แค่ว่าไฟล์ไม่ขัดแย้งกันเอง ไม่ได้พิสูจน์ว่ามันถูกต้อง
+</Callout>
+
+export const quizReadingTypescriptIndex = [
+  {
+    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\n`tsc --strict` รายงานอะไรกับไฟล์นี้ ไม่ว่า `raw` จะมีค่าจริงเป็นอะไรก็ตาม?",
+    options: [
+      "error เพราะ JSON.parse ไม่มีทางคืน type User ได้เลย",
+      "ไม่มี error เลย -- `as User` บอก checker ให้หยุดตรวจ shape ของค่าที่ parse ออกมา",
+      "แค่ warning ไม่ใช่ error จริง",
+      "error เฉพาะตอนที่ raw ถูก type เป็นอย่างอื่นที่ไม่ใช่ string"
+    ],
+    answer: 1,
+    explain: "`as User` คือ type assertion: มันเขียนทับ type จริงที่ JSON.parse คืนมา (any) ด้วย User และ tsc ไม่ตรวจ override นั้นกับข้อมูลจริงตอน runtime เลย ไฟล์นี้ compile ผ่านสะอาดไม่ว่า raw จะมีอะไรอยู่ข้างในก็ตาม"
+  },
+  {
+    q: "ทำไมโมดูลนี้ถึงแนะนำให้อ่าน escape hatch ของ function (`as`/`any`/`!`/`@ts-ignore`) ก่อนอ่าน logic?",
+    options: [
+      "เพราะ TypeScript บังคับให้ต้อง document escape hatch ก่อนเสมอ",
+      "เพราะแต่ละอันคือจุดที่ type กับค่าจริงตอน runtime ได้รับอนุญาตให้ต่างกัน ซึ่งเป็นจุดที่โปรแกรมที่ compile ผ่านแต่ผิดมักซ่อน bug ไว้พอดี",
+      "เพราะ escape hatch มักบ่งบอกว่ามี syntax error อยู่ใกล้ ๆ เสมอ",
+      "เพราะถ้าไม่มี escape hatch เลย logic จะถูกต้องเสมอ เลยเช็คก่อนเพื่อประหยัดเวลาเฉพาะกรณีตรงข้าม"
+    ],
+    answer: 1,
+    explain: "type assertion, any, non-null assertion หรือ comment ปิด error แต่ละอันปิดการตรวจของ expression นั้นไปหนึ่งจุด อ่านมันก่อนจะบอกได้ชัดว่าความปลอดภัยที่ดูเหมือนมีอยู่ในไฟล์ ส่วนไหนถูก assert กับส่วนไหนถูกพิสูจน์จริง ก่อนจะเสียเวลาไปเชื่อ logic รอบ ๆ มัน"
+  },
+  {
+    q: "reviewer เห็น `const email = order.customer!.email;` โดย `customer` มี type เป็น `{ email: string } | undefined` `!` พิสูจน์อะไรบ้างว่า `customer` มีอยู่จริงตอน runtime?",
+    options: [
+      "พิสูจน์ว่า customer มีอยู่เสมอ เพราะ TypeScript แทรก runtime check ให้แล้ว",
+      "ไม่พิสูจน์อะไรเลย -- `!` แค่ปิดปาก error ของ compiler เท่านั้น ถ้า customer เป็น undefined จริงตอน runtime บรรทัดนี้จะ throw TypeError โดยไม่มีคำเตือนตอน compile เลย",
+      "มันแปลง customer ให้เป็น object ว่างเปล่า default ถ้า undefined",
+      "มันทำให้ TypeScript narrow customer ให้เป็น undefined แทน"
+    ],
+    answer: 1,
+    explain: "non-null assertion operator เอา null/undefined ออกจาก type เท่าที่ checker มองเห็นเท่านั้น แต่ไม่ได้แทรก runtime check ใด ๆ ถ้า customer เป็น undefined จริงตอนบรรทัดนี้รัน `.email` จะ throw ทันที"
+  },
+  {
+    q: "ทำไม call ที่คืน promise แต่ขาด `await` ถึง compile ผ่านโดยไม่มี error เลย?",
+    options: [
+      "TypeScript บังคับให้ต้องมี await กับ Promise-returning call เสมอ กรณีนี้เกิดขึ้นไม่ได้",
+      "การขาด await ก็เป็น expression statement ที่ valid -- call ยังคืน Promise อยู่ (ซึ่งแค่ถูกทิ้งไป) และไม่มีอะไรในนั้นที่ขัดแย้งกับ type เลย",
+      "TypeScript แทรก await ที่ขาดหายให้เองตอน compile",
+      "จะ compile ผ่านก็ต่อเมื่อ function ถูกประกาศโดยไม่มี return type เท่านั้น"
+    ],
+    answer: 1,
+    explain: "`doSomethingAsync();` โดยไม่มี await เป็น expression statement ที่ type ถูกต้องสมบูรณ์ -- ผลลัพธ์ Promise<void> ของมันแค่ถูกทิ้งไปเฉย ๆ ไม่มีอะไรตรงนั้นเป็น type error เลย ซึ่งเป็นเหตุผลที่ floating promise ไม่สร้าง compiler warning ด้วยตัวมันเอง"
+  },
+  {
+    q: "สองไฟล์รายงาน 'npm run verify:fences: 0 failed' เหมือนกัน -- ไฟล์หนึ่งไม่มี `as`/`any`/`!`/`@ts-ignore` เลย อีกไฟล์มีสิบห้าจุด ตัวเลข suppression เพิ่มอะไรที่ผลลัพธ์ compile สะอาดอย่างเดียวให้ไม่ได้?",
+    options: [
+      "ไม่เพิ่มอะไรเลย -- compile ผ่านสะอาดแปลว่าทั้งสองไฟล์ถูกตรวจมาดีเท่ากัน",
+      "ค่าประมาณว่า type safety ที่ดูเหมือนมีอยู่ในแต่ละไฟล์ ถูก checker ตรวจจริงกี่เปอร์เซ็นต์ เทียบกับที่ผู้เขียน assert เอาไว้เอง เพราะทุก suppression คือจุดที่ปิดการตรวจของ expression หนึ่งจุด",
+      "ตัวเลข suppression มีความหมายเฉพาะไฟล์ที่ compile ไม่ผ่านเท่านั้น",
+      "สิบห้าจุดแปลว่าโค้ดถูกทดสอบมาละเอียดกว่าเสมอ"
+    ],
+    answer: 1,
+    explain: "ทั้งสองไฟล์ผ่าน compile check เดียวกัน แต่ check นั้นยืนยันแค่ความสอดคล้องภายในเท่านั้น suppression count สูงแปลว่าส่วนใหญ่ของไฟล์ไม่เคยถูกตรวจกับ type จริง ๆ เลย -- ตัวเลขนี้คือตัววัดตรง ๆ (แม้จะไม่มีน้ำหนักความรุนแรง) ว่าความปลอดภัยของไฟล์เป็นของจริงแค่ไหน"
+  },
+  {
+    q: "annotation ของ boundary ใน `.d.ts` ที่ถูก *validate* กับที่แค่ถูก *assert* ต่างกันอย่างไร?",
+    options: [
+      "ไม่ต่างกันเลย -- ทั้งสองแบบมีความหมายเดียวกันสำหรับ tsc",
+      "validate หมายถึง runtime code ตรวจ shape ของข้อมูลที่เข้ามาจริง ๆ ก่อนจะเชื่อมัน; assert หมายถึงมีแค่คำกล่าวอ้างระดับ type เท่านั้น (เช่น `as` หรือ .d.ts ที่ไม่ถูกเช็ค) โดยไม่มีอะไรบังคับมันกับค่าจริงเลย",
+      "assert เร็วกว่า validate เสมอ",
+      "validate ใช้ได้แค่กับ number เท่านั้น ใช้กับ object ไม่ได้"
+    ],
+    answer: 1,
+    explain: "boundary ที่ validate จริงจะรัน code จริง -- type guard หรือ schema parser -- กับค่าที่เข้ามาก่อนที่ส่วนอื่นของโปรแกรมจะเชื่อ shape ของมัน boundary ที่ assert แค่บอก checker ให้เชื่อ annotation โดยไม่มี code ไหนยืนยันมันกับความเป็นจริงเลย"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/index" questions={quizReadingTypescriptIndex} />
+
+<ProgressTracker client:visible id="reading-typescript/index" />

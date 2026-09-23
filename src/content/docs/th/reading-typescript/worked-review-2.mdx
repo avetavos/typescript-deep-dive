@@ -1,0 +1,320 @@
+---
+title: 'Worked review 2: form validation and discriminated-union state'
+description: 'รีวิวเต็มของ AI-style form-state reducer — type predicate ที่โกหก switch ที่ดูครบแต่ไม่ครบ bug ของ falsy-default และ non-null assertion พร้อม diagnostic จริงและ version ที่แก้แล้ว'
+sidebar:
+  order: 6
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+domain ของรีวิวนี้คือ state ของ form โมเดลเป็น discriminated union — pattern เดียวกับที่บท narrowing ของคอร์สนี้สอนว่าเป็น pattern *ที่ถูกต้อง* bug ในที่นี้ไม่ได้อยู่ที่การเลือกใช้ discriminated union มันอยู่ที่ความมั่นใจที่ mistake เล็ก ๆ สี่ตัวที่ดูสมเหตุสมผลซ่อนอยู่ข้างในมันได้แค่ไหน
+
+## โปรแกรม
+
+<TSPlayground code={wr2BuggyCode} id="wr2-buggy" title="Review this before reading further" />
+
+export const wr2BuggyCode = `// @run
+interface FormValues { email: string; discountCode?: string; couponValue?: number }
+
+type FormState =
+  | { status: "idle" }
+  | { status: "editing"; values: FormValues }
+  | { status: "submitting"; values: FormValues }
+  | { status: "success"; values: FormValues }
+  | { status: "error"; values: FormValues; message?: string };
+
+function isValidForm(values: unknown): values is FormValues {
+  return true; // BUG 1: type predicate that never actually checks anything
+}
+
+function couponSavings(values: FormValues): number {
+  return values.couponValue || 5; // BUG 2: || -- default promo of 5, but an explicit 0 (opt out) looks like "not set" too
+}
+
+function describeState(state: FormState): string {
+  switch (state.status) {
+    case "idle":
+      return "Fill in the form to continue.";
+    case "editing":
+      return \`Editing, coupon savings: \${couponSavings(state.values)}\`;
+    case "submitting":
+      return "Submitting...";
+    case "success":
+      return "Thanks! Your form was submitted.";
+    // BUG 3: "error" case forgotten -- no default, no never check, no error
+  }
+  return "Unknown state";
+}
+
+function renderErrorBanner(state: FormState): string {
+  if (state.status !== "error") return "";
+  return \`Error: \${state.message!.toUpperCase()}\`; // BUG 4: ! on an optional field
+}
+
+function submitForm(raw: unknown): FormState {
+  if (!isValidForm(raw)) return { status: "idle" };
+  return { status: "submitting", values: raw };
+}
+
+const editingWithZeroCoupon: FormState = {
+  status: "editing",
+  values: { email: "a@b.com", couponValue: 0 },
+};
+console.log(describeState(editingWithZeroCoupon));
+
+const submitted = submitForm({ totallyNotAFormValues: true });
+console.log(describeState(submitted));
+
+const errorState: FormState = { status: "error", values: { email: "a@b.com" } };
+console.log(describeState(errorState));
+console.log(renderErrorBanner(errorState));
+`.trim();
+
+กด **Check types**: `tsc --strict` รายงาน **ไม่มี error เลย** กด **Run**:
+
+```text
+Editing, coupon savings: 5
+Submitting...
+Unknown state
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+    at renderErrorBanner (...)
+```
+
+สี่บรรทัดผิดติดกัน แล้วไม่มีสักบรรทัดที่ดูเหมือน crash จนกว่าจะถึงบรรทัดสุดท้ายที่ crash จริง ๆ
+
+## ลองหา bug ก่อนอ่านต่อ
+
+สองในนี้ถูกระบุตรง ๆ ใน spec ของคอร์สนี้สำหรับรีวิวนี้ อีกสองตัวซ่อนอยู่ตรงหน้าเลย ลองบอกให้ครบทั้งสี่ก่อนเปิดเฉลย
+
+<details>
+<summary>Bug 1 — บรรทัด 10, `isValidForm` return `true` แบบไม่มีเงื่อนไข</summary>
+
+**Symptom:** signature ของ function (`values is FormValues`) สัญญาว่าเช็ค shape แล้ว body ไม่เช็คอะไรเลย
+
+**Evidence:** `submitForm({ totallyNotAFormValues: true })` — object ที่ไม่มี field ไหนของ `FormValues` เลย — ผ่าน `isValidForm` ไปได้อยู่ดี แล้ว `submitForm` ก็คืน `{ status: "submitting", values: raw }` แบบร่าเริงโดย `values` ผิดสมบูรณ์ `describeState` พิมพ์ `"Submitting..."` ให้กับ input ขยะ แทนที่จะปฏิเสธมัน
+
+**Fix:** เช็ค field ที่ predicate อ้างว่าเช็ค:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function isValidForm(values: unknown): values is FormValues {
+  return typeof values === "object" && values !== null
+    && typeof (values as Record<string, unknown>).email === "string";
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — บรรทัด 15, `values.couponValue || 5`</summary>
+
+**Symptom:** user ที่กรอก `0` ตรง ๆ (opt out จาก promo) ถูกปฏิบัติเหมือนกับ user ที่ไม่เคยแตะ field coupon เลย
+
+**Evidence:** `editingWithZeroCoupon` มี `couponValue: 0` — opt-out ตรง ๆ — แล้ว `describeState` รายงาน `"Editing, coupon savings: 5"` ไม่ใช่ `0`
+
+**Fix:** `??` แยก "ไม่ได้ตั้งค่า" ออกจาก "ตั้งเป็นค่า falsy" ได้:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function couponSavings(values: FormValues): number {
+  return values.couponValue ?? 5;
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — บรรทัด 28, case `"error"` หายไปจาก `switch`</summary>
+
+**Symptom:** `describeState` จัดการ 4 ใน 5 variant ของ `FormState`; ตัวที่ห้าตกไปที่ fallback string ที่ hardcode ไว้แบบเงียบ ๆ แทนที่จะเป็น compile error
+
+**Evidence:** `describeState(errorState)` พิมพ์ `"Unknown state"` — `FormState` จริงและ valid สร้าง message ที่ตั้งใจไว้สำหรับสิ่งที่ type system ไม่เคยเห็นมาก่อนเท่านั้น
+
+**Fix:** branch `default` พร้อม exhaustiveness check ที่ type เป็น `never` เปลี่ยน case ที่ลืมในอนาคตให้เป็น compile error แทนที่จะเป็น string ที่ผิด:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function describeState(state: FormState): string {
+  switch (state.status) {
+    // ...
+    case "error":
+      return `Error state: ${state.message ?? "unknown error"}`;
+    default: {
+      const exhaustiveCheck: never = state;
+      return exhaustiveCheck;
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 4 — บรรทัด 34, `state.message!.toUpperCase()`</summary>
+
+**Symptom:** `message` บน variant `"error"` type เป็น `string | undefined` — error state ไม่ได้มี message เสมอไป — และ `!` บอก checker ให้ไม่สนใจสิ่งนั้น
+
+**Evidence:** การ crash จริง `errorState` ถูกสร้างโดยไม่มี `message` เลย `state.message!` เป็น `undefined` แล้ว `.toUpperCase()` throw
+
+**Fix:** fallback ไป default message แทนที่จะ assert ว่ามันมีอยู่:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function renderErrorBanner(state: FormState): string {
+  if (state.status !== "error") return "";
+  return `Error: ${(state.message ?? "unknown error").toUpperCase()}`;
+}
+```
+
+</details>
+
+## Version ที่แก้แล้ว
+
+```ts
+// @run
+interface FormValues { email: string; discountCode?: string; couponValue?: number }
+
+type FormState =
+  | { status: "idle" }
+  | { status: "editing"; values: FormValues }
+  | { status: "submitting"; values: FormValues }
+  | { status: "success"; values: FormValues }
+  | { status: "error"; values: FormValues; message?: string };
+
+function isValidForm(values: unknown): values is FormValues {
+  return typeof values === "object" && values !== null
+    && typeof (values as Record<string, unknown>).email === "string";
+}
+
+function couponSavings(values: FormValues): number {
+  return values.couponValue ?? 5;
+}
+
+function describeState(state: FormState): string {
+  switch (state.status) {
+    case "idle":
+      return "Fill in the form to continue.";
+    case "editing":
+      return `Editing, coupon savings: ${couponSavings(state.values)}`;
+    case "submitting":
+      return "Submitting...";
+    case "success":
+      return "Thanks! Your form was submitted.";
+    case "error":
+      return `Error state: ${state.message ?? "unknown error"}`;
+    default: {
+      const exhaustiveCheck: never = state;
+      return exhaustiveCheck;
+    }
+  }
+}
+
+function renderErrorBanner(state: FormState): string {
+  if (state.status !== "error") return "";
+  return `Error: ${(state.message ?? "unknown error").toUpperCase()}`;
+}
+
+function submitForm(raw: unknown): FormState {
+  if (!isValidForm(raw)) return { status: "idle" };
+  return { status: "submitting", values: raw };
+}
+
+const editingWithZeroCoupon: FormState = {
+  status: "editing",
+  values: { email: "a@b.com", couponValue: 0 },
+};
+console.log(describeState(editingWithZeroCoupon));
+
+const submitted = submitForm({ totallyNotAFormValues: true });
+console.log(describeState(submitted));
+
+const errorState: FormState = { status: "error", values: { email: "a@b.com" } };
+console.log(describeState(errorState));
+console.log(renderErrorBanner(errorState));
+```
+
+**Real output:**
+
+```text
+Editing, coupon savings: 0
+Fill in the form to continue.
+Error state: unknown error
+Error: UNKNOWN ERROR
+```
+
+ทุกบรรทัดถูกต้องแล้ว: coupon `0` ที่ตั้งใจส่งมารอด, input ขยะถูกปฏิเสธกลับไปเป็น `"idle"` อย่างถูกต้อง, และ error state render fallback message จริงแทนที่จะ crash
+
+## เครื่องมือจับอะไรได้บ้าง
+
+`tsc --strict`: **ไม่มี error เลย** ทั้งสอง version
+
+typed rule ของ `typescript-eslint` รันกับ version ที่มี bug:
+
+```text
+16:29  error  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`),
+              as it is a safer operator                          @typescript-eslint/prefer-nullish-coalescing
+20:11  error  Switch is not exhaustive. Cases not matched: "error"  @typescript-eslint/switch-exhaustiveness-check
+36:20  error  Forbidden non-null assertion                       @typescript-eslint/no-non-null-assertion
+
+✖ 4 problems (4 errors, 0 warnings)
+```
+
+สามในสี่ตัว ถูกจับโดยตรง — รวมถึง switch ที่ไม่ exhaustive ซึ่ง `switch-exhaustiveness-check` จับได้ **โดยไม่ต้องมี `never` check ที่เขียนเองเลย** ต่างจากการพึ่ง `tsc` อย่างเดียว bug ตัวเดียวที่ไม่มีเครื่องมือไหนที่นี่จับได้คือ Bug 1: predicate ที่โกหกของ `isValidForm` signature ของ type predicate ถูกเชื่อเต็มร้อย ไม่มีอะไรตรวจว่า body ของมันพิสูจน์สิ่งที่มันกล่าวอ้างจริงหรือเปล่า
+
+<Callout title="สรุปหนึ่งบรรทัด">
+discriminated union กับ switch เป็น shape ที่ถูกต้องสำหรับ state นี้ — แต่มันไม่ได้ช่วยโปรแกรมนี้จาก predicate ที่โกหก, `||` ที่ลบศูนย์ที่ตั้งใจส่งมา, หรือ `!` บน field ที่ไม่เคยรับประกันว่าจะมีอยู่จริง
+</Callout>
+
+export const quizWorkedReview2 = [
+  {
+    q: "`submitForm({ totallyNotAFormValues: true })` คืน `{ status: \"submitting\", values: raw }` ใน version ที่มี bug ทั้งที่ `raw` ไม่มี field ไหนของ FormValues เลย ทำไมถึงเกิดแบบนี้ ทั้งที่ type signature ของ `isValidForm` อ้างว่าเช็คสิ่งนั้นพอดี?",
+    options: [
+      "TypeScript validate ค่ากับ interface FormValues ให้อัตโนมัติทุกครั้งที่ assign",
+      "body ของ isValidForm แค่ `return true;` -- signature ของ function (values is FormValues) เป็นคำกล่าวอ้างที่ checker เชื่อเต็มร้อย แต่ไม่มีอะไรใน body ตรวจ field ไหนเลยจริง ๆ",
+      "raw ถูก validate ไปแล้วที่ไหนสักแห่งก่อนหน้าในโปรแกรม",
+      "submitForm มี bug แยกต่างหากที่ไม่เกี่ยวกับ isValidForm"
+    ],
+    answer: 1,
+    explain: "signature ของ type predicate ที่ผู้ใช้เขียนเองถูกเชื่อโดยไม่มีเงื่อนไข -- checker ไม่เคยตรวจว่า body ของ function พิสูจน์สิ่งที่มันกล่าวอ้างจริงหรือเปล่า return true แบบไม่มีเงื่อนไข narrow ได้มั่นใจพอ ๆ กับ check จริง ซึ่งเป็นเหตุผลที่ไม่มีอะไรจับสิ่งนี้ได้จนกว่าจะอ่าน body หรือรันโค้ดจริง"
+  },
+  {
+    q: "ทำไม `couponSavings({ email: \"a@b.com\", couponValue: 0 })` คืน 5 แทนที่จะเป็น 0 ใน version ที่มี bug?",
+    options: [
+      "0 ไม่ใช่ค่าที่ valid สำหรับ couponValue",
+      "values.couponValue || 5 ตกไปที่ 5 เมื่อ couponValue เป็นค่า falsy ใด ๆ และ 0 ก็เป็น falsy -- || ไม่มีทางแยก 'opt out ด้วย 0 ตรง ๆ' ออกจาก 'field ไม่เคยถูกตั้งค่าเลย' ได้",
+      "bug นี้เกิดแค่ตอน form status เป็น \"submitting\" เท่านั้น",
+      "couponSavings มี typo ในชื่อ property"
+    ],
+    answer: 1,
+    explain: "|| ปฏิบัติต่อ 0 เหมือนกับ undefined เป๊ะ -- ทั้งคู่กระตุ้น fallback มีแค่ ?? เท่านั้นที่เช็คเฉพาะ null/undefined ซึ่งเป็นเหตุผลที่เปลี่ยนไปใช้ ?? ใน version ที่แก้แล้วทำให้ 0 ที่ตั้งใจส่งมารอดเป็น 0"
+  },
+  {
+    q: "typed rule ของ eslint `switch-exhaustiveness-check` จับ switch ของ `describeState` ที่มี bug ว่า 'ไม่ exhaustive' ได้โดยตรง โดยไม่มี `default: never` check อยู่ในโค้ดเลยสักที่ บอกอะไรเกี่ยวกับ rule นี้เทียบกับการพึ่ง tsc อย่างเดียว?",
+    options: [
+      "rule กับ tsc อย่างเดียวทำงานเหมือนกันเป๊ะ -- ทั้งคู่ต้องมี never check เขียนเองถึงจะจับอะไรได้",
+      "typed rule ของ eslint ตรวจจับ switch ที่ไม่ exhaustive บน union ได้ด้วยตัวมันเอง ในขณะที่ tsc อย่างเดียวจับ case ที่ลืมในอนาคตได้ก็ต่อเมื่อมีคนเขียน default branch ที่ type เป็น never ไว้ด้วยมือแล้วเท่านั้น",
+      "switch-exhaustiveness-check ทำงานได้แค่กับ switch ที่มี case น้อยกว่า 3 เท่านั้น",
+      "rule นี้รันไม่ได้ถ้าไม่มี never check อยู่ก่อนแล้ว"
+    ],
+    answer: 1,
+    explain: "นี่คือความต่างจริงที่ยืนยันแล้ว: switch-exhaustiveness-check ตรวจ switch โดยตรงและจับ case ที่หายไปเทียบกับ variant ทั้งหมดของ union โดยไม่ต้องเขียน never check เอง -- รับประกันได้เข้มกว่า tsc อย่างเดียวที่จะเงียบไว้จนกว่าจะมี default branch ที่ type เป็น never อยู่ในโค้ดแล้วให้มันพังตอน case หายไป"
+  },
+  {
+    q: "ใน version ที่แก้แล้ว `renderErrorBanner` ใช้ `(state.message ?? \"unknown error\").toUpperCase()` แทน `state.message!.toUpperCase()` ความต่างที่เป็นรูปธรรมของสิ่งที่เกิดขึ้นได้ตอน runtime คืออะไร?",
+    options: [
+      "ไม่ต่างจริง -- ทั้งสองแบบให้ผลลัพธ์เหมือนกันทุกกรณี",
+      "version ที่แก้แล้วมี string ที่ defined เสมอให้เรียก .toUpperCase() ได้ แม้ message จะเป็น undefined ก็ตาม เลยไม่มีทาง throw แบบที่ version ! throw เมื่อ message หายไปจริง ๆ",
+      "version ที่แก้แล้วเปลี่ยน type ของ message จาก optional เป็น required",
+      "version ! จริง ๆ แล้วปลอดภัยกว่าเพราะ fail เร็ว"
+    ],
+    answer: 1,
+    explain: "`!` แค่เอา undefined ออกจาก type เท่าที่ checker มองเห็น -- มันไม่แทรก runtime check เลย เรียก .toUpperCase() บน message ที่เป็น undefined จริง ๆ ก็ยัง throw อยู่ดี `?? \"unknown error\"` รับประกันว่ามี string จริงอยู่เสมอก่อนที่ .toUpperCase() จะรัน กำจัดการ crash ไปได้เลย"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-2" questions={quizWorkedReview2} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-2" />

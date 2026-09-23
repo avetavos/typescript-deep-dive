@@ -1,0 +1,303 @@
+---
+title: 'Worked review 3: a generic cache and repository'
+description: 'A full review of an AI-style generic cache and repository — an any-typed backing store, a variance hole, a needless generic interface, and a floating promise, with real diagnostics and a clean fixed version.'
+sidebar:
+  order: 7
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+This review's domain is generics done at three different levels of confidence: a generic class whose own internals quietly give up on type safety, a generic parameter used correctly but exploited by variance, and a generic interface that never needed to exist at all.
+
+## The program
+
+<TSPlayground code={wr3BuggyCode} id="wr3-buggy" title="Review this before reading further" />
+
+export const wr3BuggyCode = `// @run
+interface UserRecord { id: number; name: string }
+
+class DataCache<T> {
+  private store: Record<string, any> = {}; // BUG 1: any -- the cache's own storage loses precision immediately
+  set(key: string, value: T): void {
+    this.store[key] = value;
+  }
+  get(key: string): T | undefined {
+    return this.store[key];
+  }
+}
+
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function seedWithCat(cache: DataCache<Animal>): void {
+  cache.set("pet", new Cat());
+}
+
+const dogCache = new DataCache<Dog>();
+dogCache.set("pet", new Dog());
+seedWithCat(dogCache); // BUG 2: variance -- DataCache<Dog> accepted where DataCache<Animal> is expected
+
+interface Repository<T> {
+  findById(id: number): T | undefined;
+}
+
+class UserCacheRepository implements Repository<UserRecord> { // BUG 3: single implementer, generic used once
+  private cache = new DataCache<UserRecord>();
+  save(id: number, record: UserRecord): void {
+    this.cache.set(String(id), record);
+  }
+  findById(id: number): UserRecord | undefined {
+    return this.cache.get(String(id));
+  }
+}
+
+async function persistToRemote(entry: UserRecord): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log("persisted:", entry.name);
+}
+
+function cacheAndPersist(repo: UserCacheRepository, entry: UserRecord): void {
+  repo.save(entry.id, entry);
+  persistToRemote(entry); // BUG 4: floating promise -- never awaited
+}
+
+const repo = new UserCacheRepository();
+cacheAndPersist(repo, { id: 1, name: "Ada" });
+console.log(repo.findById(1));
+
+const pet = dogCache.get("pet");
+console.log(pet?.bark()); // pet is actually a Cat now -- crashes
+`.trim();
+
+Click **Check types**: `tsc --strict` reports **zero errors**. Click **Run**:
+
+```text
+{ id: 1, name: 'Ada' }
+TypeError: pet?.bark is not a function
+    at ...
+```
+
+`repo.findById(1)` works correctly — nothing about the repository's own logic is wrong. The crash is entirely about what was allowed into a *different* cache instance, and `persisted: Ada` never prints at all, for the same reason a background log line vanished in [Worked Review 1](/typescript/en/reading-typescript/worked-review-1/): the process ends before the abandoned promise's timer fires.
+
+## Find the bugs before reading on
+
+Two of these are generics-specific in a way the earlier reviews weren't; try to name all four before opening the answers.
+
+<details>
+<summary>Bug 1 — line 4, `private store: Record<string, any>`</summary>
+
+**Symptom:** `DataCache<T>`'s own public API (`set(key, value: T)`, `get(key): T | undefined`) is perfectly precise — but its *internal* storage gave up on `T` entirely, typing every stored value as `any`.
+
+**Evidence:** nothing crashes from this line alone in this program, but it is exactly what makes Bug 2 invisible from the inside: `this.store[key] = value` never complains no matter what actually gets assigned, because `any` accepts everything silently.
+
+**Fix:** an actual generic container — `Map<string, T>` — keeps `T` precise all the way through:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+class DataCache<T> {
+  private store: Map<string, T> = new Map();
+  set(key: string, value: T): void {
+    this.store.set(key, value);
+  }
+  get(key: string): T | undefined {
+    return this.store.get(key);
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — line 24, `seedWithCat(dogCache)`</summary>
+
+**Symptom:** `dogCache` is a `DataCache<Dog>`; `seedWithCat` expects a `DataCache<Animal>`. TypeScript allows the assignment, because `set(key: string, value: T): void` is written in **method-shorthand syntax**, which is checked bivariantly — the exact same hole this course's variance lesson demonstrates on a hand-written `Stack<T>`.
+
+**Evidence:** the real crash. `seedWithCat` pushes a `Cat` into what is, underneath, `dogCache` itself; `dogCache.get("pet")` later returns that `Cat`, typed as `Dog`, and `.bark()` throws.
+
+**Fix:** if a function only needs to *read* from a generic container, accept a type that cannot be mutated through — here, a `ReadonlyMap<string, Animal>` — so there is no `set` to exploit in the first place:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+function describeAnimals(cache: ReadonlyMap<string, Animal>): void {
+  for (const animal of cache.values()) console.log(animal.speak());
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — line 26, `interface Repository<T>` with one implementer</summary>
+
+**Symptom:** `Repository<T>` is implemented by exactly one class, ever, and `T` appears in exactly one position (`findById`'s return type). It adds a second declaration a reader has to open to understand `UserCacheRepository`, for zero actual polymorphism.
+
+**Evidence:** no crash, no diagnostic — the cost is purely structural. Nothing in this program ever accepts a `Repository<T>` where a concrete `UserCacheRepository` wouldn't do exactly as well.
+
+**Fix:** delete the interface; keep the concrete class.
+
+</details>
+
+<details>
+<summary>Bug 4 — line 45, `persistToRemote(entry);` with no `await`</summary>
+
+**Symptom:** the remote-persistence call is fired and forgotten; `cacheAndPersist` returns immediately, before `persistToRemote` has done anything observable.
+
+**Evidence:** `persisted: Ada` never printed in the real output — the process crashed on the unrelated cache-variance bug before the abandoned 5ms timer had a chance to fire.
+
+**Fix:** `await` it, and make `cacheAndPersist` itself `async`:
+
+```ts
+// @skip-verify partial snippet, illustrates the fix only -- see the full fixed version below
+async function cacheAndPersist(repo: UserRepository, entry: UserRecord): Promise<void> {
+  repo.save(entry.id, entry);
+  await persistToRemote(entry);
+}
+```
+
+</details>
+
+## The fixed version
+
+```ts
+// @run
+interface UserRecord { id: number; name: string }
+
+class DataCache<T> {
+  private store: Map<string, T> = new Map();
+  set(key: string, value: T): void {
+    this.store.set(key, value);
+  }
+  get(key: string): T | undefined {
+    return this.store.get(key);
+  }
+}
+
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function describeAnimals(cache: ReadonlyMap<string, Animal>): void {
+  for (const animal of cache.values()) console.log(animal.speak());
+}
+
+const dogCache = new DataCache<Dog>();
+dogCache.set("pet", new Dog());
+// describeAnimals only reads, and only accepts a read-only view -- no way to sneak a Cat in
+
+class UserRepository {
+  private cache = new DataCache<UserRecord>();
+  save(id: number, record: UserRecord): void {
+    this.cache.set(String(id), record);
+  }
+  findById(id: number): UserRecord | undefined {
+    return this.cache.get(String(id));
+  }
+}
+
+async function persistToRemote(entry: UserRecord): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  console.log("persisted:", entry.name);
+}
+
+async function cacheAndPersist(repo: UserRepository, entry: UserRecord): Promise<void> {
+  repo.save(entry.id, entry);
+  await persistToRemote(entry);
+}
+
+async function main(): Promise<void> {
+  const repo = new UserRepository();
+  await cacheAndPersist(repo, { id: 1, name: "Ada" });
+  console.log(repo.findById(1));
+
+  const pet = dogCache.get("pet");
+  console.log(pet?.bark());
+}
+
+main();
+```
+
+**Real output:**
+
+```text
+persisted: Ada
+{ id: 1, name: 'Ada' }
+woof
+```
+
+Every line runs in order, `persisted: Ada` prints before anything else waits on it, and `dogCache` still holds a real `Dog` — there was never a way to sneak a `Cat` into it.
+
+## What the tools caught
+
+`tsc --strict`: **zero errors**, on both versions.
+
+`typescript-eslint`'s typed rules, run on the buggy version:
+
+```text
+4:33   error  Unexpected any. Specify a different type              @typescript-eslint/no-explicit-any
+9:5    error  Unsafe return of a value of type `any`                 @typescript-eslint/no-unsafe-return
+46:3   error  Promises must be awaited, end with a call to .catch, end with a call to .then
+               with a rejection handler or be explicitly marked as ignored with the `void`
+               operator                                               @typescript-eslint/no-floating-promises
+
+✖ 3 problems (3 errors, 0 warnings)
+```
+
+Bug 1 (`any`) and Bug 4 (the floating promise) are caught directly. Bugs 2 and 3 are not: the variance hole is the same deliberate, documented unsoundness this course's [Generic Classes & Interfaces](/typescript/en/generics/generic-classes-and-interfaces/) lesson demonstrates, and no lint rule inspects whether a generic interface earns its abstraction — only `knip`'s unused-exports report, run on a real multi-file project, would even hint at Bug 3, by showing `Repository` referenced from exactly one place.
+
+<Callout title="สรุปหนึ่งบรรทัด">
+The `any` inside the cache and the missing `await` are one `eslint --fix` away; the variance hole and the pointless generic interface both compile clean and need a human who has read this course's variance lesson to see them at all.
+</Callout>
+
+export const quizWorkedReview3 = [
+  {
+    q: "DataCache<T>'s public API (set/get) is fully generic and precise, but its private `store` field is typed `Record<string, any>`. Why does this internal detail matter even though callers never see it directly?",
+    options: [
+      "It doesn't matter at all -- private fields have no effect on external type safety",
+      "It means nothing inside the class body itself is checked against T -- set's assignment to store[key] is never verified, which is exactly what lets a value of the wrong T slip in without any error",
+      "any inside a private field is automatically converted to the class's generic parameter",
+      "This only matters if the class is exported from a module"
+    ],
+    answer: 1,
+    explain: "The public signatures promise T is respected, but any inside the implementation means the compiler never actually checks that promise where the assignment happens. This is what makes the class's insides an easy place for a real mismatch (like Bug 2) to hide undetected."
+  },
+  {
+    q: "Why does TypeScript allow `seedWithCat(dogCache)` where `dogCache: DataCache<Dog>` and `seedWithCat` expects `DataCache<Animal>`, given that Dog and Animal are unrelated to Cat?",
+    options: [
+      "TypeScript performs a runtime check that always passes for related classes",
+      "DataCache's set method is written in method-shorthand syntax, which TypeScript checks bivariantly -- allowing the assignment in either direction, even though a Cat could then be pushed into what is really a Dog-only cache",
+      "Dog and Cat are actually the same type in this program",
+      "This assignment is actually rejected -- the crash comes from somewhere else"
+    ],
+    answer: 1,
+    explain: "Method shorthand syntax on a class or interface is checked bivariantly as a deliberate, documented compromise -- DataCache<Dog> is allowed to stand in for DataCache<Animal> despite the fact that doing so lets Animal-typed values (like a Cat) be written into what is really the same underlying Dog-only cache."
+  },
+  {
+    q: "What is the concrete, measurable cost of `interface Repository<T>` having exactly one implementer and using T in exactly one position, given that it produces no compile error and no crash?",
+    options: [
+      "There is no real cost -- generic interfaces are always good practice regardless of usage",
+      "A reader has to open and understand a second declaration (the interface) to understand what one concrete class does, for zero actual polymorphism -- the interface is never substituted with a different implementation anywhere in the program",
+      "It causes a measurable runtime performance penalty",
+      "It makes the code fail to compile under noUnusedLocals"
+    ],
+    answer: 1,
+    explain: "The cost here is purely structural and cognitive: extra indirection with no reuse payoff. This is exactly the kind of pattern no compiler error or lint rule flags directly -- only knip's unused-exports signal (an interface referenced from one place) hints at it, on a real project."
+  },
+  {
+    q: "In the fixed version, why does describeAnimals accept `ReadonlyMap<string, Animal>` instead of `DataCache<Animal>`?",
+    options: [
+      "ReadonlyMap is simply a stylistic preference with no functional difference",
+      "A ReadonlyMap has no set method at all, so there is no way for a function that only needs to read to accidentally (or intentionally) push a wrong-typed value into what is really a more specific cache underneath",
+      "ReadonlyMap forces every value to be read-only recursively, fixing the shallow-readonly problem too",
+      "DataCache<Animal> would cause a compile error if used here"
+    ],
+    answer: 1,
+    explain: "Closing the variance hole means removing the ability to mutate through the wider-typed reference at all -- a type with no set/push method has nothing for bivariant method checking to exploit, regardless of what covariance or contravariance would otherwise allow."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-3" questions={quizWorkedReview3} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-3" />

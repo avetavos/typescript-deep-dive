@@ -1,0 +1,173 @@
+---
+title: The review checklist
+description: 'A one-page, six-group checklist for reviewing TypeScript you did not write — boundaries, nullability, async, generics, erasure, and tooling — each item linked to the lesson that explains it.'
+sidebar:
+  order: 3
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+This is the checklist this module has been building toward: one page, six groups, every item phrased as a question you can actually answer by reading a diff — not a vague reminder to "be careful." Each question links back to the lesson (in this module or an earlier one) that explains exactly why it matters and shows the compiling-but-wrong code it catches.
+
+## Boundaries & assertions
+
+- Every `as`: does it assert a shape that is actually validated somewhere nearby, or is the assertion the only thing standing between this line and a crash? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+- Every `any` — explicit, or leaked from an untyped import's inferred return type: where does it stop, and what crosses that boundary completely unchecked? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+- Every `!`: is the non-null claim backed by a nearby runtime check, or by hope? — **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**
+- Every `@ts-ignore` or un-coded `@ts-expect-error`: what error is it hiding, and does removing it still reproduce that error today? — **[Why TypeScript](/typescript/en/foundations/why-typescript/)**
+- Every `catch (e)`: is `e` narrowed (`instanceof Error`) before `.message`/`.stack` is read? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+- Every `Record<string, any>` or bare `object` standing in for real data: would a concrete interface have caught the typo or shape mismatch this code relies on? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+
+## Nullability & defaults
+
+- Every optional field checked with `if (x)`: does a valid `0`, `""`, or `false` need to be treated differently from "the field is missing"? — **[Narrowing](/typescript/en/everyday-types/narrowing/)**
+- Every `||` used to supply a default: should it be `??`, so an explicit falsy value survives? — **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**
+- Every `Readonly<T>` / `readonly T[]`: does the surrounding code (wrongly) assume the protection reaches nested objects too? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+- Every module-level object literal used as a shared "default": is it ever mutated by a caller instead of copied? — **[Typing APIs & Boundaries](/typescript/en/practical-mastery/typing-apis-and-boundaries/)**
+
+## Async
+
+- Every call to an `async` function or anything else returning a `Promise`: is it `await`ed, `.catch`ed, or explicitly discarded with `void`? — **[Performance & Pitfalls](/typescript/en/practical-mastery/performance-and-pitfalls/)**
+- Every `Promise.all(...)`: is the array passed inline (keeping each position's type), or built in a variable first (which can silently widen to a union)? — **[Performance & Pitfalls](/typescript/en/practical-mastery/performance-and-pitfalls/)**
+- Every `switch`/`if`-chain over a union: is there a `default` branch that assigns the remainder to a `never`-typed variable? — **[Nullability, `never` & Errors](/typescript/en/practical-mastery/nullability-and-never/)**
+- Every method read off an instance and passed elsewhere as a bare reference (`obj.method`, no `.bind`, no arrow): does its body use `this`? — **[`this`, Polymorphism & Binding](/typescript/en/classes-and-oop/this-types-and-polymorphism/)**
+
+## Generics & variance
+
+- Every function parameter typed `T[]`/`Array<T>` that only reads the array: could it be `readonly T[]` instead, closing the covariance-plus-`push` hole? — **[Generic Classes & Interfaces — Variance](/typescript/en/generics/generic-classes-and-interfaces/)**
+- Every hand-written type predicate (`x is T`): does the function body actually check every field the predicate claims, or does it just return `true`? — **[Narrowing](/typescript/en/everyday-types/narrowing/)**
+- Every generic `interface`/`class` with exactly one implementer and a type parameter used in exactly one position: does it earn its abstraction, or is it indirection with no reuse payoff? — **[Generic Functions & Constraints](/typescript/en/generics/generic-functions-and-constraints/)**
+- Every `Omit`/`Pick`/`Exclude` applied to something that might be a union: has it actually been checked to distribute the way the author assumed? — **[The Utility Types](/typescript/en/type-level-programming/utility-types/)**
+- Every deeply recursive conditional type over user-controlled input: has it been checked against the compiler's measured depth limit? — **[Recursive Types](/typescript/en/type-level-programming/recursive-types/)**
+
+## Erasure & config
+
+- Every `enum` (numeric or string): does this codebase's actual runner (`node --experimental-strip-types`, `esbuild`, `swc`) support it, or does it only compile under `tsc`? — **[Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/)**
+- Every parameter property (`constructor(public x: number)`): the same question — does the runtime actually used to run this file support the emit it needs? — **[Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/)**
+- Every `const enum`: is it ever imported across a file or package boundary a single-file transpiler will process alone? — **[Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/)**
+- Every plain `import { X }` where `X` is only ever used as a type: should it be `import type { X }`? — **[`tsconfig` Deep Dive](/typescript/en/compiler-and-tooling/tsconfig-deep/)**
+
+## Tooling
+
+- Has `tsc --noEmit --strict` actually been run on this diff — not just assumed clean because the editor shows no red squiggles? — **[Verification Tools](/typescript/en/reading-typescript/verification-tools/)**
+- Has the **typed** `typescript-eslint` rule set been run, not just the untyped defaults that ship in most starter configs? — **[Verification Tools](/typescript/en/reading-typescript/verification-tools/)**
+- For a published package: does `@arethetypeswrong/cli` report any resolution or `exports` problem? — **[Verification Tools](/typescript/en/reading-typescript/verification-tools/)**
+- Does `knip` report any export this diff should have removed, or any dependency it no longer needs? — **[Verification Tools](/typescript/en/reading-typescript/verification-tools/)**
+
+## The short version
+
+Pin this to the top of a PR template — it is the same checklist, compressed to one line per group:
+
+```text
+[ ] Boundaries   -- every as/any/!/@ts-ignore/catch(e): asserted, or actually checked?
+[ ] Nullability  -- every falsy-check/||/Readonly/shared-default: does 0 survive, is it deep, is it copied?
+[ ] Async        -- every promise call: awaited? Promise.all inline? every union switch: never-checked? every bare method ref: bound?
+[ ] Generics     -- every T[] param: readonly enough? every predicate: really checked? every generic: earning its keep? every Omit/Pick: distributes? every recursion: under the limit?
+[ ] Erasure      -- every enum/parameter property/const enum: does the actual runtime support it? every type-only import: import type?
+[ ] Tooling      -- tsc --strict run? typed eslint run? attw/knip run on a package?
+```
+
+And the single grep that surfaces most of the diff worth slowing down for:
+
+```text
+grep -nE 'as |: any|!\.|!;|!\)|@ts-|JSON\.parse|\.json\(\)|enum |Object\.keys' <changed-files>
+```
+
+## Mental Model
+
+```text
+Six groups, one page:
+
+1. Boundaries & assertions -- every place types and reality are allowed to diverge
+2. Nullability & defaults  -- every place a falsy value or a shared object is easy to mishandle
+3. Async                   -- every place a Promise or a union can be silently mishandled
+4. Generics & variance     -- every place abstraction either earns its keep or introduces unsoundness
+5. Erasure & config        -- every place "compiles" and "runs" can diverge
+6. Tooling                 -- did anything besides your own reading actually check this?
+
+Every question is answerable by reading the diff -- none require running the program first.
+```
+
+## Trade-offs
+
+| What you get | Benefit | Cost |
+|---|---|---|
+| A fixed six-group checklist | Consistent coverage across every reviewer and every PR, not "whatever I remember to check today" | A checklist followed mechanically, without understanding *why* each item matters, becomes a box-ticking exercise |
+| Questions instead of reminders | Each item has a definite yes/no answer readable from the diff | Some questions (variance, distribution, recursion depth) need the linked lesson's background to answer correctly |
+| A one-line-per-group short version | Fast enough to actually paste into a PR template and use every time | Compressed enough to lose the "why" — keep the full version linked nearby |
+| A single grep one-liner | Catches most of the syntactic hot spots in seconds, before reading a single line of logic | A grep hit is not automatically a bug — every hit still needs the judgment the rest of this checklist trains |
+
+## Common Misconceptions
+
+- **"A checklist replaces judgment."** Every item here still requires reading the specific code around it — the checklist tells you *where* to look, not what you will find.
+- **"If the grep finds nothing, the diff is clean."** The grep list catches syntactic patterns; several patterns in this module's catalog (a mutable shared default, a lying type predicate, `Omit` on a union) leave no matching token at all.
+- **"Six groups means six separate passes."** In practice, one read of the diff answers most of these questions at once — the six groups organize what to look for, not how many times to read.
+- **"This checklist is only for AI-generated code."** Every question here applies equally to a human's PR; AI-generated code just produces violations at a higher volume and with more confident-looking comments.
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Six groups, one question each, every answer readable from the diff — boundaries, nullability, async, generics, erasure, and tooling.
+</Callout>
+
+export const quizReviewChecklist = [
+  {
+    q: "Why is each checklist item phrased as a yes/no question (\"is e narrowed before .message is read?\") rather than a general reminder (\"be careful with catch blocks\")?",
+    options: [
+      "Questions are shorter to type than reminders",
+      "A yes/no question has a definite answer readable directly from the diff, while a general reminder gives no way to know whether you actually checked it",
+      "Reminders are only useful for junior developers",
+      "There is no real difference between the two phrasings"
+    ],
+    answer: 1,
+    explain: "A phrased question forces a concrete answer: either e is narrowed nearby, or it is not. A vague reminder like 'be careful' has no pass/fail condition, so a reviewer can feel like they followed it without actually resolving anything."
+  },
+  {
+    q: "```ts\ntype Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };\ntype Bare = Omit<Shape, \"kind\">;\n```\nWhich checklist group's question would catch that `Bare` might not mean what its author intended?",
+    options: [
+      "Async",
+      "Generics & variance -- \"every Omit/Pick/Exclude applied to something that might be a union: has it actually been checked to distribute the way the author assumed?\"",
+      "Tooling",
+      "Erasure & config"
+    ],
+    answer: 1,
+    explain: "This is exactly the Omit-on-a-union trap from the AI bug catalog -- Omit does not distribute over Shape, so Bare silently collapses to {}. The Generics & variance group's question about Omit/Pick/Exclude distribution is written specifically to catch this before it ships."
+  },
+  {
+    q: "A reviewer runs the grep one-liner from this page's short version and gets zero matches on a diff. What can they conclude?",
+    options: [
+      "The diff has no bugs from this module's catalog at all",
+      "Only that the diff has none of the specific syntactic tokens the grep looks for -- several catalog patterns (a shared mutable default export, a lying type predicate, Omit on a union) produce no matching token",
+      "The diff is guaranteed to pass tsc --strict",
+      "The diff needs no further review"
+    ],
+    answer: 1,
+    explain: "The grep is a fast syntactic filter, not a semantic one. A pattern like a mutable object shared as a default export, or a type predicate that always returns true, contains none of as /any/!/@ts-/JSON.parse/.json()/enum /Object.keys -- a clean grep result says nothing about those."
+  },
+  {
+    q: "Why does the checklist separate 'Erasure & config' from 'Boundaries & assertions' as its own group, instead of folding enum/parameter-property/const-enum questions into general type-safety questions?",
+    options: [
+      "There is no meaningful difference; the split is arbitrary",
+      "Erasure questions are about whether *compiles under tsc* and *runs under this project's actual runtime* can diverge -- a completely different failure mode from whether a type accurately describes a value",
+      "Erasure only matters for very large codebases",
+      "tsc always rejects non-erasable syntax, so this group is redundant"
+    ],
+    answer: 1,
+    explain: "An enum or parameter property can compile with zero tsc --strict errors and still fail the moment something other than tsc (node --experimental-strip-types, esbuild, swc) tries to run it -- a gap between 'type-checks' and 'runs' that boundary/assertion questions (about whether a type matches reality) don't address at all."
+  },
+  {
+    q: "The Tooling group asks whether the *typed* typescript-eslint rule set was run, specifically calling out that it's different from 'the untyped defaults that ship in most starter configs.' Why does that distinction matter?",
+    options: [
+      "Typed and untyped rule sets are just two names for the same set of checks",
+      "Untyped rules work on syntax alone and cannot see cross-file type information, so rules like no-floating-promises or no-unsafe-member-access -- which require knowing a value's actual type -- only run under the typed configuration",
+      "The typed rule set is always slower and therefore not worth running",
+      "Untyped rules only apply to JavaScript files, never to TypeScript"
+    ],
+    answer: 1,
+    explain: "typescript-eslint's typed rules (no-floating-promises, no-unsafe-*, and others in this module's catalog) need real type information from a tsconfig-backed program to evaluate -- they simply don't exist as meaningful checks in the untyped, syntax-only configuration most starter templates enable by default."
+  }
+];
+
+<Quiz client:visible id="reading-typescript/review-checklist" questions={quizReviewChecklist} />
+
+<ProgressTracker client:visible id="reading-typescript/review-checklist" />

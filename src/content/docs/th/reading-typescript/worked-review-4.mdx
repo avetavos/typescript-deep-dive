@@ -1,0 +1,307 @@
+---
+title: 'Worked review 4: a library''s tsconfig and package.json'
+description: 'รีวิวเต็มของ tsconfig.json กับ package.json ที่พังของ library เล็ก ๆ — rootDir ที่หายไป, main ที่ชี้ไปหา source, require condition ที่ไม่รองรับ, และ enum ที่ไม่ erasable พิสูจน์ด้วย tsc, attw, และ node จริง'
+sidebar:
+  order: 8
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+
+สามรีวิวแรกเป็นโปรแกรม รีวิวนี้เป็น **config** — `tsconfig.json` กับ `package.json` ของ library เล็ก ๆ ชื่อ `wr4-lib` ที่ export class `Logger` ตัวเดียว bug ของ config ไม่โผล่มาเป็น console output ที่ผิด มันโผล่มาเป็น build ที่ปฏิเสธจะรัน หรือ consumer ที่ `require()` แล้วพังด้วยเหตุผลที่ไม่มีอะไรใน source code อธิบายได้ ทุกความล้มเหลวด้านล่าง quote มาจากการรันจริงใน scratch environment ของคอร์สนี้ — `tsc -p`, `npm pack` + `@arethetypeswrong/cli`, และ consumer จริงที่เรียกทั้ง `require()` กับ `import()`
+
+## Source, `tsconfig.json`, และ `package.json`
+
+```ts
+export enum LogLevel { Info, Warn, Error }
+
+export class Logger {
+  constructor(public readonly level: LogLevel) {}
+  log(message: string): void {
+    console.log(`[${LogLevel[this.level]}] ${message}`);
+  }
+}
+```
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+```json
+{
+  "name": "wr4-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  }
+}
+```
+
+## ลองหา bug ก่อนอ่านต่อ
+
+ไม่มีไฟล์ไหนในสามไฟล์นี้ที่ดูผิดชัดเจนเมื่อดูแยกกัน — นี่คือความรู้สึกจริงของการรีวิว config ลองบอกให้ครบทั้งสี่ bug ก่อนเปิดเฉลย
+
+<details>
+<summary>Bug 1 — `tsconfig.json` ไม่มี `rootDir`</summary>
+
+**Symptom:** `tsc -p tsconfig.json` ปฏิเสธที่จะ build เลย
+
+**Real output:**
+
+```text
+tsconfig.json(7,5): error TS5011: The common source directory of 'tsconfig.json' is
+'./src'. The 'rootDir' setting must be explicitly set to this or another path to
+adjust your output's file layout.
+  Visit https://aka.ms/ts6 for migration information.
+```
+
+**Evidence:** เมื่อตั้ง `outDir` แต่ไม่มี `rootDir` `tsc` ตัดสินใจไม่ได้ว่าจะ mirror `src/index.ts` เข้า `dist/` ยังไงโดยไม่เดา — และ TypeScript 7 เปลี่ยนการเดานั้นให้เป็น hard error แทนที่จะเดาแบบเงียบ ๆ ออกมาเป็น layout `dist/src/index.js` แบบที่ version เก่าเคยทำ
+
+**Fix:** ตั้ง `rootDir` ตรง ๆ:
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+</details>
+
+<details>
+<summary>Bug 2 — `"main": "./src/index.ts"` ชี้ไปที่ source ดิบ</summary>
+
+**Symptom:** field `main` ของ package — entry point แบบดั้งเดิมที่เครื่องมือทุกตัวก่อนยุค `exports` ยังอ่านอยู่ — ชี้ตรงไปที่ TypeScript source ไม่ใช่ไฟล์ที่ build แล้ว
+
+**Evidence:** Node สมัยใหม่เพิกเฉย `main` ทั้งหมดทันทีที่มี `exports` เลย package นี้เจาะจงยัง resolve ถูกต้องสำหรับ `import`/`require` วันนี้ — แต่เครื่องมือไหนก็ตามที่ resolve แบบดั้งเดิม (bundler เก่า, task runner ของ monorepo ที่อ่าน `main` ตรง ๆ, `moduleResolution: "node10"` ของ TypeScript เองสำหรับโปรเจกต์ *consumer*) จะได้รับไฟล์ `.ts` ที่ JavaScript runtime ไหนก็รันตรง ๆ ไม่ได้ ยืนยันตรง ๆ: การรันไฟล์นั้นเป๊ะด้วย TypeScript support ของ Node เองพังทันที (ดู Bug 4) — พอดีกับความล้มเหลวที่ field `main` ที่ชี้ผิดแบบนี้ส่งให้เครื่องมือที่ผิดได้
+
+**Fix:** ชี้ `main` ไปที่ build output จริง:
+
+```json
+"main": "./dist/index.js"
+```
+
+</details>
+
+<details>
+<summary>Bug 3 — `exports` ไม่มี `require` condition แต่ `main` บอกเป็นนัยว่ามี</summary>
+
+**Symptom:** field `main` ในประวัติศาสตร์แปลว่า "นี่คือวิธีที่ CommonJS consumer โหลด package นี้" — แต่ exports map ของ package นี้ไม่มี `require` condition เลย มีแค่ `import`
+
+**Real output** (consumer package จริงใน scratch เรียกทั้งสองแบบ):
+
+```text
+$ node -e "require('wr4-lib')"
+Error [ERR_PACKAGE_PATH_NOT_EXPORTED]: No "exports" main defined in
+.../node_modules/wr4-lib/package.json
+
+$ node --input-type=module -e "import('wr4-lib').then(m => new m.Logger(m.LogLevel.Warn).log('hi'))"
+[Warn] hi
+```
+
+`require()` พังตรง ๆ; dynamic `import()` ทำงานได้ `@arethetypeswrong/cli --pack` ยืนยันช่องว่างเดียวกันจาก shape ที่ publish จริงของ package:
+
+```text
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and
+some bundlers. CommonJS consumers will need to use a dynamic import.
+
+┌───────────────────┬──────────────────────────────┐
+│ node10            │ 🟢                            │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS) │ ⚠️ ESM (dynamic import only)  │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM) │ 🟢 (ESM)                      │
+├───────────────────┼──────────────────────────────┤
+│ bundler           │ 🟢                            │
+└───────────────────┴──────────────────────────────┘
+```
+
+**Fix:** package นี้เป็น ESM-only จริง ๆ Fix ไม่ใช่การปลอมว่ารองรับ CJS ทั้งที่ไม่มี build สำหรับมัน — นั่นต้องมี build target ที่สองจริง (`dist/index.cjs` บวก `.d.cts` declaration อ้างจาก `"require"` condition) Fix ที่ถูกต้องจริง ๆ ตรงนี้คือหยุดบอกเป็นนัยว่ารองรับ CJS ที่ package ไม่เคยมี: พอ `main` ชี้ไปที่ `dist/index.js` ถูกต้องแล้ว (fix ของ Bug 2) package นี้อย่างน้อยก็ *สอดคล้องกัน* ในการเป็น ESM-only แล้ว warning นี้กลายเป็น trade-off ที่มี document ไว้และเข้าใจแล้ว แทนที่จะเป็นผลข้างเคียงจาก field ที่ชี้ผิด เขียนไว้ใน README แทนที่จะปล่อยให้ consumer มาเจอเองตอน production crash ถ้าต้องการ dual CJS/ESM จริง ๆ วิธีแก้มาตรฐานคือการแยก `.d.mts`/`.d.cts` แบบที่บท [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) ของคอร์สนี้ครอบคลุมไว้
+
+</details>
+
+<details>
+<summary>Bug 4 — source ใช้ numeric `enum` กับ parameter property</summary>
+
+**Symptom:** ทั้งคู่ compile ผ่านสมบูรณ์ใต้ `tsc --strict` — นี่คือช่องว่าง erasable-syntax เดียวกับที่ [The AI Bug Catalog](/typescript/th/reading-typescript/ai-bug-catalog/) ของคอร์สนี้ครอบคลุมไว้ (pattern 20 กับ 21)
+
+**Real output** (`node --experimental-strip-types src/index.ts` รันตรงบน source — พอดีกับสิ่งที่ field `main` ที่ชี้ผิดของ Bug 2 ส่งให้เครื่องมือได้):
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+**Fix:** union แบบ `as const` แทน `enum` และ field ตรง ๆ แทน parameter property — ทั้งคู่ erasable ไม่ต้องการ emit อะไรนอกจาก object/class syntax ธรรมดา:
+
+```ts
+export const LogLevel = { Info: "Info", Warn: "Warn", Error: "Error" } as const;
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+export class Logger {
+  readonly level: LogLevel;
+  constructor(level: LogLevel) {
+    this.level = level;
+  }
+  log(message: string): void {
+    console.log(`[${this.level}] ${message}`);
+  }
+}
+```
+
+</details>
+
+## Config ที่แก้แล้ว
+
+```ts
+export const LogLevel = { Info: "Info", Warn: "Warn", Error: "Error" } as const;
+export type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+export class Logger {
+  readonly level: LogLevel;
+  constructor(level: LogLevel) {
+    this.level = level;
+  }
+  log(message: string): void {
+    console.log(`[${this.level}] ${message}`);
+  }
+}
+```
+
+```json
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
+```
+
+```json
+{
+  "name": "wr4-lib",
+  "version": "1.0.0",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  }
+}
+```
+
+**พิสูจน์ real output ตามลำดับ:**
+
+```text
+$ tsc -p tsconfig.json
+(no output -- exit 0)
+
+$ node --experimental-strip-types src/index.ts
+(no output -- parses and runs cleanly, no enum/parameter-property syntax left to reject)
+
+$ node -e "import('wr4-lib').then(m => new m.Logger(m.LogLevel.Warn).log('all good'))"
+[Warn] all good
+```
+
+`tsc -p` ตอนนี้ build ได้โดยไม่ขาด flag ไหนเลย; source เองเป็น syntax แบบ erasable ธรรมดาที่รันเหมือนกันไม่ว่าจะผ่าน `tsc`, strip-types ของ Node, หรือ transform อื่นไหน; และ package resolve กับรันตรงตามที่ exports map สัญญาไว้ทุกอย่าง warning `node16 (from CJS)` จาก `attw` ไม่เปลี่ยน — เพราะ package นี้ไม่รองรับ `require()` จริง ๆ โดยตั้งใจ — แต่มันไม่ถูกขัดแย้งด้วย field `main` ที่บอกเป็นนัยตรงข้ามอีกต่อไป
+
+## เครื่องมือจับอะไรได้บ้าง
+
+| Bug | เครื่องมือ | สัญญาณจริง |
+|---|---|---|
+| 1. `rootDir` หายไป | `tsc -p` โดยตรง | `TS5011` ปฏิเสธ build เลย |
+| 2. `main` ชี้ไปที่ source | ไม่มีเครื่องมือไหนอัตโนมัติ | โผล่มาก็ต่อเมื่อเครื่องมืออื่นพยายาม resolve ผ่าน `main` จริง ๆ |
+| 3. ไม่มี `require` condition | `@arethetypeswrong/cli` โดยตรง; ยืนยันด้วยการเรียก `require()` จริง | warning `CJSResolvesToESM`; `ERR_PACKAGE_PATH_NOT_EXPORTED` |
+| 4. `enum` / parameter property | ไม่มีผ่าน `tsc --strict`; รันไฟล์จริงเท่านั้น | `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` ใต้ `node --experimental-strip-types` |
+
+มีแค่หนึ่งในสี่ตัวนี้ที่เป็น `tsc` error ที่ build เพิกเฉยไม่ได้เลย อีกสามตัวเป็นสิ่งที่โมดูลนี้ฝึกให้เช็คด้วยมือ — หรือด้วย `attw` ซึ่งมีอยู่เพราะไม่มีอะไรในบันไดตัวอื่นมองจากมุมของ consumer เลย
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`tsc -p` จับ `rootDir` ที่หายไปได้ตรง ๆ; field `main` ที่ชี้ไปที่ source, `require` condition ที่หายไป, และ syntax ที่ไม่ erasable ใน library ที่ publish ล้วน compile ผ่านสะอาดและพังก็ต่อเมื่อมีอะไรบางอย่าง — consumer, เครื่องมือที่ชี้ผิด, `attw` — ลองใช้ package ตามที่มันอ้างว่าใช้ได้จริง
+</Callout>
+
+export const quizWorkedReview4 = [
+  {
+    q: "`tsc -p tsconfig.json` พังทันทีด้วย TS5011 บน config เดิม อะไรหายไปจริง ๆ แล้วทำไม TypeScript 7 ถึงมองมันเป็น hard error แทนที่จะเดา?",
+    options: [
+      "option 'declaration' หายไป",
+      "'rootDir' ไม่ได้ตั้งไว้ -- พอมี outDir แต่ไม่มี rootDir ที่ชัดเจน tsc ตัดสินใจไม่ได้ว่าจะ mirror layout ของ source เข้า output directory ยังไง โดยไม่มีข้อสมมติที่ TypeScript 7 ไม่ทำแบบเงียบ ๆ อีกแล้ว",
+      "option 'strict' หายไป",
+      "ไฟล์ tsconfig.json มี syntax JSON ที่ไม่ถูกต้อง"
+    ],
+    answer: 1,
+    explain: "TS5011 ยิงเจาะจงเพราะ outDir บวกกับ source root ที่เป็นไปได้หลายจุดสร้างความกำกวมเรื่อง output layout TypeScript version เก่าเดา (มักได้ dist/src/ ที่ nest แบบน่าแปลกใจ); TypeScript 7 บังคับให้ rootDir ต้องชัดเจนแทน"
+  },
+  {
+    q: "exports map ของ package มีแค่ condition 'import' และ require('wr4-lib') พังด้วย ERR_PACKAGE_PATH_NOT_EXPORTED ทำไมการมี field 'main' ที่ชี้ไปที่ไฟล์จริงถึงไม่ช่วย require() ให้รอด?",
+    options: [
+      "main ถูก Node เพิกเฉยโดยสิ้นเชิงในทุกสถานการณ์",
+      "ทันทีที่ package.json มี field 'exports' อยู่ resolution แบบที่ Node ตระหนักถึง exports จะหยุดอ้างอิง 'main' เป็น fallback เลย -- มีแค่ condition ที่ระบุไว้ใน 'exports' จริง ๆ (ตรงนี้แค่ 'import') เท่านั้นที่ตัดสินว่า resolve เป็นอะไร",
+      "require() ใช้ได้แค่กับ package ที่ publish ก่อนปี 2015 เท่านั้น",
+      "path ของ field main พิมพ์ผิด"
+    ],
+    answer: 1,
+    explain: "การมี 'exports' ทำให้ package เข้าสู่โหมด resolution แบบเข้มงวดที่พึ่ง exports อย่างเดียวสำหรับเครื่องมือที่เข้าใจมัน -- 'main' ถูกอ้างอิงแค่เป็น fallback โดย resolver ที่ไม่รู้จัก 'exports' เลยเท่านั้น เพราะ 'exports' ตรงนี้ไม่มี 'require' condition require() แบบ CJS เลยไม่มีอะไรให้ resolve ไปหา ไม่ว่า 'main' จะบอกว่าอะไร"
+  },
+  {
+    q: "ทั้ง enum และ parameter property ใน source เดิม compile ผ่านโดยไม่มี tsc --strict error เลย แต่ node --experimental-strip-types src/index.ts พังทันที มันพิสูจน์อะไรเกี่ยวกับความสัมพันธ์ระหว่าง 'compile ผ่าน' กับ 'รันได้' สำหรับ syntax แบบนี้?",
+    options: [
+      "tsc มี bug ควรปฏิเสธ syntax แบบนี้",
+      "tsc --strict ตรวจแค่ความถูกต้องของ type เท่านั้น -- มันไม่พูดอะไรเลยว่า runtime ใด ๆ ที่ใช้ transform แบบลบ type จะรัน syntax ของไฟล์ได้หรือเปล่า ซึ่งเป็นคุณสมบัติแยกต่างหากไม่เกี่ยวกับ type เรียกว่า erasability",
+      "node --experimental-strip-types เสียและควรรองรับ enum",
+      "สิ่งนี้เกิดแค่ตอนไฟล์ไม่มี export เท่านั้น"
+    ],
+    answer: 1,
+    explain: "erasable syntax คือว่า construct หนึ่งลบได้แค่ด้วยการลบ type annotation อย่างเดียวหรือเปล่า โดยไม่ต้องสร้างโค้ดใหม่เลย enum กับ parameter property ทั้งคู่ต้องการโค้ดที่ emit จริง (object, การ assign) เครื่องมือที่แค่ลบ type อย่างเดียว -- ไม่ได้ compile เต็มรูปแบบ -- เลยรันมันไม่ได้ ไม่ว่ามันจะผ่านการตรวจ type สะอาดแค่ไหนก็ตาม"
+  },
+  {
+    q: "หลังแก้แล้ว `attw --pack` ยังแสดง warning 'node16 (from CJS): ESM (dynamic import only)' เหมือนเดิม ทำไมตอนนี้ถึงถือว่าเป็นสถานะที่ยอมรับได้และมี document ไว้ แทนที่จะเป็น bug ที่ยังไม่แก้?",
+    options: [
+      "warning นี้เป็น false positive ที่ควรเพิกเฉย",
+      "package นี้เป็น ESM-only จริง ๆ โดยตั้งใจ; bug จริง ๆ คือ 'main' ชี้ไปที่ source ดิบ ซึ่งบอกเป็นนัยถึง packaging ที่ไม่สอดคล้องกัน -- พอ main ชี้ไปที่ build output จริงแล้ว package ก็เป็น ESM-only อย่างซื่อสัตย์และสอดคล้องกัน ซึ่งเป็นทางเลือกที่ valid ตราบใดที่มี document ไว้ ไม่ใช่อุบัติเหตุ",
+      "attw แสดง warning นี้เสมอไม่ว่า config ของ package จะเป็นยังไง",
+      "warning จะหายไปเองเมื่อ package ถูก publish ใหม่"
+    ],
+    answer: 1,
+    explain: "การทำให้ package รองรับ CJS ได้จริงต้องมี build target ที่สองจริง (ไฟล์ .cjs บวก .d.cts declaration) -- อยู่นอกขอบเขตของ fix นี้ ปัญหาจริงที่ถูกแก้คือความขัดแย้งระหว่าง field main ที่บอกเป็นนัยมากกว่าที่ package ส่งมอบจริง package ที่เป็น ESM-only อย่างสอดคล้องกันและบอกไว้ตรง ๆ เป็นทางเลือกที่ valid และพบได้ทั่วไป ไม่ใช่ข้อบกพร่อง"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/worked-review-4" questions={quizWorkedReview4} />
+
+<ProgressTracker client:visible id="reading-typescript/worked-review-4" />

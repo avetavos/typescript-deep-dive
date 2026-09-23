@@ -1,0 +1,1194 @@
+---
+title: The AI bug catalog
+description: '24 bug ที่ AI เขียน TypeScript แล้วเจอบ่อยมาก — โค้ดที่ผิด อาการจริง วิธีแก้ และเครื่องมือ (ถ้ามี) ที่จับได้'
+sidebar:
+  order: 2
+---
+
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+
+ทุก pattern ด้านล่างเขียนให้เหมือน TypeScript ที่ AI assistant เขียนจริง ๆ compile ด้วย `tsc --strict` (TypeScript 7.0.2) แล้ว — จุดไหนที่ bug เป็นอาการตอน runtime ไม่ใช่ diagnostic — รันด้วย `node --experimental-strip-types` แล้ว quote ตรง ๆ ไม่ได้เขียนจากความจำ ทุกหัวข้อจบด้วย **Caught by** บอกว่าเครื่องมือตัวไหนจับได้จริง หรือบอกตรง ๆ ว่าไม่มีอะไรจับเลย
+
+24 pattern นี้จัดกลุ่มเหมือน **[Review Checklist](/typescript/th/reading-typescript/review-checklist/)** ที่ตามมาหลังบทนี้: boundary กับ unsafe cast, nullability กับ falsy check, async กับ control flow, generics กับ variance, erasure กับ config, และ indexing กับ key
+
+<TSPlayground code={floatingPromiseCode} id="catalog-lead-demo" title="Zero type errors, wrong order" />
+
+export const floatingPromiseCode = `async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+function handleRequest(id: number): string {
+  saveAuditLog(\`request \${id} handled\`); // missing await -- a floating promise
+  return \`response-\${id}\`;
+}
+
+console.log(handleRequest(1));
+`.trim();
+
+pattern แรกนี้ควรลองรันเองก่อนอ่านต่อ — playground ด้านบน compile ผ่านโดย **ไม่มี error เลย** ใต้ `--strict` แล้วพิมพ์ `response-1` *ก่อน* `saved: request 1 handled` เพราะ `await` ที่หายไปทำให้ `handleRequest` return ก่อนที่ log call จะ settle ทุกอย่างด้านล่างเป็นกฎเดียวกัน: โค้ดจริง output จริง ไม่มีข้อยกเว้น
+
+## Boundaries & unsafe casts
+
+### 1. `as` บน `JSON.parse`
+
+<TSPlayground code={jsonParseAsCode} id="catalog-1" title="as User compiles; the shape was never checked" />
+
+export const jsonParseAsCode = `interface User { id: number; name: string }
+
+const raw = '{"id": 1}'; // "name" is missing from the actual payload
+const user = JSON.parse(raw) as User;
+console.log(user.name.toUpperCase());
+`.trim();
+
+`JSON.parse` คืน `any`; `as User` เขียนทับด้วย type ที่ checker ไม่เคยตรวจกับค่าที่ parse ออกมาจริงเลย
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+**Fix:** เปลี่ยน assertion เป็น runtime check จริง — เขียน type guard เอง หรือใช้ schema library:
+
+```ts
+interface User { id: number; name: string }
+
+function isUser(value: unknown): value is User {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.id === "number" && typeof v.name === "string";
+}
+
+const raw = '{"id": 1}';
+const parsed: unknown = JSON.parse(raw);
+if (isUser(parsed)) {
+  console.log(parsed.name.toUpperCase());
+} else {
+  console.log("invalid user shape");
+}
+```
+
+**Caught by:** ไม่มีอะไรจับเลย — `as` คือ assertion ไม่ใช่ check ไม่มีเครื่องมือไหนในลิสต์ของคอร์สนี้ตรวจว่า type ที่ assert ไว้ตรงกับ shape จริงตอน runtime หรือเปล่า ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+### 2. `any` รั่วจาก library ที่ไม่มี type
+
+```ts
+// @run
+function loadConfigFromUntypedLib(): any {
+  // stands in for a real untyped JS dependency with no .d.ts -- TypeScript can't check its shape
+  return { port: "3000" };
+}
+
+const config = loadConfigFromUntypedLib();
+const nextPort = config.port + 1; // any -- no error, but config.port is actually a string here
+console.log(nextPort);
+console.log(typeof nextPort);
+```
+
+พอ value ถูก type เป็น `any` ทุก operation บนมัน — property access, arithmetic, assignment ต่อไป — จะไม่ถูกตรวจเลย และความแม่นยำที่หายไปนั้นจะไหลผ่านทุก expression ที่แตะมันด้วย
+
+**Symptom — real output:**
+
+```text
+30001
+string
+```
+
+`"3000" + 1` คือการต่อ string ไม่ใช่บวกเลข — `nextPort` เป็น string `"30001"` ไม่ใช่ number `3001` และ type system ไม่ทันสังเกตเลย
+
+**Fix:** ให้ boundary มี return type จริง แล้ว validate ก่อนเชื่อ:
+
+```ts
+interface LibConfig { port: number }
+
+function loadConfigFromUntypedLib(): LibConfig {
+  const raw: unknown = { port: "3000" };
+  const r = raw as Record<string, unknown>;
+  if (typeof r.port !== "number") throw new Error("expected numeric port");
+  return { port: r.port };
+}
+```
+
+**Caught by:** typed rule `no-unsafe-member-access` ของ `typescript-eslint` โดยตรง — `config.port` คือ member access บนค่าที่ type เป็น `any` ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+### 3. `!` บนค่าจาก API
+
+```ts
+// @run
+interface Session { user?: { name: string } }
+
+function renderGreeting(session: Session): string {
+  return `Hello, ${session.user!.name.toUpperCase()}`;
+}
+
+console.log(renderGreeting({}));
+```
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'name')
+```
+
+**Fix:** เช็ค ไม่ใช่ assert:
+
+```ts
+interface Session { user?: { name: string } }
+
+function renderGreeting(session: Session): string {
+  if (!session.user) return "Hello, guest";
+  return `Hello, ${session.user.name.toUpperCase()}`;
+}
+
+console.log(renderGreeting({}));
+```
+
+**Caught by:** `no-non-null-assertion` ของ `typescript-eslint` โดยตรง — แต่มันแค่จับว่ามี `!` อยู่ ไม่ได้บอกว่าตัวนี้ปลอดภัยหรือเปล่า ดู **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+
+### 4. `@ts-ignore` แทนการแก้จริง
+
+```ts
+// @run
+interface Point { x: number; y: number }
+
+function distance(a: Point, b: Point): number {
+  // @ts-ignore -- suppresses "Property 'z' does not exist on type 'Point'"
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + a.z);
+}
+
+console.log(distance({ x: 0, y: 0 }, { x: 3, y: 4 }));
+```
+
+`@ts-ignore` ปิดปาก error ที่กำลังจะขึ้นบรรทัดถัดไป — ตรงนี้เป็น error จริง: `Point` ไม่มี `z` comment นี้เปลี่ยน compile-time error ให้กลายเป็น `undefined` แบบเงียบ ๆ
+
+**Symptom — real output:**
+
+```text
+NaN
+```
+
+`a.z` เป็น `undefined`; `undefined` บวกกับ number ได้ `NaN` แล้ว `Math.sqrt(NaN)` ก็ได้ `NaN`
+
+**Fix:** ลบทั้ง suppression และการเข้าถึง field ที่ผิด:
+
+```ts
+interface Point { x: number; y: number }
+
+function distance(a: Point, b: Point): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+
+console.log(distance({ x: 0, y: 0 }, { x: 3, y: 4 }));
+```
+
+**Caught by:** `ban-ts-comment` ของ `typescript-eslint` โดยตรง บน comment ปิด error เอง; `tsc` จับ bug จริงทันทีที่ลบ `@ts-ignore` ออก (`error TS2339: Property 'z' does not exist on type 'Point'.`) ดู **[Why TypeScript](/typescript/th/foundations/why-typescript/)**
+
+### 5. `Record<string, any>` แทน schema
+
+```ts
+// @run
+type Flags = Record<string, any>;
+
+function isEnabled(flags: Flags, name: string): boolean {
+  return flags[name];
+}
+
+const flags: Flags = { darkMdoe: true }; // typo -- "darkMdoe" not "darkMode"
+console.log(isEnabled(flags, "darkMode"));
+```
+
+`Record<string, any>` รับ key อะไรก็ได้ สะกดยังไงก็ได้ ค่าอะไรก็ได้ — typo ใน object literal กับการเรียกที่สะกดถูก ทั้งคู่ "ถูกต้อง" เท่ากันในสายตาของ type
+
+**Symptom — real output:**
+
+```text
+undefined
+```
+
+**Fix:** ตั้งชื่อ key จริง:
+
+```ts
+interface FeatureFlags { darkMode: boolean; betaBanner: boolean }
+
+function isEnabled(flags: FeatureFlags, name: keyof FeatureFlags): boolean {
+  return flags[name];
+}
+
+const flags: FeatureFlags = { darkMode: true, betaBanner: false };
+console.log(isEnabled(flags, "darkMode"));
+```
+
+ด้วย `FeatureFlags` key ที่ typo (`darkMdoe`) จะกลายเป็น compile error เอง (`TS2561`/excess property check) และ `isEnabled(flags, "drakMode")` จะพังด้วย `TS2345` บน parameter ที่เป็น `keyof FeatureFlags`
+
+**Caught by:** ไม่มีอะไรจับ bug นี้โดยตรง — `no-explicit-any` ของ `typescript-eslint` จับ `any` ข้างใน `Record` เอง แต่ไม่จับ typo ที่มันปล่อยผ่าน ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+### 6. `catch (e) { e.message }`
+
+```ts
+// @expect-error TS18046
+function parseAmount(input: string): number {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    console.log(e.message);
+    return 0;
+  }
+}
+```
+
+**tsc output — real:**
+
+```text
+error TS18046: 'e' is of type 'unknown'.
+```
+
+ตั้งแต่มี `useUnknownInCatchVariables` (ส่วนหนึ่งของกลุ่ม `strict`) ค่าที่ catch มา type เป็น `unknown` ไม่ใช่ `any` — เข้าถึง `.message` โดยไม่ narrow ก่อนเป็น compile error ไม่ใช่ระเบิดตอน runtime
+
+**Fix:** narrow ก่อนใช้:
+
+```ts
+// @run
+function parseAmount(input: string): number {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    console.log(e instanceof Error ? e.message : String(e));
+    return 0;
+  }
+}
+
+console.log(parseAmount("{not json"));
+```
+
+**Real output:**
+
+```text
+Expected property name or '}' in JSON at position 1 (line 1 column 2)
+0
+```
+
+**Caught by:** `tsc` โดยตรง — `error TS18046` ไม่ต้อง config อะไรเพิ่มนอกจาก `--strict` ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+## Nullability & falsy checks
+
+### 7. optional + `if (x)` มอง `0` ที่ถูกต้องว่าหายไป
+
+```ts
+// @run
+interface Product { stockCount?: number }
+
+function availability(product: Product): string {
+  if (product.stockCount) {
+    return `${product.stockCount} in stock`;
+  }
+  return "unknown availability"; // meant for "field not provided", but 0 hits it too
+}
+
+console.log(availability({ stockCount: 0 }));
+```
+
+`stockCount: 0` คือค่าที่มีอยู่จริง ถูกต้องสมบูรณ์ — "มีของเหลือศูนย์ชิ้น" — แต่ `if (product.stockCount)` มองมันเหมือน `undefined` เป๊ะ
+
+**Symptom — real output:**
+
+```text
+unknown availability
+```
+
+ที่ควรพูดว่า "out of stock" ไม่ใช่ "unknown" — field นี้ถูกส่งมาแล้ว แต่โค้ดแยกไม่ออกระหว่าง "ไม่ได้ส่งมา" กับ "ส่งมาเป็นศูนย์"
+
+**Fix:** เช็คว่ามีอยู่จริงแบบตรง ๆ:
+
+```ts
+interface Product { stockCount?: number }
+
+function availability(product: Product): string {
+  if (product.stockCount === undefined) return "unknown availability";
+  return product.stockCount > 0 ? `${product.stockCount} in stock` : "out of stock";
+}
+
+console.log(availability({ stockCount: 0 }));
+```
+
+**Caught by:** ไม่มีอะไรจับใน default rule set ของคอร์สนี้ — `--strict` ไม่มีความเห็นกับการเช็ค truthiness บน `number | undefined` และ typed rule `strict-boolean-expressions` ที่จะจับได้เป็น opt-in ไม่ได้อยู่ใน 6 typed rule ที่คอร์สนี้ติดตั้ง ดู **[Narrowing](/typescript/th/everyday-types/narrowing/)**
+
+### 8. `||` แทน `??`
+
+<TSPlayground code={orVsNullishCode} id="catalog-8" title="0 retries silently becomes 3" />
+
+export const orVsNullishCode = `interface Settings { retries?: number }
+
+function getRetries(settings: Settings): number {
+  return settings.retries || 3;
+}
+
+console.log(getRetries({ retries: 0 }));
+`.trim();
+
+`retries: 0` แปลตรง ๆ ว่า "ไม่มี retry เลย" — แต่ `0 || 3` ได้ `3` เพราะ `||` ผ่านไปทุกค่าที่ falsy ไม่ใช่แค่ `null`/`undefined`
+
+**Symptom — real output:**
+
+```text
+3
+```
+
+**Fix:** `??` ผ่านไปเฉพาะ `null`/`undefined` เท่านั้น:
+
+```ts
+interface Settings { retries?: number }
+
+function getRetries(settings: Settings): number {
+  return settings.retries ?? 3;
+}
+
+console.log(getRetries({ retries: 0 }));
+```
+
+**Real output:**
+
+```text
+0
+```
+
+**Caught by:** `prefer-nullish-coalescing` ของ `typescript-eslint` โดยตรง บน `settings.retries || 3` ดู **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+
+### 9. `readonly` ตื้น
+
+<TSPlayground code={shallowReadonlyCode} id="catalog-9" title="Readonly<T> stops at the top level" />
+
+export const shallowReadonlyCode = `interface Address { city: string }
+interface UserProfile { name: string; address: Address }
+
+function freezeProfile(profile: UserProfile): Readonly<UserProfile> {
+  return profile;
+}
+
+const profile: Readonly<UserProfile> = freezeProfile({ name: "Ada", address: { city: "London" } });
+profile.address.city = "Paris"; // Readonly<T> is shallow -- nested objects stay mutable
+console.log(profile.address.city);
+`.trim();
+
+`Readonly<UserProfile>` ทำให้แค่ property ของ `UserProfile` เองเป็น readonly — `address` เองถูก assign ใหม่ไม่ได้ แต่ property ของ `address` ยัง mutable เหมือนเดิมทุกประการ
+
+**Symptom — real output:**
+
+```text
+Paris
+```
+
+การ assign ผ่านทั้งตอน compile และตอน runtime แบบเงียบ ๆ — ไม่มีอะไรใน `Readonly<T>` ถูกละเมิดเลย เพราะ `Readonly<T>` ไม่เคยพูดถึง nested object ของ `T` เลยตั้งแต่แรก
+
+**Fix:** `DeepReadonly<T>` แบบ recursive (และ `Object.freeze` ทุกระดับ ถ้าต้องการบังคับตอน runtime ด้วย):
+
+```ts
+// @expect-error TS2540
+interface Address { city: string }
+interface UserProfile { name: string; address: Address }
+
+type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
+
+function freezeDeep<T extends object>(obj: T): DeepReadonly<T> {
+  Object.freeze(obj);
+  for (const key of Object.keys(obj) as (keyof T)[]) {
+    const value = obj[key];
+    if (value && typeof value === "object") freezeDeep(value as object);
+  }
+  return obj as DeepReadonly<T>;
+}
+
+const profile = freezeDeep<UserProfile>({ name: "Ada", address: { city: "London" } });
+profile.address.city = "Paris";
+```
+
+**tsc output — real:**
+
+```text
+error TS2540: Cannot assign to 'city' because it is a read-only property.
+```
+
+**Caught by:** ไม่มีอะไรจับสำหรับ `Readonly<T>` ธรรมดา — `tsc` จับการ mutate ที่ nested ได้ก็ต่อเมื่อโค้ดเลือกใช้ `DeepReadonly<T>` แบบ recursive ตามข้างบนเท่านั้น ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+### 10. object ที่ mutable ถูกแชร์เป็น default export ของ module
+
+```ts
+// @run
+export const defaultSettings = { retries: 3, timeoutMs: 1000 };
+
+function loadFeatureA(overrides: Partial<typeof defaultSettings> = {}) {
+  Object.assign(defaultSettings, overrides); // mutates the SHARED default object
+  return defaultSettings;
+}
+
+function loadFeatureB() {
+  return defaultSettings; // sees whatever loadFeatureA last mutated
+}
+
+loadFeatureA({ retries: 0 });
+console.log(loadFeatureB());
+```
+
+`defaultSettings` คือ object เดียว ที่ทุกคนที่ import ใช้ร่วมกัน `Object.assign(defaultSettings, overrides)` ไม่ได้สร้างสำเนาต่อ call — มันแก้ object เดียวกันที่ทุก import ในอนาคตจะเห็นด้วย
+
+**Symptom — real output:**
+
+```text
+{ retries: 0, timeoutMs: 1000 }
+```
+
+`loadFeatureB` ที่ไม่เคยขอ override อะไรเลย ก็รายงาน `retries: 0` ด้วย — override เฉพาะกิจของ feature A รั่วไปหา consumer อื่นของ module เดียวกันทั้งหมด
+
+**Fix:** factory function ที่คืน object ใหม่ทุกครั้งที่เรียก:
+
+```ts
+// @run
+function createDefaultSettings() {
+  return { retries: 3, timeoutMs: 1000 };
+}
+
+function loadFeatureA(overrides: Partial<ReturnType<typeof createDefaultSettings>> = {}) {
+  return { ...createDefaultSettings(), ...overrides };
+}
+
+function loadFeatureB() {
+  return createDefaultSettings();
+}
+
+console.log(loadFeatureA({ retries: 0 }));
+console.log(loadFeatureB());
+```
+
+**Real output:**
+
+```text
+{ retries: 0, timeoutMs: 1000 }
+{ retries: 3, timeoutMs: 1000 }
+```
+
+**Caught by:** ไม่มีอะไรจับ — นี่คือ bug ของ shared mutable module state ซึ่ง type checker มองไม่เห็นเลย (type ของ `defaultSettings` ไม่เปลี่ยน) และ typed lint rule ทุกตัวในลิสต์ของคอร์สนี้ก็มองไม่เห็นเหมือนกัน ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+## Async & control flow
+
+### 11. ลืม `await` (floating promise)
+
+demo หลักด้านบนสุดของหน้านี้คือ pattern นี้เอง — ดูที่นั่น `saveAuditLog(...)` โดยไม่มี `await` compile ผ่านสะอาด แล้ว return ก่อนที่ log line ของตัวมันเองจะรันด้วยซ้ำ
+
+**Fix:** `await` มัน หรือทำให้ผู้เรียกเป็น `async` ตลอดสาย:
+
+```ts
+async function saveAuditLog(message: string): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  console.log("saved:", message);
+}
+
+async function handleRequest(id: number): Promise<string> {
+  await saveAuditLog(`request ${id} handled`);
+  return `response-${id}`;
+}
+
+handleRequest(1).then((r) => console.log(r));
+```
+
+**Caught by:** `no-floating-promises` ของ `typescript-eslint` โดยตรง — typed rule ที่จับ expression statement ที่คืน `Promise` โดยไม่มี `await`, ไม่มี `.catch`, และไม่มี `void` operator ดู **[Performance & Pitfalls](/typescript/th/practical-mastery/performance-and-pitfalls/)**
+
+### 12. `Promise.all` บน array ที่ widen แล้ว ไม่ใช่ tuple
+
+```ts
+// @expect-error TS2339
+interface User { name: string }
+
+function fetchUser(): Promise<User> { return Promise.resolve({ name: "Ada" }); }
+function fetchCount(): Promise<number> { return Promise.resolve(42); }
+
+async function loadDashboard() {
+  const tasks = [fetchUser(), fetchCount()]; // inferred Promise<User | number>[], not a tuple
+  const [user, count] = await Promise.all(tasks);
+  console.log(user.name); // User | number -- the positional types were lost
+}
+```
+
+ถ้าส่ง inline `Promise.all([fetchUser(), fetchCount()])` เก็บ type ของแต่ละตำแหน่งไว้ได้ แต่พอสร้างเป็น `const tasks = [...]` ก่อน array จะถูก infer เป็น `Promise<User | number>[]` — array type แบบเดียวกันหมด ไม่ใช่ tuple — แล้ว `Promise.all` บนมันจะคืน `(User | number)[]` ทิ้งไปว่าตำแหน่งไหนเป็น type อะไร
+
+**tsc output — real:**
+
+```text
+error TS2339: Property 'name' does not exist on type 'number | User'.
+  Property 'name' does not exist on type 'number'.
+```
+
+**Fix:** ส่ง tuple แบบ inline เพื่อเก็บตำแหน่งไว้:
+
+```ts
+interface User { name: string }
+
+function fetchUser(): Promise<User> { return Promise.resolve({ name: "Ada" }); }
+function fetchCount(): Promise<number> { return Promise.resolve(42); }
+
+async function loadDashboard() {
+  const [user, count] = await Promise.all([fetchUser(), fetchCount()]);
+  console.log(user.name, count);
+}
+
+loadDashboard();
+```
+
+**Caught by:** `tsc` โดยตรง (`TS2339`) — แต่จับแบบ reactive เท่านั้น คือต่อเมื่อโค้ดพยายามใช้ field ที่ type ที่ widen แล้วไม่มีอีกต่อไป ไม่มีอะไรเตือนตอนที่ `tasks` ถูกสร้างขึ้นครั้งแรกเลย ดู **[Performance & Pitfalls](/typescript/th/practical-mastery/performance-and-pitfalls/)**
+
+### 13. switch ที่ดูครบทุก case แต่ไม่มี `never` check
+
+<TSPlayground code={noNeverCheckCode} id="catalog-13" title="A forgotten case, no error, wrong answer" />
+
+export const noNeverCheckCode = `type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function describeShape(shape: Shape): string {
+  let label = "unknown shape";
+  switch (shape.kind) {
+    case "circle":
+      label = "circle";
+      break;
+    case "square":
+      label = "square";
+      break;
+    // "triangle" forgotten -- no default, no never check, no error
+  }
+  return label;
+}
+
+console.log(describeShape({ kind: "triangle", base: 3, height: 4 }));
+`.trim();
+
+function นี้ return "อะไรบางอย่าง" เสมอ เลยไม่มี "missing return" ให้ `tsc` จับ — case ที่ลืมก็แค่ตกไปที่ label default แบบเงียบ ๆ
+
+**Symptom — real output:**
+
+```text
+unknown shape
+```
+
+**Fix:** branch `default` ที่ assign ค่าที่เหลือให้ตัวแปร type เป็น `never` — นี่คือสิ่งที่ทำให้ case ที่ลืมในอนาคตกลายเป็น compile error จริง:
+
+```ts
+// @expect-error TS2322
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function describeShape(shape: Shape): string {
+  switch (shape.kind) {
+    case "circle":
+      return "circle";
+    case "square":
+      return "square";
+    default: {
+      const exhaustiveCheck: never = shape;
+      return exhaustiveCheck;
+    }
+  }
+}
+```
+
+ตอนที่ case `triangle` ยังหายอยู่ ตัว `never` check เองก็ compile ไม่ผ่านทันที — `error TS2322: Type '{ kind: "triangle"; ...}' is not assignable to type 'never'.` — เป็นสัญญาณตรงที่ reviewer อยากได้พอดี ทันทีที่ union โตขึ้น
+
+**Caught by:** `switch-exhaustiveness-check` ของ `typescript-eslint` โดยตรง — มันจับ case `"triangle"` ที่หายไปได้จาก switch เอง โดยไม่ต้องเขียน `never` check ด้วยมือเลย; `tsc` อย่างเดียวจะจับ case ที่ลืมในอนาคตได้ก็ต่อเมื่อมี `never` check แบบข้างบนอยู่แล้วเท่านั้น ดู **[Nullability, `never` & Errors](/typescript/th/practical-mastery/nullability-and-never/)**
+
+### 14. `this` หลุดตอนส่ง method เป็น callback
+
+```ts
+// @run
+class Counter {
+  count = 0;
+  increment(): void {
+    this.count++;
+  }
+}
+
+const counter = new Counter();
+const handler = counter.increment; // detached from its instance
+[1, 2, 3].forEach(handler);
+console.log(counter.count);
+```
+
+`counter.increment` พอถูกอ่านออกมาจาก instance ก็เป็นแค่ function value เฉย ๆ — ส่งมันให้ `forEach` จะเรียกมันโดย `this` ผูกกับอะไรก็ตามที่ `forEach` ใช้ข้างในเอง ไม่ใช่ `counter`
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'count')
+```
+
+**Fix:** arrow-function class field capture `this` แบบ lexical ตั้งแต่ตอนสร้าง:
+
+```ts
+// @run
+class Counter {
+  count = 0;
+  increment = (): void => {
+    this.count++;
+  };
+}
+
+const counter = new Counter();
+const handler = counter.increment;
+[1, 2, 3].forEach(handler);
+console.log(counter.count);
+```
+
+**Real output:**
+
+```text
+3
+```
+
+**Caught by:** `unbound-method` ของ `typescript-eslint` โดยตรง — typed rule ที่จับ `counter.increment` ทันทีที่ถูกอ้างถึงโดยไม่ถูกเรียกหรือ bind ดู **[`this`, Polymorphism & Binding](/typescript/th/classes-and-oop/this-types-and-polymorphism/)**
+
+## Generics & variance
+
+### 15. `Array<Dog>` ส่งเข้าที่ที่ต้องการ `Array<Animal>`
+
+<TSPlayground code={arrayVarianceCode} id="catalog-15" title="Dog[] accepted as Animal[], then corrupted" />
+
+export const arrayVarianceCode = `class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function addACat(animals: Animal[]): void {
+  animals.push(new Cat()); // perfectly legal for Animal[]
+}
+
+const dogs: Dog[] = [new Dog(), new Dog()];
+addACat(dogs); // compiles -- Dog[] is assignable to Animal[]
+for (const d of dogs) {
+  console.log(d.bark());
+}
+`.trim();
+
+`Dog[]` assignable เป็น `Animal[]` ได้ เพราะ array (และ method `push` ของมัน ที่เขียนแบบ shorthand ใน `lib.d.ts`) ถูกตรวจแบบ bivariant ผ่อนปรนเดียวกับที่ section variance ของคอร์สนี้สอนไว้กับ `Stack<T>` ที่เขียนเอง — นี่คือ `Array` ในตัวที่ชนหลุมเดียวกันเป๊ะ
+
+**Symptom — real output:**
+
+```text
+woof
+woof
+TypeError: d.bark is not a function
+```
+
+`addACat` push `Cat` เข้าไปในสิ่งที่ `dogs` ยังเชื่อว่าเป็น array ของ `Dog` ล้วน ๆ — element ตัวที่สามทำให้ `.bark()` ครั้งถัดไปพังทันที
+
+**Fix:** ถ้า function แค่ต้องการอ่าน ให้รับ `readonly Animal[]` — type แบบ covariant ที่ไม่มี `push` ให้ใช้ประโยชน์:
+
+```ts
+class Animal { speak(): string { return "..."; } }
+class Dog extends Animal { bark(): string { return "woof"; } }
+class Cat extends Animal { speak(): string { return "meow"; } }
+
+function describeAll(animals: readonly Animal[]): void {
+  for (const a of animals) console.log(a.speak());
+}
+
+const dogs: Dog[] = [new Dog(), new Dog()];
+describeAll(dogs);
+for (const d of dogs) {
+  console.log(d.bark());
+}
+```
+
+**Caught by:** ไม่มีอะไรจับ — นี่คือ unsoundness ที่ตั้งใจและมี document ไว้ชัดเจนอันเดียวกับที่ section variance ของคอร์สนี้แสดงบน class ที่เขียนเอง (array covariance บวก method-shorthand bivariance) ดู **[Generic Classes & Interfaces — Variance](/typescript/th/generics/generic-classes-and-interfaces/)**
+
+### 16. type predicate ที่ return `true` แบบไม่มีเงื่อนไข
+
+<TSPlayground code={liarPredicateCode} id="catalog-16" title="isAdmin always says yes" />
+
+export const liarPredicateCode = `interface Admin { role: "admin"; permissions: string[] }
+
+function isAdmin(user: unknown): user is Admin {
+  return true; // always claims true -- the shape is never actually checked
+}
+
+function grantAccess(user: unknown): void {
+  if (isAdmin(user)) {
+    console.log(user.permissions.join(", ")); // tsc trusts the predicate completely
+  }
+}
+
+grantAccess({ name: "definitely not an admin" });
+`.trim();
+
+*signature* ของ type predicate ที่ผู้ใช้เขียนเอง (`user is Admin`) คือสิ่งเดียวที่ checker ดู — มันไม่เคยตรวจ *body* เลยว่าพิสูจน์คำกล่าวอ้างนั้นได้จริงหรือเปล่า
+
+**Symptom — real output:**
+
+```text
+TypeError: Cannot read properties of undefined (reading 'join')
+```
+
+**Fix:** implement runtime check จริงที่ตรงกับ shape ที่กล่าวอ้าง:
+
+```ts
+// @run
+interface Admin { role: "admin"; permissions: string[] }
+
+function isAdmin(user: unknown): user is Admin {
+  return typeof user === "object" && user !== null
+    && (user as Record<string, unknown>).role === "admin"
+    && Array.isArray((user as Record<string, unknown>).permissions);
+}
+
+function grantAccess(user: unknown): void {
+  if (isAdmin(user)) {
+    console.log(user.permissions.join(", "));
+  } else {
+    console.log("access denied");
+  }
+}
+
+grantAccess({ name: "definitely not an admin" });
+```
+
+**Real output:**
+
+```text
+access denied
+```
+
+**Caught by:** ไม่มีอะไรจับ — type predicate ถูกเชื่อแบบไม่มีเงื่อนไขโดยทุก check ที่ตามมา ไม่มีเครื่องมือไหนในลิสต์ของคอร์สนี้ประเมินว่า body ของ predicate พิสูจน์สิ่งที่ signature กล่าวอ้างจริงหรือเปล่า ดู **[Narrowing](/typescript/th/everyday-types/narrowing/)**
+
+### 17. `interface` ที่มี implementer เดียว กับ generic ที่ใช้ครั้งเดียว
+
+```ts
+interface UserRecord { id: number; name: string }
+
+interface Repository<T> {
+  save(item: T): void;
+}
+
+class UserRepository implements Repository<UserRecord> {
+  save(item: UserRecord): void {
+    console.log("saving", item);
+  }
+}
+
+new UserRepository().save({ id: 1, name: "Ada" });
+```
+
+`Repository<T>` มี implementer เดียวตลอดกาล และ `T` ถูกใช้แค่ตำแหน่งเดียว — generic interface นี้ไม่ได้ให้ polymorphism หรือ reuse อะไรเลย มันเป็นแค่ indirection ที่ AI assistant เติมเข้ามาเพราะ "repository ต้อง implement interface" เป็น shape ที่คุ้นเคย ไม่ใช่เพราะ codebase นี้ต้องการมันจริง ๆ
+
+**Symptom:** ไม่มี crash ไม่มี diagnostic — ต้นทุนคือผู้อ่านต้องเปิดสอง declaration (`Repository<T>` กับ `UserRepository`) เพื่อเข้าใจว่า class เดียวทำอะไร แล้ว implementer ตัวที่สองก็ไม่เคยโผล่มาให้เหตุผลกับ abstraction นี้เลย
+
+**Fix:** ลบ interface ทิ้ง เก็บแค่ class ที่ concrete:
+
+```ts
+interface UserRecord { id: number; name: string }
+
+class UserRepository {
+  save(item: UserRecord): void {
+    console.log("saving", item);
+  }
+}
+
+new UserRepository().save({ id: 1, name: "Ada" });
+```
+
+**Caught by:** ไม่มีอะไรจับโดยตรง — รายงาน unused-exports ของ `knip` โผล่ `Repository` เป็น export ที่ถูกอ้างถึงจากที่เดียว ซึ่งเป็นสัญญาณที่ควรไปดู แต่ไม่มีเครื่องมือไหนบอกตรง ๆ ว่า "generic parameter ตัวนี้ไม่ได้ให้ reuse จริง" ดู **[Generic Functions & Constraints](/typescript/th/generics/generic-functions-and-constraints/)**
+
+### 18. `Omit` บน union ยุบเหลือ `{}`
+
+<TSPlayground code={omitOnUnionCode} id="catalog-18" title="ShapeWithoutKind accepts anything" />
+
+export const omitOnUnionCode = `type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+type ShapeWithoutKind = Omit<Shape, "kind">; // Omit does not distribute over a union
+
+const bogus: ShapeWithoutKind = { anything: "whatever", nonsense: 123 };
+console.log(bogus);
+`.trim();
+
+`Omit<T, K>` คือ `Pick<T, Exclude<keyof T, K>>` และ `keyof` บน union คือ **intersection** ของ key ของแต่ละ member — ตรงนี้มีแค่ `"kind"` ที่ทั้งสอง branch มีร่วมกัน `Exclude<"kind", "kind">` ได้ `never` เลย `Pick<Shape, never>` ได้ `{}` — object type ว่างที่รับ object อะไรก็ได้
+
+**Symptom — real output:**
+
+```text
+{ anything: 'whatever', nonsense: 123 }
+```
+
+`ShapeWithoutKind` ควรจะแปลว่า "`Shape` ที่ไม่มี tag `kind`" — `{ radius: number } | { side: number }` — แต่กลับแปลว่า "object อะไรก็ได้" แบบเงียบ ๆ และ `tsc` ก็ยอมรับ shape ที่ไม่เกี่ยวกันเลยโดยไม่บ่นอะไร
+
+**Fix:** ตัวช่วยแบบ distributive ที่รัน `Omit` ทีละ union member ตามที่ผู้เขียนตั้งใจไว้จริง ๆ:
+
+```ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+type ShapeWithoutKind = DistributiveOmit<Shape, "kind">;
+
+const s1: ShapeWithoutKind = { radius: 5 };
+const s2: ShapeWithoutKind = { side: 4 };
+console.log(s1, s2);
+```
+
+ด้วย naked type parameter `T` ใน conditional ตอนนี้ union กระจายจริง — ส่ง `bogus` object ตัวเดียวกันจากข้างบนเข้ามาจะถูกปฏิเสธ: `error TS2353: Object literal may only specify known properties, and 'anything' does not exist in type 'ShapeWithoutKind'.`
+
+**Caught by:** ไม่มีอะไรจับ — `Omit`/`Pick` ที่กระจายบน union ไม่ได้แบบเงียบ ๆ เป็นกับดักที่รู้กันดีแต่ไม่มี diagnostic ทางเดียวที่จะสังเกตได้คืออ่าน (หรือ probe ด้วย `Equal` check) ว่า alias นั้น resolve เป็นอะไรจริง ๆ ดู **[The Utility Types](/typescript/th/type-level-programming/utility-types/)**
+
+### 19. recursive type ที่ลึกเกินไป
+
+```ts
+// @expect-error TS2589
+type BuildTuple<N extends number, R extends unknown[] = []> =
+  R["length"] extends N ? R : BuildTuple<N, [...R, unknown]>;
+
+type Deep = BuildTuple<1200>;
+```
+
+**tsc output — real:**
+
+```text
+error TS2589: Type instantiation is excessively deep and possibly infinite.
+```
+
+recursive conditional type แบบนี้มี depth limit ที่ compiler บังคับไว้ — บท recursive-types ของคอร์สนี้วัดขอบเขตจริงไว้แล้ว (tail-recursive form ผ่านได้ถึง 999 ระดับ พังที่ 1000; form แบบ naive นี้พังเร็วกว่านั้นมาก)
+
+**Fix:** อยู่ใต้ limit ที่วัดไว้ให้ไกลพอ หรือปรับโครงสร้างให้ไม่ recurse แบบไม่จำกัดบน input ที่ผู้ใช้ควบคุมได้:
+
+```ts
+type BuildTuple<N extends number, R extends unknown[] = []> =
+  R["length"] extends N ? R : BuildTuple<N, [...R, unknown]>;
+
+type Safe = BuildTuple<200>;
+declare const t: Safe;
+console.log(t.length);
+```
+
+**Caught by:** `tsc` โดยตรง (`TS2589`) ไม่ต้อง config อะไร — แต่จับก็ต่อเมื่อ depth เกินไปแล้วจริง ๆ ไม่มีอะไรเตือนตอนที่ recursion กำลังไต่เข้าใกล้ limit เลย ดู **[Recursive Types](/typescript/th/type-level-programming/recursive-types/)**
+
+## Erasure & config
+
+### 20. `enum` ใน codebase ที่เป็น erasable syntax
+
+```ts
+// @run
+enum Direction { Up, Down, Left, Right }
+
+function move(direction: Direction): string {
+  return Direction[direction];
+}
+
+console.log(move(Direction.Up));
+```
+
+ตัวนี้ compile ผ่านใต้ `tsc --strict` โดย **ไม่มี error เลย** — `enum` เป็น TypeScript ธรรมดามาก ปัญหาจะโผล่มาก็ต่อเมื่อมีอะไรอื่นที่ไม่ใช่ `tsc` พยายามรันไฟล์นี้ตรง ๆ เพราะ numeric `enum` ต้องการโค้ดที่ emit จริง (object พร้อม reverse mapping) ไม่ใช่แค่ annotation ที่ถูกลบทิ้ง
+
+**Symptom — real output** (`node --experimental-strip-types` บนไฟล์ข้างบนตรง ๆ):
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+**Fix:** object ที่เป็น `as const` บวก union type ที่ derive จากมัน เป็น erasable — ไม่ต้องมี runtime support พิเศษเลย เพราะมันเป็นแค่ object literal ธรรมดา:
+
+```ts
+// @run
+const Direction = { Up: "Up", Down: "Down", Left: "Left", Right: "Right" } as const;
+type Direction = typeof Direction[keyof typeof Direction];
+
+function move(direction: Direction): string {
+  return direction;
+}
+
+console.log(move(Direction.Up));
+```
+
+**Real output:**
+
+```text
+Up
+```
+
+**Caught by:** ไม่มีอะไรจับผ่าน `tsc --strict` หรือ typed lint rule ไหนที่คอร์สนี้ติดตั้ง — มีแค่การรันไฟล์จริง (`node --experimental-strip-types` หรือ compile ด้วย `--erasableSyntaxOnly`) เท่านั้นที่เผยความล้มเหลวออกมา ดู **[Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/)**
+
+### 21. parameter property ใต้ strip-types
+
+```ts
+// @run
+class Point2 {
+  constructor(public readonly px: number, public readonly py: number) {}
+}
+
+const pt = new Point2(3, 4);
+console.log(pt.px, pt.py);
+```
+
+**parameter property** (`public readonly px: number` ข้างใน constructor signature) เป็น shorthand เฉพาะของ TypeScript สำหรับประกาศ field *และ* assign มันใน constructor body — ต้อง emit โค้ดจริงสำหรับการ assign นั้น เหมือนกับ `enum` มันเลย erasable ไม่ได้
+
+**Symptom — real output:**
+
+```text
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript parameter property is not supported in strip-only mode
+```
+
+**Fix:** ประกาศ field แล้ว assign แบบตรง ๆ:
+
+```ts
+// @run
+class Point2 {
+  readonly px: number;
+  readonly py: number;
+  constructor(px: number, py: number) {
+    this.px = px;
+    this.py = py;
+  }
+}
+
+const pt = new Point2(3, 4);
+console.log(pt.px, pt.py);
+```
+
+**Real output:**
+
+```text
+3 4
+```
+
+**Caught by:** ไม่มีอะไรจับผ่าน `tsc --strict` — ช่องว่างเดียวกับ pattern 20: compile ผ่านสะอาด แล้วพังก็ต่อเมื่อมีอะไรอื่นที่ไม่ใช่ `tsc` (`node --experimental-strip-types`, `esbuild`, `swc`) พยายามรันมันตรง ๆ ดู **[Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/)**
+
+### 22. `const enum` reverse mapping กับ boundary ข้ามไฟล์
+
+```ts
+// @expect-error TS2476
+const enum LogLevel { Info, Warn, Error }
+
+function label(level: LogLevel): string {
+  return LogLevel[level];
+}
+```
+
+**tsc output — real:**
+
+```text
+error TS2476: A const enum member can only be accessed using a string literal.
+```
+
+`const enum` ถูก inline ที่ทุกจุดใช้งานแล้ว erase ทิ้งไปทั้งหมด — ไม่เหลือ runtime object ให้ทำ reverse lookup (`LogLevel[level]`) เลย ซึ่งเป็นสิ่งที่ `TS2476` รายงานพอดี คุณสมบัติ "ไม่มี runtime object เหลือ" อันเดียวกันนี้เองที่ทำให้ single-file transpiler (`esbuild`, `swc`, และ `tsc --isolatedModules` ในกรณีทั่วไป) รองรับ `const enum` ที่ import จากไฟล์อื่นไม่ได้: การ inline ค่าของมันต้องเห็น declaration ของ enum เอง ซึ่งการ compile ทีละไฟล์ไม่มีข้อมูลนั้น
+
+**Fix:** object แบบ `as const` — pattern เดียวกับ pattern 20 ที่ erasable และ inline ได้ปลอดภัย:
+
+```ts
+// @run
+const LogLevel = { Info: 0, Warn: 1, Error: 2 } as const;
+type LogLevel = typeof LogLevel[keyof typeof LogLevel];
+
+function label(level: LogLevel): string {
+  return level === LogLevel.Warn ? "WARN" : "OTHER";
+}
+
+console.log(label(LogLevel.Warn));
+```
+
+**Real output:**
+
+```text
+WARN
+```
+
+**Caught by:** `tsc` โดยตรง (`TS2476`) สำหรับ reverse-mapping form ข้างบน; ความล้มเหลวข้ามไฟล์/single-file transpiler เป็นข้อจำกัดของ build tool ไม่ใช่สิ่งที่ `tsc --strict` เองรายงาน ดู **[Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/)**
+
+### 23. `import` แทน `import type` ใต้ `verbatimModuleSyntax`
+
+```ts
+// @skip-verify two-file demo (./types.ts) plus --verbatimModuleSyntax; real tsc output quoted below
+import { UserRecord } from "./types.js"; // value-style import of a type-only symbol
+
+export function greet(user: UserRecord): string {
+  return `Hello, ${user.name}`;
+}
+```
+
+พอเปิด `verbatimModuleSyntax` ทุก import จะถูก emit ตามที่เขียนไว้เป๊ะ — `import { UserRecord }` แบบธรรมดาสำหรับชื่อที่ใช้เป็น type อย่างเดียว จะกลายเป็น runtime import จริงของสิ่งที่อาจไม่มีอยู่แม้แต่เป็น value export ด้วยซ้ำ
+
+**tsc output — real** (compile ไฟล์นี้พร้อมไฟล์ข้าง ๆ `types.ts` ที่ export `interface UserRecord` โดยเปิด `--verbatimModuleSyntax`):
+
+```text
+error TS1484: 'UserRecord' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+```
+
+**Fix:** ระบุว่า import นี้เป็น type-only:
+
+```ts
+// @skip-verify two-file demo (./types.ts) plus --verbatimModuleSyntax
+import type { UserRecord } from "./types.js";
+
+export function greet(user: UserRecord): string {
+  return `Hello, ${user.name}`;
+}
+```
+
+**Caught by:** `tsc` โดยตรง (`TS1484`) ทันทีที่เปิด `verbatimModuleSyntax`; `consistent-type-imports` ของ `typescript-eslint` จับ mistake เดียวกันได้ก่อนล่วงหน้าแม้ flag จะปิดอยู่ก็ตาม ดู **[`tsconfig` Deep Dive](/typescript/th/compiler-and-tooling/tsconfig-deep/)**
+
+## Indexing & keys
+
+### 24. `Object.keys(obj).forEach(k => obj[k])`
+
+```ts
+// @expect-error TS7053
+interface Config { host: string; port: number }
+
+function logAll(config: Config): void {
+  Object.keys(config).forEach((key) => {
+    console.log(key, config[key]);
+  });
+}
+```
+
+`Object.keys` คืน `string[]` เสมอ ไม่ว่า type จริงของ object จะเป็นอะไร — `Config` ไม่มี index signature ที่รับ `string` แบบเปะปะ เลยเอามัน index เข้าไปแบบนั้นไม่ sound เท่าที่ checker พิสูจน์ได้ และมันก็บอกอย่างนั้นเลย
+
+**tsc output — real:**
+
+```text
+error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type 'Config'.
+  No index signature with a parameter of type 'string' was found on type 'Config'.
+```
+
+**Fix:** assert array ของ key กลับเป็น `(keyof Config)[]` — ปลอดภัยตรงนี้เพราะ `Object.keys` คืนแค่ enumerable key ของ `Config` เองเท่านั้น:
+
+```ts
+interface Config { host: string; port: number }
+
+function logAll(config: Config): void {
+  (Object.keys(config) as (keyof Config)[]).forEach((key) => {
+    console.log(key, config[key]);
+  });
+}
+
+logAll({ host: "localhost", port: 3000 });
+```
+
+**Caught by:** `tsc` โดยตรง (`TS7053` ส่วนหนึ่งของ `noImplicitAny` ใต้ `--strict`) — เป็นหนึ่งในไม่กี่entryในแคตาล็อกนี้ที่ `tsc` ปฏิเสธตรง ๆ โดยไม่ต้องใช้เครื่องมือเพิ่ม ดู **[Typing APIs & Boundaries](/typescript/th/practical-mastery/typing-apis-and-boundaries/)**
+
+## Mental Model
+
+```text
+24 patterns, sorted by who actually catches them:
+
+tsc --strict, directly       -> 6 (TS18046), 12 (TS2339, reactively), 19 (TS2589), 22 (TS2476),
+                                 23 (TS1484, only with verbatimModuleSyntax), 24 (TS7053)
+typescript-eslint (typed)    -> 2 (no-unsafe-member-access), 3 (no-non-null-assertion),
+                                 4 (ban-ts-comment), 8 (prefer-nullish-coalescing),
+                                 11 (no-floating-promises), 13 (switch-exhaustiveness-check),
+                                 14 (unbound-method), 23 (consistent-type-imports, proactively)
+Only by actually running it  -> 20, 21 (node --experimental-strip-types /
+                                 --erasableSyntaxOnly; tsc --strict is silent)
+knip (indirect signal only)  -> 17 (single-reference export -- a hint, not a direct catch)
+Nothing                      -> 1, 5, 7, 9 (for plain Readonly<T>), 10, 15, 16, 18 --
+                                 a third of the catalog
+```
+
+<Callout title="สรุปหนึ่งบรรทัด">
+หนึ่งในสามของแคตาล็อกนี้ไม่มี automated safety net เลย และอีกหลายอันจับได้แบบ reactive คือหลังจากที่ mistake ถูกใช้ไปแล้ว — เครื่องมือแค่ทำให้สิ่งที่ต้องอ่านด้วยตาแคบลง ไม่เคยแทนที่การอ่านได้
+</Callout>
+
+export const quizAiBugCatalog = [
+  {
+    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\nถ้า `raw` คือ `'{\"id\": 1}'` (ไม่มี field `name`) `tsc --strict` รายงานอะไร แล้วตอน runtime เกิดอะไรขึ้น?",
+    options: [
+      "tsc รายงาน error โค้ดไม่มีทางรันได้เลย",
+      "tsc รายงานว่าไม่มี error เลย; ตอน runtime `user.name.toUpperCase()` throw เพราะ name เป็น undefined",
+      "tsc รายงานว่าไม่มี error เลย; ตอน runtime name จะได้ default เป็น string ว่าง",
+      "tsc รายงานแค่ warning และโค้ดพิมพ์ undefined"
+    ],
+    answer: 1,
+    explain: "`as User` บอก tsc ให้หยุดตรวจ shape ของค่าที่ parse ออกมา ไฟล์นี้ compile ผ่านสะอาด แล้วตอน runtime `user.name` เป็น undefined เลย `.toUpperCase()` throw TypeError"
+  },
+  {
+    q: "ทำไม `settings.retries || 3` ถึงคืน `3` แม้ `settings.retries` จะเป็น `0` อยู่แล้ว แล้ว `??` ต่างกันยังไง?",
+    options: [
+      "|| กับ ?? ทำงานเหมือนกันทุกกรณี",
+      "|| ผ่านไปทุกค่าที่ falsy (0, \"\", NaN, null, undefined); ?? ผ่านไปเฉพาะ null/undefined เท่านั้น เลยเก็บ 0 ไว้ได้",
+      "|| ใช้ได้กับ boolean เท่านั้น ใช้กับ number ไม่ได้",
+      "?? เลิกใช้แล้ว ให้ใช้ || แทน"
+    ],
+    answer: 1,
+    explain: "0 เป็น falsy เลย `0 || 3` ได้ 3 -- || แยกไม่ออกระหว่าง \"เป็นศูนย์จริง ๆ\" กับ \"ไม่มีค่า\" `??` เช็คเฉพาะ null/undefined เลย `0 ?? 3` ยังได้ 0 ถูกต้อง"
+  },
+  {
+    q: "`Readonly<UserProfile>` ถูกใช้กับ `UserProfile` ที่มี nested field `address: Address` `Readonly<T>` ปกป้องอะไรจริง ๆ?",
+    options: [
+      "ทุก property ทุกระดับ แบบ recursive",
+      "แค่ property ระดับบนสุดของ UserProfile เอง -- address เองถูก assign ใหม่ไม่ได้ แต่ address.city ยัง mutate ได้อย่างอิสระ",
+      "ไม่ปกป้องอะไรเลย -- Readonly<T> ไม่มีผลตอน compile",
+      "แค่ property ที่เป็น string เท่านั้น ไม่รวม property ที่เป็น object"
+    ],
+    answer: 1,
+    explain: "Readonly<T> เป็น mapped type แบบตื้น -- มันเติม readonly ให้แค่ property ของ T เองเท่านั้น property ของ nested object เป็น type คนละตัว ที่ไม่มี readonly modifier จาก wrapper นี้เลย"
+  },
+  {
+    q: "type predicate ถูกประกาศ `function isAdmin(user: unknown): user is Admin` แต่ body แค่ `return true;` `tsc` ตรวจสอบอะไรเกี่ยวกับสิ่งนี้บ้าง?",
+    options: [
+      "tsc รัน body ของ function แบบ symbolic เพื่อยืนยันว่า predicate พูดจริง",
+      "ไม่ตรวจอะไรเลย -- tsc เชื่อ signature ของ predicate ที่ประกาศไว้เต็มร้อย logic จริงใน body ไม่เคยถูกตรวจกับคำกล่าวอ้างนั้นเลย",
+      "tsc บังคับให้มี property check อย่างน้อยหนึ่งอันข้างใน type predicate function ไม่งั้น compile ไม่ผ่าน",
+      "tsc แทนที่ predicate ด้วย runtime check ให้เองอัตโนมัติ"
+    ],
+    answer: 1,
+    explain: "signature ของ type predicate ที่ผู้ใช้เขียนเองเป็น assertion ล้วน ๆ เท่าที่ checker มองเห็น ไม่มีอะไรตรวจว่า body ของ function พิสูจน์สิ่งที่ `user is Admin` กล่าวอ้างได้จริงหรือเปล่า -- `return true` narrow ได้มั่นใจพอ ๆ กับ check จริง"
+  },
+  {
+    q: "`type ShapeWithoutKind = Omit<Shape, \"kind\">` โดย `Shape` เป็น union ของสอง object type ที่มีแค่ key `kind` ร่วมกัน `ShapeWithoutKind` resolve เป็นอะไรจริง ๆ แล้วทำไม?",
+    options: [
+      "union ของทั้งสอง shape ที่ตัด kind ออก เช่น { radius: number } | { side: number } เพราะ Omit กระจายบน union ให้อัตโนมัติ",
+      "{} -- เพราะ keyof ของ union คือ intersection ของ key แต่ละ member (ตรงนี้มีแค่ \"kind\") เลย Exclude<keyof Shape, \"kind\"> ได้ never แล้ว Pick<Shape, never> ได้ empty object type",
+      "never เพราะ Omit ใช้กับ union ไม่ได้เลย",
+      "compile error เพราะ Omit ต้องการ argument แรกที่ไม่ใช่ union"
+    ],
+    answer: 1,
+    explain: "keyof (A | B) คือ keyof A & keyof B -- intersection ไม่ใช่ union ของ key เมื่อมีแค่ \"kind\" ที่ร่วมกัน Exclude<\"kind\", \"kind\"> ได้ never แล้ว Pick<Shape, never> ยุบเหลือ {} type ว่างที่รับ object อะไรก็ได้"
+  },
+  {
+    q: "`enum Direction { Up, Down, Left, Right }` compile ผ่านโดยไม่มี error เลยใต้ `tsc --strict` แล้วถ้ารันไฟล์เดียวกันเป๊ะด้วย `node --experimental-strip-types` จะเกิดอะไร?",
+    options: [
+      "รันได้เหมือนที่ tsc จะ emit ออกมาทุกประการ",
+      "พังด้วย SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX] เพราะ numeric enum ต้องการโค้ด runtime จริง (object พร้อม reverse mapping) ซึ่ง strip-only mode สร้างให้ไม่ได้",
+      "Node แปลง enum เป็น plain object ให้เองตอน runtime",
+      "รันได้ แต่ Direction.Up เป็น undefined"
+    ],
+    answer: 1,
+    explain: "--experimental-strip-types ของ Node แค่ลบ type annotation ออก -- มันสร้าง object declaration จริงที่ enum ควร compile เป็นไม่ได้ tsc --strict ไม่มีความเห็นเรื่องนี้เลย (enum เป็น syntax ธรรมดาสำหรับมัน) เลยความล้มเหลวจะโผล่มาก็ต่อเมื่อมีอะไรอื่นที่ไม่ใช่ tsc พยายามรันไฟล์ตรง ๆ"
+  },
+  {
+    q: "ทำไม `const enum LogLevel { Info, Warn, Error }` ที่ใช้เป็น `LogLevel[level]` (reverse mapping) compile ไม่ผ่านด้วย TS2476 ในขณะที่ enum ธรรมดา compile ผ่านสำหรับโค้ดเดียวกัน?",
+    options: [
+      "const enum เป็นแค่ชื่ออื่นของ enum โดยไม่มีความต่างด้าน functionality เลย",
+      "const enum ถูก inline เต็มที่ทุกจุดใช้งาน และไม่เหลือ runtime object ให้ index ด้วยค่าเลย -- ไม่มีอะไรให้ LogLevel[level] ไป lookup ซึ่งเป็นสิ่งที่ TS2476 รายงานพอดี",
+      "TS2476 ไม่เกี่ยวกับ const enum เลย เกิดกับ enum reverse mapping ทุกแบบ",
+      "const enum ต้องเปิด flag --constEnum เพื่อรองรับ reverse mapping"
+    ],
+    answer: 1,
+    explain: "ค่าของ const enum ถูก erase แล้วแทนที่ตรง ๆ ที่ทุกจุดใช้งาน -- ไม่มี runtime object ถูก emit ออกมาเลย enum ธรรมดา emit object จริง (รวม reverse mapping ด้วย) ซึ่งเป็นเหตุผลที่ expression LogLevel[level] แบบเดียวกันเป๊ะ ใช้ได้กับมัน แต่ใช้กับ const enum ไม่ได้"
+  },
+  {
+    q: "`Object.keys(config).forEach(key => console.log(config[key]))` compile ไม่ผ่านด้วย TS7053 แม้ `config` จะเป็น `Config` interface ที่ type ครบถ้วน ทำไม?",
+    options: [
+      "Object.keys เสียตั้งแต่ต้นใน TypeScript ไม่ควรใช้เลย",
+      "Object.keys คืน string[] เสมอไม่ว่า type จริงของ object จะเป็นอะไร และ Config ไม่มี index signature ที่รับ string แบบเปะปะ -- เอา config มา index ด้วยแบบนั้นไม่ sound เท่าที่ checker พิสูจน์ได้",
+      "forEach ใช้กับ typed object ไม่ได้",
+      "จะพังก็ต่อเมื่อปิด noImplicitAny เท่านั้น"
+    ],
+    answer: 1,
+    explain: "TypeScript narrow return type ของ Object.keys ให้เป็น keyof Config ไม่ได้ -- มันเป็น string[] ตามการออกแบบ เพราะตอน runtime object อาจมี enumerable key เพิ่มที่ type ไม่รู้จัก การ index Config ด้วย string เปล่า ๆ ถูก noImplicitAny (ส่วนหนึ่งของ --strict) จับเป็น TS7053 ตรง ๆ เว้นแต่จะ assert key กลับเป็น (keyof Config)[] ก่อน"
+  }
+];
+
+<Quiz client:visible id="reading-typescript/ai-bug-catalog" questions={quizAiBugCatalog} />
+
+<ProgressTracker client:visible id="reading-typescript/ai-bug-catalog" />
