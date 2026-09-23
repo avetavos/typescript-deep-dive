@@ -1,0 +1,186 @@
+---
+title: 'How the Checker Thinks'
+description: 'ทำไมการมี model ของ type checker ในหัวถึงสำคัญกับการอ่าน TypeScript ที่ AI เขียน — pipeline parse-bind-check-emit, ห้าบทในโมดูลนี้เชื่อมกันยังไง และวิธีอ่าน diagnostic code'
+sidebar:
+  order: 1
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## ทำไมโมดูลนี้ถึงมีอยู่
+
+ทุกโมดูลก่อนหน้าในคอร์สนี้สอนให้คุณ*ใช้*ระบบ type: เขียน type, narrow union, constrain generic, อ่าน error ที่ได้ แค่นั้นก็พอเขียน TypeScript ที่ถูกต้องด้วยมือตัวเองได้แล้ว แต่**ไม่พอ**สำหรับการ review TypeScript ที่คุณไม่ได้เขียนเอง — และนับวัน TypeScript ที่อยู่ตรงหน้าคุณส่วนใหญ่ถูก generate โดยเครื่องมือ ไม่ใช่คนที่กำลังคิดเรื่อง assignability อยู่ตอนพิมพ์
+
+ฟังก์ชันที่ AI เขียนแล้ว compile ผ่านได้ด้วยเหตุผลสองแบบที่ต่างกันมาก: เพราะ type มันถูกต้องจริง หรือเพราะกฎของ checker บังเอิญมีช่องโหว่ที่โค้ด generate ตกลงไปโดยบังเอิญ `any` ที่รั่วไหลผ่าน boundary แบบเงียบ ๆ, type predicate ที่โกหก, generic parameter ที่ปรากฏแค่ในตำแหน่ง return — ทั้งหมดนี้ compile ผ่านโดย**ไม่มี error เลย** และทั้งหมดนี้ สำหรับคนที่รู้แค่*คำศัพท์*ของ TypeScript จะดูเหมือนโค้ดที่ถูกต้องเป๊ะ การแยกแยะพวกมันออกจากกันต้องรู้ว่า checker ทำอะไรจริง ๆ ไม่ใช่แค่รู้ว่ามี symbol อะไรอยู่ใน signature
+
+โมดูลนี้คือ model นั้น มันครอบคลุมคำถามสี่ข้อเดียวกัน ในลำดับเดียวกับที่ compiler ถามบนทุกไฟล์:
+
+<Mermaid title="Four questions, asked in order, on every file" code={pipelineDiagram} />
+
+export const pipelineDiagram = `flowchart LR
+  parse["Parse\nsyntax -> AST"] --> bind["Bind\nnames -> symbols"]
+  bind --> check["Check\nassignability, inference, narrowing"]
+  check --> emit["Emit\nAST -> JavaScript, .d.ts"]`;
+
+**Parse** แปลง source text เป็น tree ล้วน ๆ ด้วย grammar เท่านั้น — นี่คือที่ที่ paren หายหรือ brace ไม่ balance อยู่ ก่อนที่ checker จะมี concept เรื่อง type เลยด้วยซ้ำ **Bind** เดิน tree นั้นครั้งเดียว เชื่อมทุกชื่อ (ตัวแปร, type, class) เข้ากับ *symbol* ที่มันอ้างถึง — นี่คือสิ่งที่ทำให้ประกาศ `interface Foo { ... }` สองอันในสโคปเดียวกัน merge เป็น symbol เดียวที่มี member รวมกัน และทำให้เรียกฟังก์ชันก่อนที่ declaration ของมันจะปรากฏถัดลงไปในไฟล์ได้ **Check** คือทุกอย่างที่คอร์สนี้สอนมาจนถึงตอนนี้: สิ่งนี้ assignable ให้สิ่งนั้นไหม `T` resolve เป็นอะไรตรงนี้ branch นี้ reachable ไหม การเช็ค `typeof` นี้ narrow union แล้วหรือยัง **Emit** แปลง AST (ที่ถูก check ผ่านเรียบร้อยแล้ว) เป็น JavaScript และถ้าคุณขอ เป็นไฟล์ `.d.ts` — และปรากฏว่าไม่ใช่ทุกอย่างใน grammar ของ TypeScript จะรอดจากขั้นตอนนี้แบบเดียวกัน
+
+สี่บทครอบคลุม **check** เชิงลึก — [Assignability](/typescript/th/checker-internals/assignability/) ("compatible" หมายความว่าอะไรจริง ๆ), [Inference](/typescript/th/checker-internals/inference/) (type argument ถูกเลือกยังไงโดยที่คุณไม่ได้เขียน) และ [Control-Flow Analysis](/typescript/th/checker-internals/control-flow-analysis/) (narrowing จริง ๆ คือปัญหา graph) — เพราะนั่นคือที่ที่คำถาม "ทำไม compiler ยอมรับสิ่งนี้" และ "ทำไม compiler ปฏิเสธสิ่งนี้" เกือบทั้งหมดในโค้ด generate อยู่จริง บทที่ห้า [Erasure & Emit](/typescript/th/checker-internals/erasure-and-emit/) ครอบคลุมขั้นตอน **emit** และรายการ syntax ที่ต้องการมันแบบระบุชัดเจน บทสุดท้าย [Performance Model](/typescript/th/checker-internals/performance-model/) พูดเรื่อง **check** จากมุมอื่น: อะไรทำให้มันช้า และวิธีวัดแทนการเดา
+
+## diagnostic code บอกอะไรคุณก่อนที่คุณจะอ่านด้วยซ้ำ
+
+ทุก error ของ `tsc` เริ่มด้วย `TS` ตามด้วยตัวเลข และตัวเลขหลักแรกไม่ใช่แค่ของตกแต่ง — มันบอกว่า stage ไหนใน pipeline ข้างบนเป็นคนสร้าง error นี้ ก่อนที่คุณจะอ่านข้อความสักคำ:
+
+| ช่วง | Stage | ตัวอย่าง verify กับ 7.0.2 จริง |
+|---|---|---|
+| `TS1xxx` | **Parse** — source ไม่ใช่ TypeScript ที่ถูกต้องตาม grammar ด้วยซ้ำ | `TS1110: Type expected.` (จาก `const x: = 1;`) |
+| `TS2xxx` | **Check** — semantic error: assignability, property หาย, argument ผิดจำนวน ส่วนใหญ่ล้นหลามของ error ทั่วไปอยู่ตรงนี้ | `TS2322: Type 'number' is not assignable to type 'string'.` |
+| `TS4xxx` | **Emit** โดยเฉพาะ declaration (`.d.ts`) emit — type ใน signature สาธารณะไม่สามารถพิมพ์ออกมาในรูปแบบที่ declaration file ต้องการ | `TS4094: Property 'secret' of exported anonymous class type may not be private or protected.` |
+| `TS5xxx` | **Options** — command line หรือ `tsconfig.json` เองผิด ก่อนที่ source file ไฟล์ไหนจะถูกอ่านด้วยซ้ำ | `TS5023: Unknown compiler option '--bogusFlagDoesNotExist'.` |
+| `TS6xxx` | **Command-line / suggestion diagnostics** — ไม่ใช่ error เรื่องความถูกต้องของโค้ดเป๊ะ ๆ ค่อนไปทาง hygiene ของ project (local ที่ไม่ได้ใช้, ไฟล์อยู่นอก `rootDir`) | `TS6133: 'unused' is declared but its value is never read.` (ต้องการ `noUnusedLocals`) |
+| `TS7xxx` | **`noImplicitAny` / กลุ่ม strict และการเช็ค reachability** — กรณีที่ `strict` (หรือ sub-flag ของมัน) มีไว้จับโดยเฉพาะ | `TS7006: Parameter 'x' implicitly has an 'any' type.`, `TS7027: Unreachable code detected.` |
+
+ไม่มีอะไรในนี้เป็นการเดา — ทุก code และ message ข้างบนคือ output จริงของ `tsc --noEmit` บน TypeScript 7.0.2 สำหรับ trigger ที่ระบุ ได้จากการ compile ไฟล์เล็กที่สุดที่ชนมัน `TS9xxx` คืออีกกลุ่มหนึ่งที่โมดูลนี้จะกลับมาพูดถึงใน [Erasure & Emit](/typescript/th/checker-internals/erasure-and-emit/): diagnostic เฉพาะของ `isolatedDeclarations` ซึ่งแคบและใหม่กว่า declaration emit ธรรมดา
+
+การใช้จริงของตารางนี้: ก่อนที่คุณจะแม้แต่ parse ข้อความ error ตัวเลขหลักแรกก็บอกไปแล้วว่าทางแก้ควรอยู่ใน source code ของคุณ (`TS2xxx`, ส่วนใหญ่ของ `TS7xxx`), ในสิ่งที่คุณ export (`TS4xxx`), ใน build configuration (`TS5xxx`, ส่วนใหญ่ของ `TS6xxx`) หรือในโค้ดที่ไม่ใช่ TypeScript ที่ถูกต้องตาม syntax ด้วยซ้ำ (`TS1xxx`) — สี่ที่ต่างกันมากที่ต้องไปหา ที่ถูกยุบรวมด้วยความเคยชินเป็นแค่ "อ๊ะ tsc error"
+
+<TSPlayground code={diagnosticFamiliesCode} id="checker-internals-index-families" title="บั๊ก shape เดียวกัน แต่คนละ diagnostic family" />
+
+export const diagnosticFamiliesCode = `// @expect-error TS2322
+// TS2xxx -- Check stage: the value's type doesn't match the annotation.
+// Click "Check types" above to see the real diagnostic the checker reports.
+const port: number = "8080";
+
+// Try deleting ": unknown" below to also see a TS7xxx (noImplicitAny)
+// diagnostic reported alongside it -- a different family, same click.
+function handler(req: unknown) {
+  return req;
+}`;
+
+## Mental Model
+
+<Mermaid title="Each stage only sees what the previous stage produced" code={indexMentalDiagram} />
+
+export const indexMentalDiagram = `flowchart TD
+  text["Source text"] --> parse["Parse: grammar only\n(TS1xxx lives here)"]
+  parse --> bind["Bind: one pass, names to symbols"]
+  bind --> check["Check: assignability, inference, narrowing\n(TS2xxx, TS7xxx live here)"]
+  check --> emit["Emit: JS + .d.ts\n(TS4xxx, TS9xxx live here)"]
+  config["tsconfig.json / CLI flags"] -.->|read once, before parse| parse
+  config -.->|invalid options: TS5xxx| bad["Never reaches parse at all"]`;
+
+เหตุผลที่ pipeline นี้ควรค่าแก่การเก็บไว้ในหัว แทนที่จะมอง `tsc` เป็นปุ่ม "เช็คโค้ดฉันที" ทึบ ๆ อันหนึ่ง คือ error ของแต่ละ stage มี shape ที่ต่างกันโดยสิ้นเชิงและทางแก้ที่ต่างกันโดยสิ้นเชิง parse error หมายความว่า *grammar* พังเลย — ไม่มี type information ไหนถูกใช้เลย ดังนั้น "แต่ฉัน annotate ถูกต้องแล้วนะ" ไม่ใช่ข้อแก้ตัวที่เกี่ยวข้อง check error หมายความว่า grammar โอเคแต่*ความหมาย*ไม่ตรงกัน — นี่คือที่ที่เกือบทุกอย่างที่เหลือในคอร์สนี้อยู่ และเป็นที่ที่ความผิดพลาดที่น่าสนใจจริง ๆ ของเครื่องมือ AI อยู่เกือบทั้งหมดเช่นกัน เพราะ generator ที่เห็น TypeScript ที่ถูกต้องมามากพอไม่ค่อยผลิต `TS1xxx` ขยะ มันผลิตโค้ดที่ดูสมเหตุสมผลที่พังที่ semantic layer หรือแย่กว่านั้น ไม่พังเลยเพราะ semantic layer มีช่องโหว่ที่มีเอกสารรองรับ emit error หมายความว่า checking สำเร็จแต่ *artifact* เฉพาะที่คุณขอ (ปกติคือไฟล์ `.d.ts`) ไม่สามารถผลิตได้จากสิ่งที่ checking อนุมัติ — หมวดที่คนส่วนใหญ่ไม่เคยเจอจนกว่าจะลอง publish library
+
+## ข้อแลกเปลี่ยน
+
+| วิธีอ่าน compiler error | ข้อดี | ต้นทุน |
+|---|---|---|
+| อ่านแค่ข้อความ | เร็ว ใช้ได้กับ `TS2xxx` ทั่วไปส่วนใหญ่ | พลาดสิ่งที่ตัวเลขหลักแรกบอกไปแล้วว่าทางแก้ควรอยู่*ที่ไหน* และอ่าน `TS4xxx`/`TS5xxx`/`TS6xxx` ผิดว่าเป็น "บั๊กชนิดเดียวกัน" กับ `TS2xxx` |
+| รู้ pipeline (parse → bind → check → emit) และช่วงตัวเลข | จำกัดการค้นหาทันที: เป็นโค้ดฉัน, export ของฉัน หรือ config ของฉัน | ต้องเรียนรู้อีกอย่างก่อนที่ shortcut จะคุ้ม — ไม่มีค่าสำหรับ error ครั้งเดียวจบ มีค่ามากตอนที่คุณกำลัง review TypeScript ของคนอื่น (หรือ AI) เป็นจำนวนมาก |
+| สมมติว่า "compile ผ่าน" แปลว่า "ถูกต้อง" | ไม่ต้องออกแรงเพิ่ม | ตรงกับช่องว่างที่โมดูลนี้ทั้งหมดมีไว้ปิด — assignability, inference และ narrowing ทั้งหมดมีวิธีที่ checker ยอมให้ compile สิ่งที่ unsound ได้อย่างถูกกฎที่รู้กันดี |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **error ของ `tsc` ก็คือ error ของ `tsc` — ตัวเลขหลัง `TS` เป็นแค่ ID** ตัวเลขหลักแรก encode ว่า pipeline stage ไหนสร้างมัน และนั่นเปลี่ยนว่าทางแก้ควรอยู่ที่ไหน: `TS5xxx` แปลว่า config ของคุณผิดก่อนที่ source file ไฟล์ไหนจะถูกอ่านด้วยซ้ำ `TS4xxx` แปลว่าโค้ดของคุณ type-check ผ่านสบาย ๆ แต่*ประกาศ*ไม่ได้ มีแค่ `TS2xxx`/`TS7xxx` เท่านั้นที่แปลว่า "แก้ expression นี้"
+- **ถ้า compile ผ่าน แปลว่า checker verify แล้วว่าถูกต้อง** checker verify ว่า*สอดคล้องกับกฎของ assignability, inference และ narrowing* ซึ่งอย่างที่สามบทถัดไปจะโชว์อย่างละเอียด มีจุดเฉพาะที่มีเอกสารรองรับดีที่ "compile ผ่าน" กับ "ถูกต้อง" แยกออกจากกันโดยตั้งใจ (structural typing, method ที่ bivariant, narrowing ที่มองโลกในแง่ดีข้าม `await`)
+- **Emit ก็แค่ "compiler เขียนโค้ดเดิมออกมาโดยลบ type ออก"** สำหรับ syntax ส่วนใหญ่ก็จริง (ดู [Erasure & Emit](/typescript/th/checker-internals/erasure-and-emit/)) — แต่มี syntax TypeScript ชุดสั้น ๆ เฉพาะเจาะจงที่ต้องการให้ compiler generate โค้ด runtime ที่*ต่างออกไป* ไม่ใช่แค่ลบ annotation ออก และนั่นคือ syntax เดียวกับที่พังภายใต้ runtime แบบ type-stripping พอดี
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนที่คุณจะประเมิน type สักตัวในไฟล์ที่ generate มา ให้วาง error ของมัน (ถ้ามี) ลงใน pipeline ก่อน: `TS1xxx` แปลว่ายังไม่ต้องอ่าน type เลย ไฟล์ยัง parse ไม่ผ่าน `TS5xxx`/`TS6xxx` แปลว่าดูที่ `tsconfig.json` หรือ build command ไม่ใช่ source `TS4xxx` แปลว่าตัวโค้ดโอเค แต่ API สาธารณะที่ประกาศไว้พิมพ์ออกมาแบบเดิมไม่ได้ มีแค่ `TS2xxx` และส่วนใหญ่ของ `TS7xxx` เท่านั้นที่เป็นเรื่อง logic ที่คุณกำลัง review จริง ๆ — และสามบทถัดไปของโมดูลนี้มีอยู่ก็เพราะความผิดพลาดที่น่าสนใจส่วนใหญ่ของเครื่องมือ AI ผลิต diagnostic เป็น**ศูนย์**ในทุก family ซึ่งการอ่านตัวเลขเท่าไหร่ก็ไม่ช่วยเผยมันออกมา ช่องว่างนั้น — โค้ดที่ผิดแต่ยัง compile ผ่านสะอาด — คือสิ่งที่โมดูลที่เหลือมีไว้จัดการ
+
+<SpotTheBug code={`interface User { id: string; name: string }
+
+// Looks like a type-safe fetch helper.
+async function getUser(id: string): Promise<User> {
+  const res = await fetch(\`/api/users/\${id}\`);
+  return res.json();
+}
+
+async function run() {
+  const user = await getUser("42");
+  console.log(user.name.toUpperCase());
+}`}>
+โค้ดนี้ compile ผ่านโดยไม่มี diagnostic เลยในทุก family จากตารางข้างบน — ไม่มี `TS1xxx` ไม่มี `TS2xxx` ไม่มีอะไรเลย `res.json()` คืนค่า `Promise<any>` และ `any` assignable ให้ return type ที่ประกาศไว้คือ `Promise<User>` โดยไม่มีการ verify เลยว่า response จริง ๆ มี `id` และ `name` signature ของฟังก์ชันอ่านเหมือนเป็นการรับประกันจริง ๆ แต่ไม่มีขั้นตอนไหนใน pipeline parse/bind/check/emit เคยเช็ค*shape*ของสิ่งที่ server ส่งกลับมาเลย — เช็คแค่ว่า `any` compatible กับ `User` ซึ่งมันเป็นแบบนั้นเสมอ ถ้า response จริงของ endpoint คือ `{ id: "42" }` ไม่มี `name` เลย `user.name.toUpperCase()` จะ throw ตอน runtime ในโค้ดที่ผ่านทุก stage ของ checker สะอาดหมดจด failure mode แบบนี้เป๊ะ ๆ — type ที่ถูก assign ตรง boundary ที่ checker มองไม่เห็น — คือหัวข้อของ section เรื่อง `any` ในบท [Assignability](/typescript/th/checker-internals/assignability/)
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`tsc` รันสี่ stage เดียวกันบนทุกไฟล์ — parse, bind, check, emit — และตัวเลขหลักแรกของ diagnostic (`TS1xxx`–`TS7xxx`) บอกว่า stage ไหนสร้างมันและทางแก้ควรอยู่ที่ไหน แต่ "สะอาดครบทั้งสี่ stage" แปลว่าโค้ดทำตามกฎของ checker เท่านั้น — สามบทถัดไปมีอยู่ก็เพราะกฎเหล่านั้นมีจุดเฉพาะที่มีเอกสารรองรับดีที่การทำตามกฎกับความถูกต้องไม่ใช่เรื่องเดียวกัน
+</Callout>
+
+export const quizIndex = [
+  {
+    q: 'สี่ pipeline stage ที่ไฟล์ TypeScript ทุกไฟล์ผ่านคืออะไร?',
+    options: [
+      'Lint, format, compile, bundle',
+      'Parse, bind, check, emit',
+      'Tokenize, minify, transpile, run',
+      'Load, resolve, execute, cache',
+    ],
+    answer: 1,
+    explain: 'Parse แปลง text เป็น AST ด้วย grammar อย่างเดียว bind เชื่อมชื่อกับ symbol ในรอบเดียว check คือทุกอย่างที่คอร์สนี้สอนมาจนถึงตอนนี้ (assignability, inference, narrowing) และ emit ผลิต JavaScript และ/หรือ .d.ts จาก AST ที่ check แล้ว',
+  },
+  {
+    q: 'ไฟล์หนึ่งพ่น `TS5023: Unknown compiler option `--bogusFlagDoesNotExist`.` ตัวเลข `5` นำหน้าบอกอะไรก่อนที่คุณจะอ่านต่อ?',
+    options: [
+      'ปัญหาอยู่ใน source code',
+      'ปัญหาอยู่ที่ตัว compiler option เอง — source file ยังไม่เคยถูกอ่านด้วยซ้ำ',
+      'ปัญหาอยู่ในไฟล์ .d.ts ที่ emit ออกมา',
+      'มันคือ syntax error',
+    ],
+    answer: 1,
+    explain: 'TS5xxx คือ family ของ options: command line หรือ tsconfig.json ผิดในตัวมันเอง ก่อนที่ source file ไฟล์ไหนจะเข้าสู่ parse stage',
+  },
+  {
+    q: 'ฟังก์ชันที่ generate มาถูกประกาศ `Promise<User>` แต่ตัวมันคือ `return res.json();` ไม่มีการ validate เลย pipeline stage ไหนต้องมีอยู่เพื่อให้จับเรื่องนี้ได้ และ TypeScript 7.0.2 มีมันไหม?',
+    options: [
+      'parse stage จะจับได้ — มันไม่มีใน 7.0.2',
+      'ไม่มี stage ไหนใน parse/bind/check/emit ที่ verify shape จริงตอน runtime ของ value เทียบกับ type ที่ประกาศไว้ตรง boundary แบบนี้ — `any` จาก `.json()` สนอง type ที่ประกาศไว้ได้ทุกแบบโดยไม่มีการ verify เลย',
+      'emit stage ลบความไม่ตรงกันออกให้อัตโนมัติ',
+      'bind stage flag มันเป็น unresolved symbol',
+    ],
+    answer: 1,
+    explain: '`res.json()` คืนค่า `Promise<any>` และ `any` compatible กับทุกอย่างที่ check stage โดยตั้งใจ ไม่มี stage ไหนใน pipeline ตรวจสิ่งที่ server ส่งกลับมาจริง ๆ ตอน runtime เลย — นั่นคือปัญหาการ validate boundary ไม่ใช่ปัญหาการ type-check',
+  },
+  {
+    q: 'diagnostic family ไหนที่เป็นเรื่อง declaration (`.d.ts`) emit โดยเฉพาะ ไม่ใช่ความถูกต้องของ logic โค้ดคุณ?',
+    options: [
+      'TS2xxx',
+      'TS4xxx',
+      'TS7xxx',
+      'TS1xxx',
+    ],
+    answer: 1,
+    explain: 'TS4xxx เกิดเมื่อ checking ผ่านแล้วแต่ compiler พิมพ์ type ในรูปแบบที่ไฟล์ .d.ts ต้องการไม่ได้ — เช่น TS4094 เมื่อ exported anonymous class type มี private หรือ protected member',
+  },
+  {
+    q: '```text\nfunction handler(req) {\n  return req.method;\n}\n```\nภายใต้ `strict` diagnostic ที่ได้อยู่ family ไหน และทำไม?',
+    options: [
+      'TS1xxx เพราะ `req` ไม่มี type annotation เลย',
+      'TS7xxx -- `noImplicitAny` (ส่วนหนึ่งของ family strict) flag parameter ที่ไม่มี type ที่ infer ได้ว่าเป็น `any` แบบ implicit โดยเฉพาะ',
+      'TS4xxx เพราะมันกระทบ declaration emit',
+      'ไม่มี diagnostic เกิดขึ้นเลย',
+    ],
+    answer: 1,
+    explain: 'การไม่ annotate parameter ยังคง valid ตาม grammar (ไม่มี TS1xxx) และไม่กระทบ declaration emit (ไม่มี TS4xxx) — มันคือ case ที่ noImplicitAny มีไว้จับพอดี รายงานเป็น TS7006 ใน family TS7xxx',
+  },
+  {
+    q: '```text\n// liby.ts (private class NOT exported -- only the factory is)\nclass InternalOnly { private secret = 1; }\nexport function make() { return new InternalOnly(); }\n\n// usey.ts\nimport { make } from "./liby";\nexport function reExport() {\n  return { wrapped: make() };\n}\n```\nการ compile `usey.ts` ด้วย `--declaration` (verify กับ 7.0.2 แล้ว) รายงาน `TS4094: Property \'secret\' of exported anonymous class type may not be private or protected.` ถ้า `InternalOnly` ถูก `export` จาก `liby.ts` ด้วย โค้ดเดียวกันนี้ยัง error ไหม?',
+    options: [
+      'ยัง -- private member ทำให้ declaration emit พังเสมอ ไม่ว่าจะ export อะไร',
+      'ไม่ -- พอ `InternalOnly` ถูก export แล้ว `usey.d.ts` reference มันด้วยชื่อได้ (`import { InternalOnly } from "./liby"`) error จะโผล่แค่ตอนที่ class ไม่มีชื่อที่ export ให้ reference ได้ บังคับให้ printer ต้อง inline มันเป็น structural type แทน ซึ่งใส่ private member ไม่ได้',
+      'ไม่ เพราะการห่อ return value ใน `{ wrapped: ... }` ต่างหากคือปัญหา ไม่เกี่ยวกับ export',
+      'ยัง แต่แค่ภายใต้ `isolatedDeclarations` เท่านั้น ไม่ใช่ `--declaration` เฉย ๆ',
+    ],
+    answer: 1,
+    explain: 'verify ตรงแล้ว: การ export `InternalOnly` จาก liby.ts ทำให้ usey.d.ts compile สะอาดด้วย `wrapped: InternalOnly` (การ reference ด้วยชื่อ) การไม่ export มันไว้ (export แค่ factory function) คือสิ่งที่บังคับให้ printer ใช้ structural type แบบไม่มีชื่อสำหรับตำแหน่ง return พอดี ซึ่งเป็นที่มาของ TS4094 -- การห่อใน object literal ไม่ใช่ตัวตัดสินทั้งสองทาง',
+  },
+];
+
+<Quiz client:visible id="checker-internals/index" questions={quizIndex} />
+
+<ProgressTracker client:visible id="checker-internals/index" />

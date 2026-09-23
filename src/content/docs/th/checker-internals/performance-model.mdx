@@ -1,0 +1,229 @@
+---
+title: 'Performance Model'
+description: 'อะไรทำให้ checker ช้าจริง ๆ — instantiation, instantiation cache ของ 5.9, ขีดจำกัดความลึกและขนาด union ที่วัดจริง, การอ่าน --extendedDiagnostics กับ --generateTrace จริง, tsgo parallelism และสูตรวัดก่อนค่อยปรับ'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Checker คือโปรแกรมจริงที่ทำงานจริง
+
+ทุกบทในโมดูลนี้ปฏิบัติกับ checker เหมือนกล่องดำที่ตอบคำถามใช่/ไม่ใช่ — assignable ไหม, candidate นี้หรือนั้น, reachable ไหม การตอบคำถามพวกนั้นคือการคำนวณ: resolve generic เป็น type ที่เป็นรูปธรรม (**instantiation**), normalize union ให้ member ของมันถูกเทียบกันอย่างสม่ำเสมอ, distribute conditional ไปทีละ member ของ union, recurse ผ่าน type ที่ซ้อนกัน ไม่มีอะไรในนั้นฟรี และต่างจากเรื่องส่วนใหญ่ที่คอร์สนี้สอน ต้นทุนไม่ใช่เรื่องรสนิยม — มันปรากฏเป็น editor ที่ช้า, CI build ที่ช้า หรือ compiler ที่ยอมแพ้ตรง ๆ ด้วย `TS2589`/`TS2590` บทนี้พูดเรื่องว่าอะไรกินเวลาจริง ๆ วิธีวัดแทนการเดา และ TypeScript 7's native compiler เปลี่ยนคำตอบตรงไหนบ้างและไม่เปลี่ยนตรงไหน
+
+## Guard สองอัน สองแบบของความแพง
+
+Checker บังคับขีดจำกัดภายในที่เป็นอิสระกันสองอัน และการปนกันเสียเวลาไล่แก้ผิดทาง — [บท performance ของโมดูล Practical Mastery](/typescript/th/practical-mastery/performance-and-pitfalls/) มี walkthrough เต็มพร้อม trigger จริงกะทัดรัดทั้งสองอัน; สรุปที่สำคัญตรงนี้คือแต่ละอัน guard แกนไหน:
+
+**`TS2589`** guard **ความลึก** — resolve type เดียวลึกกี่ instantiation ที่ซ้อนกัน:
+
+```ts
+// @expect-error TS2589
+type CountUp<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : [unknown, ...CountUp<N, [...Acc, unknown]>];
+
+type Fine = CountUp<47>;  // compiles
+type Boom = CountUp<48>;  // "Type instantiation is excessively deep and possibly infinite."
+```
+
+ขีดสองอันเป๊ะ วัดตรง (Phase 1 ของ audit ของคอร์สนี้เอง อ้างแทนที่จะวัดซ้ำตรงนี้เพราะตัวเลขไม่เปลี่ยนจากบทหนึ่งไปอีกบท): conditional แบบ recursive **naive** อย่าง `CountUp` ข้างบนสูงสุดที่ **47/48**; เวอร์ชัน **tail-recursive** — ที่ recursive call *คือ*ผลลัพธ์ทั้งหมด พก accumulator ไปด้วย — ดันขีดไปได้ถึง **999/1000** ไกลกว่าราว 20 เท่า เพราะ compiler optimize call ที่อยู่ตำแหน่ง tail ได้แบบเดียวกับที่ runtime optimize ฟังก์ชัน tail-recursive
+
+**`TS2590`** guard **ขนาด** — ไม่เกี่ยวกับความลึกเลย แค่ cardinality ดิบ ๆ — และไม่ต้องมี recursion เลยก็ trigger ได้:
+
+```ts
+// @expect-error TS2590
+type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+type ThreeDigits = `${Digit}${Digit}${Digit}`; // 1,000 combinations, written compactly
+type Cross = `${ThreeDigits}-${ThreeDigits}`;  // 1,000,000 combinations -- too many to represent
+```
+
+นี่คือ trigger กะทัดรัดเป๊ะจากบท [Practical Mastery](/typescript/th/practical-mastery/performance-and-pitfalls/) ที่รายงานไว้ว่า fire ในเวลาราว 100ms บน 7.0.2 — ไม่มี recursion เลย แค่ template-literal cross product ที่ combinatorics ของมันโตเกินขีดจำกัดภายในคงที่ทันทีที่ checker พยายาม expand มัน ทางแก้สำหรับ `TS2589` คือลดความลึกของ recursion (หรือทำให้เป็น tail-recursive); ทางแก้สำหรับ `TS2590` คือลด cardinality ของ union หรือปฏิเสธที่จะสร้าง cross product เต็มแบบ eager ตั้งแต่แรก — ไม่มีทางแก้ไหนแตะ guard อีกอันเลย
+
+## Instantiation cache ของ 5.9
+
+Instantiation — การแทน type ที่เป็นรูปธรรมเข้าไปใน type parameter ของ generic — คือ operation ที่ถูกทำซ้ำมากที่สุดใน checking เพราะ generic ตัวเดียวกันถูก instantiate ที่ทุก call site และ library ที่ generic ลึก (release note ของ TypeScript 5.9 เอ่ยชื่อ Zod กับ tRPC โดยเฉพาะ) trigger instantiation เดียวกันหรือซ้อนกันได้หลายครั้งภายในไฟล์เดียว TypeScript 5.9 เพิ่ม caching สำหรับสิ่งนี้ ด้วยคำพูดของ release note เอง: "TypeScript 5.9 is able to cache many intermediate instantiations when work has already begun on a specific type instantiation" ลด "unnecessary work and memory allocations" — การเปลี่ยนแปลงที่ contribute โดย Mateusz Burzyński และมีแรงจูงใจตรง ๆ จากโค้ด library ที่ generic ลึกแบบที่ section "อ่านโค้ดที่ AI เขียน" ของบทนี้ข้างล่างพูดถึงเป๊ะ release note ไม่ได้ quote เปอร์เซ็นต์สำหรับ change นี้เฉพาะ (ต่างจาก 11% file-existence-check speedup ของ release เดียวกัน ซึ่งเป็น optimization แยกที่เล็กกว่า) — วิธีบรรยายที่ซื่อสัตย์คือมันจริงเชิงคุณภาพและมุ่งเป้าไปที่งานซ้ำซ้อนโดยเฉพาะ ไม่ใช่ตัวเลขที่ควรพูดซ้ำเหมือนถูก benchmark ทั้ง project
+
+## อ่าน `--extendedDiagnostics` จริง
+
+`--extendedDiagnostics` พิมพ์บัญชีของ checker เองว่าทำอะไรไป และตัวเลขข้างล่างคือ output จริงจากเครื่องนี้ ไม่ใช่ documentation — ไฟล์ scratch เล็ก ๆ ที่รวม template-literal permutation type กับ mapped type แบบ recursive สไตล์ `DeepPartial` บน interface ที่ซ้อนกันปานกลาง:
+
+```text
+$ tsc --noEmit --strict --extendedDiagnostics perf.ts
+Files:              83
+Lines:           58462
+Identifiers:     49756
+Symbols:         59796
+Types:           35440
+Instantiations:  34241
+Memory used:    64977K
+Memory allocs:  277900
+Parse time:     0.017s
+Bind time:      0.007s
+Check time:     0.121s
+Emit time:      0.000s
+Total time:     0.145s
+```
+
+สองอย่างควรสังเกตก่อนถือว่าตัวเลขไหนเป็น "ต้นทุนโค้ดคุณ" อย่างแรก `Files: 83` — ไฟล์ `.ts` เล็ก ๆ ไฟล์เดียวดึง standard library ทั้งหมด (`lib.es2025.d.ts` และทุกอย่างที่มันอ้างถึง) เข้ามาเป็นส่วนหนึ่งของโปรแกรมเดียวกัน ดังนั้น **Instantiations: 34,241** สะท้อน compiler resolve lib ของตัวเองไปแล้ว ไม่ใช่ type alias สองตัวของไฟล์นี้; บท [Recursive Types](/typescript/th/type-level-programming/recursive-types/) วัด baseline เป๊ะนี้ตรง ๆ แล้วพบว่าแต่ละระดับเพิ่มเติมของ accumulator `BuildTuple` แบบ tail-recursive เพิ่ม instantiation ราว 250–500 อันต่อขั้น แบบไม่เชิงเส้น เพราะ accumulator เองถูกสร้างใหม่ทุกครั้ง อย่างที่สอง `Check time: 0.121s` จาก `Total time: 0.145s` — checking ครอบงำ parse กับ bind รวมกันมากกว่า 7 เท่า ซึ่งเป็นเวอร์ชันที่เป็นรูปธรรม วัดได้จริง ของ "checker คือที่ที่ต้นทุนจริงอยู่" ไม่ใช่คำกล่าวอ้างทั่วไปเกี่ยวกับ compiler
+
+## อ่าน `--generateTrace` จริง: hot type หน้าตาเป็นยังไง
+
+`--generateTrace <dir>` เขียน trace รูปแบบ Chrome DevTools บวกชุดไฟล์ `types_N.json` ที่ list type object ทุกตัวที่ checker สร้าง ด้วย ID ภายใน การเปิด trace บน scratch project เดียวกันเผยข้อเท็จจริงสองอย่างที่พลาดง่ายจาก `--extendedDiagnostics` เพียงอย่างเดียว อย่างแรก metadata ของ process ใน trace เองตั้งชื่อ process ว่า `"tsgo"` — binary `tsc` ของ TypeScript 7.0.2 **คือ** native, Go-ported compiler; ไม่มี compiler "เก่า" กับ "ใหม่" แยกกันรันคู่กันเลย `tsc` ใน 7.0 ก็คือสิ่งที่เคยเรียกว่า `tsgo` นั่นเอง อย่างที่สอง type ถูกแบ่งข้ามสี่ไฟล์ (`types_0.json` ถึง `types_3.json` type record รวม 29,377 รายการ) — ตรงกับ default 4 parallel checkers ของ native compiler แม้แต่กับ run `--noEmit` ที่ดูเหมือน single-thread การอ่าน event list ของ trace สำหรับ operation ที่พบบ่อยที่สุด (count จริงจาก run นี้) โชว์สิ่งที่โมดูลนี้บรรยายไว้แบบนามธรรมเป๊ะ:
+
+```text
+[ 'createSourceFile', 166 ],
+[ 'bindSourceFile', 166 ],
+[ 'checkSourceFile', 166 ],
+[ 'getVariancesWorker', 28 ],
+[ 'structuredTypeRelatedTo', 16 ],
+```
+
+`structuredTypeRelatedTo` คือการเดินทีละ property ของบท [Assignability](/typescript/th/checker-internals/assignability/) ที่ถูกจับเป็น operation จริง มีชื่อ นับได้ ใน trace — ไม่ใช่คำเปรียบเปรย `getVariancesWorker` คือ compiler กำลังคำนวณ variance annotation สำหรับ generic type parameter (กลไกเบื้องหลัง annotation `in`/`out` ที่โมดูล generics ครอบคลุม) และการที่มันโผล่มาเลยยืนยันว่ามันก็ไม่ฟรีเช่นกัน นี่คือเวอร์ชันที่เป็นรูปธรรมของ "วัด อย่าเดา": ข้อร้องเรียนเรื่อง performance จริงบนไฟล์จริงสามารถชี้ไปที่ operation ที่มีชื่อพวกนี้อันใดอันหนึ่งที่รันบ่อยเกินคาดได้ แทนที่จะถกเถียงกันแบบนามธรรม
+
+<TSPlayground code={depthLimitCode} id="checker-perf-depth-limit" title="47 compiles, 48 doesn't — the measured naive-recursion ceiling" />
+
+export const depthLimitCode = `// @expect-error TS2589
+type CountUp<N extends number, Acc extends unknown[] = []> =
+  Acc["length"] extends N ? Acc : [unknown, ...CountUp<N, [...Acc, unknown]>];
+
+type Fine = CountUp<47>;  // compiles
+type Boom = CountUp<48>;  // "Type instantiation is excessively deep and possibly infinite."`;
+
+## `tsgo` และทำไม checker เร็วขึ้นราว 10 เท่าโดยที่ type ไม่ได้ถูกลง
+
+Native compiler ของ TypeScript 7 ตัด time-to-first-error ของ editor จาก 17.5s เหลือราว 1.3s บน codebase ของ VS Code และทำ whole-program check เร็วขึ้น 8–12 เท่า ตาม release blog ที่บท [Practical Mastery](/typescript/th/practical-mastery/performance-and-pitfalls/) อ้างถึง — และหลักฐานจาก trace ข้างบนโชว์เป๊ะว่ามันมาจากไหน: implementation แบบ native (ไม่ใช่ JavaScript) บวกกับ **parallel checking** จริง (`--checkers` default 4 verify แล้วว่าแบ่ง type dump เป็นสี่ไฟล์ข้างบนแม้บนไฟล์เล็กนี้) มากกว่าจะเป็น algorithm ที่ฉลาดขึ้นสำหรับ type ที่แพงตัวใดตัวหนึ่ง `--checkers 1` คือค่าที่แนะนำบน CI runner ที่ CPU จำกัด; เครื่อง local ที่ใหญ่กว่าเพิ่มได้ โดย release blog ไม่ระบุเพดานเฉพาะ นี่คือเหตุผลเป๊ะว่าทำไม "เร็วขึ้น 10 เท่า" กับ "type ที่แพงผิดปกติของคุณถูกลงแล้ว" เป็นคำกล่าวอ้างคนละอัน: implementation แบบ native, parallel ทำให้*ทุก*type resolution เร็วขึ้นและให้ไฟล์อิสระ check พร้อมกันได้ แต่มันไม่เปลี่ยน*shape*ของ cost curve สำหรับ type เดี่ยว ๆ ที่ซ้อนลึกหรือ combinatorial มหาศาล — conditional แบบ recursive เดียวกันที่ใช้เวลา 30 วินาทีภายใต้ TypeScript 6 ใช้เวลาน้อยลงอย่างมีนัยสำคัญภายใต้ 7 และยังครอบงำ build อยู่ เพราะงาน exponential (หรือแค่ลึกมาก) ต่อ instantiation ไม่ได้ถูกแทนที่ด้วยงานที่น้อยลง มันแค่รันบน hardware ที่เร็วกว่า parallel กว่า
+
+## สูตรวัดก่อนค่อยปรับ
+
+ตามลำดับ แต่ละขั้นแคบกว่าขั้นก่อน:
+
+1. **มันช้าจริงหรือแค่รู้สึกช้า?** จับเวลา `tsc --noEmit` ที่สะอาดก่อนแตะอะไรเลย — ตัวเลขไว้เทียบ ไม่ใช่ความรู้สึก
+2. **`--extendedDiagnostics`** — เช็ค `Instantiations` กับ `Check time` โดยเฉพาะ ไฟล์ที่มี instantiation count สูงผิดปกติ*เทียบกับขนาดของตัวเอง*(ไม่ใช่ตัวเลขดิบ ซึ่งรวม lib baseline เสมอ) คือเบาะแสจริง
+3. **`--generateTrace <dir>`** — เปิด trace เรียงตาม duration หรือ count แล้วหา operation ตัวเดียว (`structuredTypeRelatedTo`, `getVariancesWorker` หรือ instantiation ของ type ใดตัวหนึ่ง) ที่รันบ่อยกว่าที่ source code ดูเหมือนควรมาก
+4. **ค่อยเปลี่ยน type ตอนนี้เท่านั้น** — ลดความลึกของ recursion, ทำ conditional แบบ recursive naive ให้เป็น tail-recursive, แทน template-literal cross product ด้วย union ธรรมดา หรือหยุด distribute conditional ที่ไม่จำเป็นต้อง distribute ทางแก้ทุกอันในรายการนี้ใช้ต้นทุนน้อยกว่าตอนที่คุณรู้ว่ากลไก*ไหน*จากบทนี้ (หรือบทก่อนหน้าเรื่อง inference และ conditional distribution) เป็นตัวการจริง แทนที่จะเขียน type ที่ไม่เคยเป็น bottleneck ใหม่
+
+## Mental Model
+
+<Mermaid title="Two separate limits, one measurement path" code={perfMentalDiagram} />
+
+export const perfMentalDiagram = `flowchart TD
+  slow["'tsc feels slow'"] --> measure["--extendedDiagnostics: which number is actually high?"]
+  measure --> trace["--generateTrace: which named operation runs too often?"]
+  trace --> fix["Fix the specific mechanism -- depth, size, distribution, or instantiation count"]
+  guard1["TS2589 -- DEPTH guard"] -.->|different axis from| guard2["TS2590 -- SIZE guard"]
+  fast["tsgo: native + parallel checkers"] -.->|makes every instantiation faster| slow
+  fast -.->|does NOT change the cost SHAPE of| guard1`;
+
+การแบ่งสอง guard (`TS2589` ความลึก, `TS2590` ขนาด) กับสูตรวัดก่อนคือแนวคิดเดียวกันจากสองทิศทาง: ต้นทุนของ checker มีมากกว่าหนึ่งมิติ และทั้ง "มันช้า" กับ "มัน error" ไม่บอกว่ามิติไหนเป็นตัวการโดยไม่ดูจริง สถาปัตยกรรม native, parallel ของ `tsgo` คือการปรับปรุงจริง วัดได้ ระดับ order-of-magnitude ว่างาน checking จำนวนที่กำหนดรันเร็วแค่ไหน — และเพราะมันเป็น speedup เชิง implementation ไม่ใช่เชิง algorithm มันทำให้ทุก type resolution เร็วขึ้นด้วยตัวคูณเดียวกันโดยประมาณ โดยไม่เปลี่ยนว่า type ไหนแพงกว่ากันเชิง asymptotic เทียบกัน
+
+## ข้อแลกเปลี่ยน
+
+| วิธี | ข้อดี | ต้นทุน |
+|---|---|---|
+| เดาว่า type ไหนช้าจากการอ่าน source | ไม่ต้องใช้ tooling | ผิดบ่อย — section "อ่านโค้ดที่ AI เขียน" ของบทนี้ข้างล่างเต็มไปด้วย case ที่ type ที่ดู "ใหญ่" ไม่ใช่ตัวที่แพง |
+| `--extendedDiagnostics` | เร็ว คำสั่งเดียว ให้ตัวเลขจริง (Instantiations, Check time) ไว้เทียบกับ baseline | ตัวเลขเป็นระดับโปรแกรม ไม่ใช่ต่อ type — ยังต้อง isolate ว่าไฟล์หรือ type ไหนมีส่วนกับ delta |
+| `--generateTrace` | ระบุชื่อ operation จริง (`structuredTypeRelatedTo`, `getVariancesWorker` ฯลฯ) และรันบ่อยแค่ไหน — เครื่องมือที่แม่นยำที่สุดในบทนี้ | ตั้งค่าและอ่านหนักกว่า `--extendedDiagnostics`; เกินความจำเป็นสำหรับเช็คสุขภาพเร็ว ๆ |
+| พึ่งความเร็วของ `tsgo` แทนการแก้ type ที่แพงผิดปกติ | จริง วัดได้ ไม่ต้องเปลี่ยนโค้ดเลย | ไม่แก้ cost shape ที่อยู่ข้างใต้ — type ที่ exponential หรือลึกผิดปกติยังคง exponential หรือลึกผิดปกติ แค่รันเร็วขึ้นต่อขั้น |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`TS2589` กับ `TS2590` คือ error เดียวกันที่มีสองชื่อ** พวกมัน guard คนละแกน — ความลึกเทียบกับขนาด — verify ตรงแล้ว: template-literal cross product ที่ไม่ recursive ให้ `TS2590` ในเวลาราว 100ms โดยไม่มี recursion เกี่ยวข้องเลย ในขณะที่ conditional แบบ recursive ที่มี union เล็ก มีขอบเขต ให้ `TS2589` ไม่ว่า type รวมจะน้อยแค่ไหน
+- **Native compiler ของ TypeScript 7 ทำให้ทุก type ถูกลง** มันทำให้ทุก instantiation *คำนวณเร็วขึ้น* ผ่าน native implementation และ parallel checker จริง — มันไม่เปลี่ยน cost curve พื้นฐานของ type ที่แพงผิดปกติ ซึ่งเป็นเหตุผลว่าทำไม type ที่ต้นทุน exponential เดียวกันที่ช้าภายใต้ 6.x ยังคงเป็นต้นทุนหลักภายใต้ 7 แค่ในเวลาที่น้อยกว่า
+- **Instantiations count สูงใน `--extendedDiagnostics` แปลว่าโค้ดคุณเป็นปัญหาเสมอ** ส่วนใหญ่ของตัวเลขนั้น verify ตรงแล้ว คือ compiler resolve standard library ของตัวเองสำหรับทุกโปรแกรมไม่ว่าขนาดไหน — ตัวเลขที่ควรเทียบคือ*delta*ระหว่าง baseline กับไฟล์จริงของคุณ ไม่ใช่ยอดรวมดิบ
+- **Instantiation cache ของ 5.9 แปลว่าการเรียก generic ซ้ำ ๆ ฟรีแล้ว** release note บรรยายว่ามันลดงานซ้ำซ้อนและ allocation สำหรับ instantiation ที่กำลังดำเนินอยู่แล้ว มีแรงจูงใจจากโค้ด library ที่ generic ลึกในโลกจริง — ไม่ใช่คำกล่าวอ้างว่า instantiation เองฟรีแล้ว หรือมันใช้กับทุก pattern งานซ้ำซ้อนที่เป็นไปได้
+
+## อ่านโค้ดที่ AI เขียน
+
+ปัญหา performance ในโค้ด generate มักมาจาก shape ที่เฉพาะเจาะจง จำได้ มากกว่าโชคร้ายแบบสุ่ม:
+
+- utility type "ฉลาด" ที่ generate มาจาก pattern ของ library โลกจริง (deep partial, ตัวสร้าง path-string แบบ recursive, ตัวสร้าง permutation) ที่ใช้กับ type โลกจริงที่ใหญ่หรือซ้อนลึกจริง ๆ: นี่คือ shape เป๊ะที่สามารถดันผ่าน `TS2589`/`TS2590` แบบเงียบ ๆ หรือแค่ทำให้ทุกไฟล์ที่ import มัน check ช้า โดยไม่มีบรรทัดไหนดูแพงชัดเจนเลย
+- generic helper ที่ถูก instantiate ที่ call site หลายสิบหรือหลายร้อยแห่งทั่ว codebase แต่ละอันมี type argument ต่างกันนิดหน่อย: นี่คือ pattern เป๊ะที่ instantiation cache ของ 5.9 เล็ง และเป็น pattern ที่ควรเช็คด้วย `--extendedDiagnostics` ก่อนสมมติว่า build ที่ช้าเกิดจากขนาด project แทนที่จะเป็น helper ตัวใดตัวหนึ่ง
+- solution ระดับ type ที่ "ฉลาด" ใด ๆ (conditional แบบ recursive ที่ทำ string parsing, mapped type ที่คำนวณ cross product ของ union สองตัว) ที่ human reviewer ต้องใช้ความพยายามจริงในการรันในหัว: ถ้ามันยากสำหรับคนที่จะตามด้วยมือ มันเป็นตัวเก็งแรงที่จะแพงสำหรับ checker ในการตามเช่นกัน และควร `--generateTrace`-check ก่อน ship
+
+<SpotTheBug code={`type Paths<T, Prefix extends string = ""> = T extends object
+  ? { [K in keyof T]-?: K extends string
+      ? Paths<T[K], \`\${Prefix}\${Prefix extends "" ? "" : "."}\${K}\`> | \`\${Prefix}\${Prefix extends "" ? "" : "."}\${K}\`
+      : never
+    }[keyof T]
+  : never;
+
+interface DeepConfig {
+  server: { host: string; port: number; tls: { cert: string; key: string; ca: string[] } };
+  database: { primary: { host: string; port: number }; replicas: { host: string; port: number }[] };
+  features: Record<string, { enabled: boolean; rolloutPercent: number }>;
+}
+
+type ConfigPath = Paths<DeepConfig>;`}>
+โค้ดนี้ compile ผ่าน แต่มันคือความเสี่ยงเชิง performance จริง ตรวจสอบได้ ไม่ใช่สมมติฐาน: `Paths` recurse เข้าไปในทุก object ที่ซ้อนอยู่*และ*แตกกิ่งต่อ property ในทุกระดับผ่าน mapped type และ `features: Record<string, ...>` แปลว่าหนึ่งใน branch นั้น recurse เข้าไปใน index-signature type ที่ "key" ของมันไม่มีขอบเขตเท่าที่ type system มองเห็น ทุกระดับคูณจำนวน instantiation ที่แยกกันแทนที่จะบวกเข้าไป ซึ่งเป๊ะคือกลิ่น "utility type ที่ generate มา instantiate มากกว่าที่ดูเยอะมาก" ที่ section "อ่านโค้ดที่ AI เขียน" ของบทนี้บรรยาย — type แบบนี้เป็นตัวเก็งแรงสำหรับ `--extendedDiagnostics`/`--generateTrace` ก่อนที่มันจะ ship ใน codebase ที่มีระดับการซ้อนมากกว่าตัวอย่างนี้อีกนิดหน่อย หรือก่อนที่ utility ที่มี shape คล้ายกันตัวที่สองจะถูก compose เข้ากับมัน ทางแก้ไม่จำเป็นต้องเป็น "อย่าเขียน recursive mapped type เลย" — มันคือการเช็คต้นทุน instantiation จริงกับ type โลกจริงที่มันจะรันด้วยจริง ตามสูตรวัดก่อนของบทนี้ แทนที่จะเชื่อว่า type ที่ "ดูเหมือน" recursive definition เล็ก สวย มีต้นทุนตามที่ดูมี
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+ต้นทุนของ checker มีมิติที่ถูก guard เป็นอิสระกัน (อย่างน้อย) สองมิติ — ความลึก (`TS2589`) และขนาด (`TS2590`) — และสถาปัตยกรรม native, parallel `tsgo` ของ TypeScript 7 (verify ตรงแล้วใน trace จริง) ทำให้ทุก instantiation เร็วขึ้นโดยไม่เปลี่ยนว่า type ไหนแพงกว่ากันเทียบกัน; `--extendedDiagnostics` กับ `--generateTrace` เปลี่ยน "นี่รู้สึกช้า" ให้เป็น operation ที่มีชื่อเฉพาะและตัวเลขจริงไว้เทียบกับ baseline ซึ่งเชื่อถือได้กว่าการเดาจากการอ่าน type อย่างเข้มงวด
+</Callout>
+
+export const quizPerformance = [
+  {
+    q: '`TS2589` กับ `TS2590` แต่ละอัน guard อะไรจริง ๆ ต่างกันยังไง?',
+    options: [
+      'มันคือ guard เดียวกันที่รายงานด้วยสอง code ต่างกันขึ้นกับ version ของ TypeScript',
+      'TS2589 guard ความลึกของ recursion (ซ้อน instantiation ลึกแค่ไหน); TS2590 guard ขนาด (cardinality ดิบของ union/combination) -- verify ตรงแล้ว: template-literal cross product ที่ไม่ recursive ให้ TS2590 โดยไม่มี recursion เกี่ยวข้องเลย',
+      'TS2589 ใช้กับ tuple เท่านั้น; TS2590 ใช้กับ string literal union เท่านั้น',
+      'TS2590 คือตัวแทนใหม่ของ TS2589 ใน TypeScript 7',
+    ],
+    answer: 1,
+    explain: 'สองตัวอย่างในบทนี้พิสูจน์การแบ่งนี้ตรง ๆ: CountUp<48> (recursion ลึก ไม่ tail) ให้ TS2589 โดยมี union เล็กเกี่ยวข้อง; Digit cross-product (ไม่มี recursion แค่ combinatorics) ให้ TS2590 ในเวลาราว 100ms -- คนละแกน คนละทางแก้',
+  },
+  {
+    q: 'conditional type แบบ recursive naive (ไม่ tail-recursive) กับแบบ tail-recursive ต่างสร้างความลึกขึ้นมา ความต่างที่วัดได้ว่าแต่ละแบบไปได้ลึกแค่ไหนก่อน TS2589 verify กับ TypeScript 7.0.2 แล้วคืออะไร?',
+    options: [
+      'มีขีดเท่ากันเป๊ะ -- tail recursion ไม่มีผลต่อ recursion ระดับ type เลย',
+      'Naive recursion สูงสุดที่ 47/48; tail-recursive recursion (ที่ recursive call คือผลลัพธ์ทั้งหมด พก accumulator) ไปได้ไกลกว่าราว 20 เท่า ที่ 999/1000',
+      'Naive recursion ไม่มีขีดจำกัด; มีแค่ tail-recursive type เท่านั้นที่ชน TS2589 ได้',
+      'ขีดจำกัดขึ้นกับว่า lib file ไหนถูกรวมเข้ามา ไม่เกี่ยวกับ style ของ recursion',
+    ],
+    answer: 1,
+    explain: 'นี่คือขอบเขตที่วัดได้จริง อ้างจาก Phase 1 verification ของคอร์สนี้เอง: 47 compile ผ่าน / 48 พังสำหรับ naive recursion, 999 compile ผ่าน / 1000 พังสำหรับ tail-recursive recursion -- ความต่างจริงราว 20 เท่าจากการ restructure recursive type ประเภทเดียวกัน',
+  },
+  {
+    q: 'output ของ `--generateTrace` บน TypeScript 7.0.2 ตั้งชื่อ process ของตัวเองว่า `"tsgo"` ใน trace metadata แม้ command ที่รันจะเป็นแค่ `tsc --generateTrace` เฉย ๆ นี่ยืนยันอะไร?',
+    options: [
+      'บั๊กใน trace tooling ที่ label process ผิด',
+      'binary `tsc` ของ TypeScript 7.0.2 คือ native, Go-ported compiler จริง -- ไม่มี legacy tsc แยกรันคู่กับ tsgo ใหม่เลย มันคือโปรแกรมเดียวกันข้างใต้',
+      'trace ถูกรันผิดพลาดกับเครื่องมืออื่น',
+      'tsgo ทำงานแค่ตอน --generateTrace ถูกส่งเข้าไปเท่านั้น',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้วโดยตรวจ trace file จริง: metadata event process_name ตั้งชื่อ process ว่า tsgo ยืนยันว่า command tsc ของ TypeScript 7 กำลังรัน native compiler implementation ไม่ใช่ JavaScript แบบ legacy แยกต่างหาก',
+  },
+  {
+    q: 'Instantiation cache ของ TypeScript 5.9 ทำอะไรจริง ๆ ตามคำบรรยายของ release note เอง?',
+    options: [
+      'มันเอาขีดจำกัดความลึก TS2589 ออกไปเลย',
+      'มัน cache intermediate instantiation หลายอันเมื่องานเริ่มไปแล้วสำหรับ type instantiation เฉพาะ ลด unnecessary work และ memory allocation -- มีแรงจูงใจจากโค้ด library ที่ generic ลึกในโลกจริงอย่าง Zod กับ tRPC',
+      'มัน precompute generic instantiation ที่เป็นไปได้ทุกอันล่วงหน้า',
+      'มันใช้ได้แค่ตอนเปิด --extendedDiagnostics เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'release note บรรยายว่ามัน cache intermediate instantiation ที่กำลังดำเนินอยู่แล้ว มุ่งลดงานซ้ำซ้อนสำหรับโค้ด library ที่ generic ลึกซับซ้อนแบบ (Zod, tRPC) ที่ trigger instantiation เดียวกันซ้ำ ๆ พอดี -- ไม่ใช่การเอาขีดจำกัดความลึกหรือขนาดออก และไม่มีการ quote เปอร์เซ็นต์เฉพาะสำหรับมัน',
+  },
+  {
+    q: 'Native compiler ของ TypeScript 7 ตัดเวลา whole-program check 8-12 เท่า และ time-to-first-error จาก 17.5s เหลือราว 1.3s บน codebase ของ VS Code นี่แปลว่า type แบบ recursive ที่แพงแบบ exponential ผิดปกติถูกลงแล้วไหม?',
+    options: [
+      'ใช่ -- native compiler กำจัด type ต้นทุน exponential ไปเลย',
+      'ไม่ -- speedup มาจาก native implementation บวก parallel checker จริง (--checkers default 4) ซึ่งทำให้ทุก instantiation เร็วขึ้น แต่ไม่เปลี่ยน SHAPE ต้นทุนที่อยู่ข้างใต้ของ type ที่แพงผิดปกติ -- type exponential เดียวกันยังเป็นต้นทุนหลัก แค่ใช้เวลาสัมบูรณ์น้อยลง',
+      'ใช่ แต่แค่ถ้า --checkers ถูกตั้งสูงกว่า default 4',
+      'ไม่ -- native compiler เร็วขึ้นแค่ตอน parsing ไม่เกี่ยวกับ checking',
+    ],
+    answer: 1,
+    explain: 'บทนี้ชัดเจนเรื่องความต่างนี้: implementation speedup (native code, parallelism) คูณความเร็วของ type resolution ทุกอันด้วยตัวคูณเดียวกันโดยประมาณ แต่ type ที่ exponential หรือลึกผิดปกติยังคง exponential หรือลึกผิดปกติเทียบกับทุกอย่างอื่นในโปรแกรมเดียวกัน -- มันแค่ใช้เวลานาฬิกาจริงน้อยลงในการมาถึงต้นทุนสัมพัทธ์เดียวกันนั้น',
+  },
+];
+
+<Quiz client:visible id="checker-internals/performance-model" questions={quizPerformance} />
+
+<ProgressTracker client:visible id="checker-internals/performance-model" />

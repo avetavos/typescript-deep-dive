@@ -1,0 +1,278 @@
+---
+title: 'Inference'
+description: 'checker เลือก type argument ที่คุณไม่เคยเขียนได้ยังไงจริง ๆ — inference site กับ priority ของ candidate, กฎ widening ของ literal, contextual typing, return-type inference, NoInfer และทำไม context-sensitive callback เคยถูก defer'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Inference site คือสถานที่ ไม่ใช่ value
+
+ก่อนที่ checker จะเลือก type ให้ `T` ใน generic call ได้ มันต้องรู้ก่อนว่า**ต้องดูตรงไหน** ทุกตำแหน่งที่ `T` ปรากฏ — parameter, return type, type ที่ผลลัพธ์ถูก assign เข้าไป — คือ **inference site** ที่เป็น candidate และ checker เยี่ยมทุกจุดเหล่านั้น เก็บ candidate type จากแต่ละจุด ก่อนตัดสินว่า `T` คืออะไรจริง ๆ บทนี้พูดเรื่องกระบวนการเก็บ-แล้ว-ตัดสินนั้นเอง: จุดไหนถูกเยี่ยม ตามลำดับไหน และเกิดอะไรขึ้นเมื่อพวกมันขัดแย้งกัน — กลไกที่อยู่ใต้บท [Inference & `infer`](/typescript/th/generics/inference-and-infer/) ของโมดูล generics ซึ่งเป็นที่ที่ควรไปหา syntax ที่ใช้ประจำวัน (`NoInfer`, `infer X extends`, template-literal `infer`) ที่บทนี้แค่ทวนสั้น ๆ
+
+## Priority: explicit ชนะ argument ชนะ context
+
+เมื่อมีมากกว่าหนึ่ง site เสนอ candidate พวกมันไม่ถูกเฉลี่ยหรือ union กันโดย default — มันถูกลองตามลำดับที่เข้มงวด และตัวแรกที่มีคำตอบชนะ:
+
+```ts
+// @expect-error TS2322
+function identity<T>(x: T): T { return x; }
+
+const a = identity<string | number>(42);
+const narrow: number = a; // proves `a` is string | number, NOT narrowed to just number
+```
+
+`42` เป็น `number` และถ้าปล่อยไว้เฉย ๆ inference จาก argument จะทำให้ `T` (และ `a`) เป็นแค่ `number` แต่มี **explicit type argument** ถูกให้มา (`identity<string | number>`) และมันชนะเด็ดขาดเหนือสิ่งที่ argument จะแนะนำ — `a` เป็น `string | number` จริง ๆ (verify แล้ว: การ assign มันให้ตัวแปรที่ type เป็น `number` พังด้วย `TS2322` ที่ list `string | number` เป็น source) ลำดับ เฉพาะเจาะจงที่สุดก่อน คือ: **(1)** explicit type argument ถ้าถูกเขียนไว้ ตัดสินคำถามทันที; **(2)** ไม่งั้น ตำแหน่ง argument ถูกเช็คซ้ายไปขวา แต่ละ argument ใหม่ถูกเช็ค*กับ working candidate* แทนที่จะถูก merge เข้าเป็น type ที่กว้างกว่าร่วมกัน; **(3)** มีแค่ตอนที่ไม่มี argument ไหนให้ candidate เลยเท่านั้นที่ *contextual* (expected) type — type ของสิ่งที่ผลลัพธ์ถูก assign เข้าไปหรือถูกส่งเป็น — จะถูกปรึกษาเลย
+
+## Literal widening ขึ้นกับ*ที่ที่ value ตกลง*ไป ไม่ใช่หน้าตาของมัน
+
+string literal `"GET"` ตัวเดียวกันได้ inferred type ต่างกันขึ้นกับตำแหน่งที่มันถูก infer*เข้าไป* — นี่คือ widening และมันเป็นกฎระดับ inference-site จริง ๆ ไม่ใช่คุณสมบัติของ literal เอง:
+
+```ts
+const a = "GET"; // top-level const, primitive initializer: literal type "GET" is kept
+let b = "GET";
+b = "POST"; // compiles -- `b`'s inferred type already widened to `string` at declaration
+
+const obj = { method: "GET" }; // a mutable object PROPERTY widens even inside a const object
+obj.method = "POST"; // compiles -- obj.method's type widened to string, same reason as `let`
+```
+
+การ reassign ทั้งสองข้างบน compile ผ่านโดยไม่มี error เลย (verify แล้ว) — เป็นไปได้ก็ต่อเมื่อ `b` กับ `obj.method` ถูก infer เป็น `string` ไม่ใช่ literal `"GET"` กฎจริงไม่ใช่ "ตัวแปรใช้ `let` ไหม" เฉพาะเจาะจง มันคือ "binding นี้ถูก assign อย่างอื่นทีหลังได้ไหม" — `const` ที่เป็น primitive ทำไม่ได้ ดังนั้นมันคง literal เป๊ะ; `let` หรือ property ที่ mutable (แม้แต่ตัวที่ initialize อยู่ใน object literal ที่ผูกกับ `const`) reassign ได้ ดังนั้น checker widen ล่วงหน้าเป็น type ที่ครอบคลุมทุก assignment ในอนาคต ไม่ใช่แค่อันแรก
+
+**ตำแหน่ง return** ของฟังก์ชันที่ไม่มี annotation widen แบบเดียวกันเป๊ะ ด้วยเหตุผลเดียวกันเป๊ะ — caller อาจรับผลลัพธ์ของฟังก์ชันนี้ไป และไม่มีทางรู้ว่าทุก call site คาดหวัง literal เฉพาะเจาะจงตัวนั้นตัวเดียว:
+
+```ts
+// @expect-error TS2322
+function g() { return "GET"; }
+const x: "POST" = g(); // "Type 'string' is not assignable to type '\"POST\"'" -- g()'s return already widened
+```
+
+เทียบกับ return type ที่มี **annotation** ซึ่งปิด widening เพราะตัว annotation เองกลายเป็น contextual type ที่ expression `return` ถูกเช็คกับมัน ไม่ใช่แค่ถูก infer แล้วค่อย generalize ทีหลัง:
+
+```ts
+function g(): "GET" { return "GET"; }
+const x: "GET" = g(); // compiles -- the annotation kept the literal
+```
+
+บท [Literals & Widening](/typescript/th/everyday-types/literals-and-widening/) ครอบคลุมทางแก้จริง (`as const`, annotation ชัดเจน, `satisfies`); นี่คือกลไกที่อยู่เบื้องหลังว่าทำไมมันถึงได้ผล: แต่ละอันเอาคุณสมบัติ "reassign ได้" ออกจาก binding หรือไม่ก็ให้ contextual type ที่ value ถูกเช็คตรง ๆ แทนที่จะถูก infer อิสระแล้วค่อย generalize
+
+## Contextual typing: inference วิ่ง*ย้อนกลับ*ได้ จาก target ไปหา value
+
+ตัวอย่างทุกอันจนถึงตอนนี้ infer `T` จากอะไรที่ type ไว้แล้ว Contextual typing คือ flow ย้อนกลับ: *expected* type ตรงตำแหน่งหนึ่งไหล*เข้าไป*ใน expression ที่ไม่มี type ชัดเจนเลย เห็นชัดที่สุดคือ callback parameter ที่ไม่มี annotation เลย:
+
+```ts
+const nums = [1, 2, 3];
+// n's type isn't written anywhere -- it's contextually typed as `number`,
+// from Array<number>.map's own parameter signature
+const doubled = nums.map((n) => n * 2);
+//    ^? number[]
+```
+
+นี่ก็เป็นเช่นกัน จากลำดับ priority ของ inference ข้างบน แหล่ง "contextual type" เป๊ะที่ถูกปรึกษาแค่ตอนที่ไม่มี argument ไหนให้ candidate ตรง ๆ — callback parameter ของ `map` ไม่ใช่ argument*ให้กับ*generic `T` ใน call เดียวกันเอง มันคือ expected type ที่ไหลไปอีกทาง เข้าไปใน parameter ที่ไม่มี annotation ของ callback เอง
+
+## Return-type inference: ทางเลือกสุดท้ายยังเป็น contextual type และเป็น union ของทุก return
+
+ในกรณีที่ไม่มี argument ให้ infer เลยจริง ๆ contextual type กลายเป็นแหล่ง*เดียว*ที่เหลือ และ checker จะใช้มัน:
+
+```ts
+function make<T>(): T[] { return []; }
+
+const arr: string[] = make();
+//    ^? string[]   -- T inferred as string purely from the assignment's contextual type
+```
+
+เอา annotation นั้นออกไปด้วยแล้วไม่มีอะไรเหลือให้ infer `T` ได้เลย — ไม่ใช่ error แค่ผลลัพธ์ "ไม่มีอะไรให้ infer" แบบเดียวกับที่บท [Generic Classes & Interfaces](/typescript/th/generics/generic-classes-and-interfaces/) โชว์สำหรับ `new Stack()`: `T` กลายเป็น `unknown`
+
+ฟังก์ชันที่มี `return` **หลายอัน** และไม่มี return-type annotation ได้ union ของสิ่งที่ทุก `return` ที่ reachable ผลิตออกมาเป๊ะ — ไม่ใช่อันแรก ไม่ใช่อันที่ "เฉพาะเจาะจงที่สุด":
+
+<TSPlayground code={returnUnionCode} id="checker-inference-return-union" title="Inferred return type is a union of every return statement" />
+
+export const returnUnionCode = `// @expect-error TS2322
+function classify(n: number) {
+  if (n > 0) return "positive";
+  if (n < 0) return "negative";
+  return 0;
+}
+
+// This compiles -- it IS the inferred union:
+const real: "positive" | "negative" | 0 = classify(1);
+
+// This does NOT -- it proves the inferred type is wider than just the string branches:
+const tooNarrow: "positive" | "negative" = classify(1);
+console.log(real, tooNarrow);`;
+
+Verify แล้ว: การ assign ผลลัพธ์ของ `classify` ให้ตัวแปรที่ type เป็น `"positive" | "negative" | 0` compile สะอาด; การ assign ให้ `"positive" | "negative"` เฉย ๆ พังด้วย `TS2322` ที่ระบุ union สามสมาชิกเต็ม ๆ เป็น source แต่ละ `return` คือ inference site ของตัวเองเข้าสู่ตำแหน่งผลลัพธ์ร่วมกันหนึ่งอัน และ checker ไม่เลือก branch ที่เป็น "หลัก" — มัน union ทุกอันเข้าด้วยกัน `number` ที่ return มาด้วยรวมกับ string literal สองตัว เหมือนกับ distributive-conditional และ generic-candidate case ที่อื่นในคอร์สนี้ที่ candidate หลายตัวสำหรับตำแหน่งเดียวกันกลายเป็น union แทนที่จะเป็นผู้ชนะคนเดียว
+
+## บล็อก site โดยตั้งใจ: `NoInfer<T>`
+
+ไม่ใช่ทุกที่ที่ `T` ปรากฏใน parameter list ที่คุณ*อยาก*ให้มีส่วนร่วมกับ candidate — parameter แบบ "default value" หรือ "fallback" คือตัวการคลาสสิก เพราะมันก็เป็น inference site จริงและจะ widen ผลลัพธ์อย่างเต็มใจให้รวม value ที่ไม่เคยเป็นตัวเลือกจริงเข้าไปด้วย `NoInfer<T>` (5.4) เอาตำแหน่งเฉพาะออกจากการเก็บ candidate โดยไม่เปลี่ยนว่า `T` resolve เป็นอะไร — มันคือกลไก site-suppression ไม่ใช่การแปลง type บท [Inference & `infer`](/typescript/th/generics/inference-and-infer/) มี walkthrough เต็มพร้อมตัวอย่าง "สีนอกแบรนด์แอบเข้ามาใน union" เป็นรูปธรรม; กลไกคือ priority model ข้างบนเป๊ะ โดยมีหนึ่ง site ถูกเอาออกจากการพิจารณาก่อนที่ priority จะถูกประเมินด้วยซ้ำ
+
+## ทำไม context-sensitive callback เคยต้องการรอบที่สอง — และทำไม 6.0 ต้องการมันน้อยลง
+
+object literal ที่เก็บ callback หลายตัว ที่ `T` infer ได้แค่จาก*ตัวเดียว*ใน callback เหล่านั้น สร้างปัญหาลำดับจริง: เพื่อ type-check body ของ callback ที่ไม่มี annotation checker ต้องรู้ parameter type ของมันก่อนอยู่แล้ว — แต่ parameter type เหล่านั้นอาจขึ้นกับ `T` และ `T` อาจขึ้นกับการ infer callback*อีกตัว*ใน object เดียวกันก่อน คำตอบของ TypeScript คือกระบวนการสองรอบ: defer parameter ไหนก็ตามที่ type เป็น "context-sensitive" (หาไม่ได้ถ้ายังไม่รู้ inferred type ของ call รอบข้าง) resolve ทุกอย่างที่*ไม่*ขึ้นกับ site ที่ถูก defer ก่อน แล้วกลับมาเช็ค body ที่ถูก defer เมื่อมี type จริงพร้อมแล้ว ก่อน TypeScript 6.0 ฟังก์ชันที่แค่ปรากฏใน object literal เดียวกันกับ context-sensitive callback อีกตัวถูกปฏิบัติเป็น context-sensitive*เอง*ด้วยความกระตือรือร้นเกินไป ทำให้กลุ่มทั้งกลุ่มถูก defer ด้วยกันแล้วยอมแพ้ ทิ้ง parameter ที่ไม่มี annotation ไว้เป็น `unknown` ตั้งแต่ 6.0 ฟังก์ชันที่ไม่เคย reference `this` เลยไม่นับเป็น context-sensitive ด้วยเหตุผลนั้นอีกต่อไป ซึ่งเป็นนิยาม "ต้องการ defer" ที่แคบกว่าเดิมอย่างเข้มงวด — ดังนั้น inference resolve `T` จาก callback ที่มี annotation ตัวเดียวแล้วไหล type จริงเข้าไปใน parameter ของ callback ข้างเคียงได้ในกรณีที่มากขึ้นกว่าเดิม บท [Inference & `infer`](/typescript/th/generics/inference-and-infer/) มีโค้ด before/after เป๊ะ; เหตุผลเชิงกลไกที่มันสำคัญคือกระบวนการ defer สองรอบนี้ ซึ่งก็เป็น*เหตุผล*ว่าทำไมการ annotate parameter ที่ดื้อด้วยมือถึงได้ผลเสมอเป็นทางเลือกสำรอง — มันเอาความจำเป็นต้อง defer site นั้นออกไปเลย
+
+## ไม่มี flag `strictInference`
+
+บทอื่น ๆ ของโมดูลนี้อย่าง [Assignability](/typescript/th/checker-internals/assignability/) ตั้งใจ verify คำกล่าวอ้างกับ compiler จริงแทนที่จะเชื่อความรู้เล่าต่อกันมา และนี่คือเวอร์ชันของบท inference สำหรับเช็คแบบนั้น: การรัน `tsc --help --all` กับ TypeScript 7.0.2 list `strict`, `strictBindCallApply`, `strictBuiltinIteratorReturn`, `strictFunctionTypes`, `strictNullChecks` และ `strictPropertyInitialization` — ไม่มี `strictInference` พฤติกรรม "candidate inference เข้มขึ้นใน 5.9" ที่บท inference ของโมดูล generics บรรยายไว้เป็นแบบไม่มีเงื่อนไข ไม่มี flag ที่เปิดหรือปิดมันได้ ถ้า generic call ที่เคย infer type กว้างกว่าตอนนี้ infer อะไรที่แคบกว่าหลังอัปเกรดแล้วทำให้ call site พัง ทางแก้คืออันเดียวกับที่ใช้ทั่วบทนี้: ระบุ type argument ชัดเจน ซึ่ง — ตามลำดับ priority ข้างบน — ชนะเสมอไม่ว่า site ไหนจะ infer อะไรไว้ก็ตาม
+
+## บังคับผลลัพธ์ inference เฉพาะเจาะจง
+
+สามเครื่องมือ สามจุดต่างกันใน priority order ที่พวกมันเข้าแทรกแซง:
+
+```ts
+// @expect-error TS2339
+// 1. Explicit type argument -- overrides every other site outright (priority #1 above)
+function identity<T>(x: T): T { return x; }
+const wide = identity<string | number>(42);
+
+// 2. `as const` -- changes what the argument ITSELF offers as a candidate (a literal, not a widened type)
+function tag<T>(value: T): T { return value; }
+const literal = tag("GET" as const);
+//    ^? "GET" -- without `as const`, this site would have offered `string` instead
+
+// 3. `satisfies` -- validates against a type WITHOUT forcing the expression's inferred type UP to it
+type Colors = "red" | "green" | "blue";
+const paletteAnnotated: Record<Colors, string | number[]> = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+};
+paletteAnnotated.red.push(0); // the ANNOTATION widened every value to `string | number[]` -- no .push
+
+const paletteSatisfies = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+} satisfies Record<Colors, string | number[]>;
+paletteSatisfies.red.push(0); // `red` keeps its own inferred type, number[] -- satisfies validated, didn't widen
+```
+
+`satisfies` ควรค่าแก่ความแม่นยำเป็นพิเศษ: มัน validate expression กับ type ที่ให้มาและรายงาน error ถ้าไม่ตรง แต่มัน**ไม่**ป้อน type นั้นกลับเข้าไปเป็น inferred type ของ expression เองแบบที่ annotation ทำ type ที่ประกาศไว้ของ `paletteAnnotated` บังคับ*ทุก*value ใน record ให้เป็น union เต็ม `string | number[]` ดังนั้น `.red` เสีย shape ที่เฉพาะเจาะจงกว่า `number[]` ไป และ `.push` หายไป (verify แล้ว: `TS2339` จริง) `paletteSatisfies` ใช้ type ที่ให้มาแค่เพื่อเช็คว่าตรงหรือไม่ตรง — แต่ละ property เก็บสิ่งที่ checker จะ infer ให้มันแบบเดี่ยว ๆ ไว้ ดังนั้น `.red` ยังเป็น `number[]` และ `.push` ยังอยู่ นี่คือเหตุผลเป๊ะว่าทำไม `satisfies` ถึงเป็นเครื่องมือมาตรฐานสำหรับ "validate กับ shape นี้ แต่เก็บ inference ต่อ property ที่แคบที่สุดที่ถูกต้องไว้"
+
+## Mental Model
+
+<Mermaid title="Priority order narrows one question to one answer" code={inferenceMentalDiagram} />
+
+export const inferenceMentalDiagram = `flowchart TD
+  q["What is T at this call?"] --> explicit{"Explicit type argument written?"}
+  explicit -->|yes| done1["T is exactly that -- done, nothing else consulted"]
+  explicit -->|no| args{"Any argument positions supply a candidate?"}
+  args -->|yes, in order| working["Each argument checked against the WORKING candidate\n(not merged into a common wider type)"]
+  args -->|no arguments to check| context{"Is there a contextual (expected) type?"}
+  context -->|yes| fromContext["T comes from the contextual type\n(assignment target, callback's own expected type)"]
+  context -->|no| unknownT["Nothing to infer from -- T becomes unknown"]`;
+
+ผลลัพธ์ inference ที่เซอร์ไพรส์ทุกอันในโมดูลนี้และโมดูล generics ลดรูปเหลือการอ่านเดียวกัน: หาทุก site ที่ `T` (หรือ literal ธรรมดาที่ไม่ใช่ generic) infer ได้จาก เรียงตาม priority ข้างบน แล้วถามว่า site*แรก*ที่มีคำตอบเสนออะไร Widening ก็เป็นเรื่องเดียวกันลึกลงไปหนึ่งชั้น ใช้ต่อ site แทนที่จะเป็นต่อ call: `const` ที่เป็น primitive, return type ที่มี annotation หรือ explicit type argument ทั้งหมดตัด short-circuit คำถาม "สิ่งนี้ reassign หรือถูกเรียกอีกครั้งด้วยอะไรอื่นได้ไหม" ที่ widening ปกติมีไว้ตอบแบบระมัดระวัง — เอาความเป็นไปได้ที่จะขัดแย้งในอนาคตออกไป แล้ว checker เก็บ value ที่แม่นยำที่มันมีอยู่แล้วไว้แทนที่จะ generalize มัน
+
+## ข้อแลกเปลี่ยน
+
+| กลไก | ข้อดี | ต้นทุน |
+|---|---|---|
+| ลำดับ priority (explicit > argument > context) | คาดเดาได้ resolve ในรอบเดียวที่กำหนดแน่นอน — ไม่ต้อง backtrack | explicit type argument หรือ default parameter หลง ๆ override สิ่งที่ผู้อ่านคาดว่าจะถูก infer ตามปกติแบบเงียบ ๆ |
+| Widening ที่ site แบบ `let`/mutable-property/return-position | type ยังถูกต้องสำหรับการ reassign หรือเรียกในอนาคตทุกครั้ง ไม่ใช่แค่ value แรกที่สังเกตเห็น | ความแม่นยำของ literal ที่ต้องใช้กับ tag ของ discriminated union หรือ value แบบ string-enum หายไปโดย default ต้องใช้ `as const`/annotation กู้กลับมา |
+| Contextual typing (inference ย้อนกลับ) | callback parameter และ object literal แทบไม่ต้องการ annotation ชัดเจนเลย | inference ดีเท่าที่ expected type ที่มันยืมมาดีเท่านั้น — แหล่ง contextual ที่ type ไม่ดีหรือ return `any` ก็ contextually type อะไรที่มีประโยชน์ไม่ได้ |
+| `NoInfer<T>` | เอาปัญหา site เดียวออกโดยไม่ต้อง restructure generic signature ทั้งหมด | อีกอย่างที่ต้องจำว่าต้องใส่เพิ่ม — พฤติกรรม default (ทุกที่ปรากฏคือ site) ยังทำให้คนที่ยังไม่เคยเจอเซอร์ไพรส์ |
+| การ defer สองรอบสำหรับ context-sensitive callback | ให้ callback ข้างเคียงใน object literal เดียวกันแชร์ inferred `T` เดียวกันได้เลย | เคย over-defer (ก่อน 6.0) เมื่อ callback ใดก็ตามในกลุ่มดูเป็น context-sensitive; ยังต้องเข้าใจ*ทำไม*case ที่ดื้อต้องการ annotation ด้วยมือ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **เมื่อ argument สองตัวให้ candidate สำหรับ `T` เดียวกัน TypeScript union พวกมันเข้าด้วยกันอัตโนมัติ** เกิดขึ้นแค่ตอนที่*ตำแหน่ง return เอง*เป็น union จริง (มี return หลายอัน) เท่านั้น สำหรับ type parameter ที่แชร์กัน argument แรกตั้ง working candidate และ argument ถัดไปถูกเช็ค*กับ*มัน — ไม่ตรงกันคือ error จริง (`TS2345`) ไม่ใช่ union อัตโนมัติ ตรงกับ case "candidate ขัดแย้งกัน" ที่ตัวอย่าง `both(1, "two")` ของโมดูล generics โชว์
+- **`const` เก็บ literal type เสมอ และ `let` widen เสมอ** กฎจริงคือ reassignability ซึ่งปกติแต่ไม่เสมอไปตาม keyword — property ที่ mutable ใน object ที่ผูกกับ `const` ก็ยัง widen เพราะตัว property เอง ไม่ใช่ binding ชั้นนอก ที่ reassign ได้ทีหลัง
+- **`satisfies` narrow หรือ widen type ของ expression** มันไม่ทำทั้งคู่ — มัน validate กับ type ที่ให้มาและรายงาน error ตอนไม่ตรงเท่านั้น ในขณะที่ expression เก็บ type ที่มันจะ infer โดยไม่มี clause `satisfies` เลยไว้เป๊ะ
+- **มี flag ที่ทำให้ generic inference "เข้มขึ้น" แบบที่ `strictNullChecks` ทำให้การเช็ค null เข้มขึ้น** verify กับ `tsc --help --all` บน 7.0.2 แล้ว: ไม่มี flag `strictInference` candidate inference ที่เข้มขึ้นจาก 5.9 เป็นพฤติกรรมแบบไม่มีเงื่อนไข
+
+## อ่านโค้ดที่ AI เขียน
+
+บั๊กที่เกี่ยวกับ inference ในโค้ด generate เกือบทุกครั้งเป็น*site*ที่ผู้เขียนไม่รู้ว่ากำลังมีส่วนร่วม (หรือไม่มีส่วนร่วม) กับ candidate:
+
+- ตำแหน่ง parameter แบบ "default" หรือ "fallback" ที่จริง ๆ เป็น inference site ที่มีชีวิต (ไม่มี `NoInfer`) widen ผลลัพธ์ทั้งหมดแบบเงียบ ๆ ให้รวม value ที่ไม่เคยตั้งใจให้เป็นตัวเลือกจริง — เช็คทุก parameter ที่แชร์ type parameter ของ generic เดียวกัน ไม่ใช่แค่ตัวที่ดูเหมือน "input จริง"
+- generic helper ที่ถูกเรียกโดยไม่มี explicit type argument ที่ผลลัพธ์ถูกเก็บใน `let` หรือ mutable object property: ความแม่นยำของ literal จาก argument อาจหายไปแล้วตอนที่ถูกอ่านกลับมา จาก widening ที่ site *เก็บ*ล้วน ๆ ไม่เกี่ยวกับ generic call เลย
+- ฟังก์ชันที่มี `return` หลายอันและไม่มี return-type annotation: inferred type คือ union ของทุก branch ที่ reachable รวมถึงอันที่เกิดโดยบังเอิญ (`return null` ตอนต้นที่เพิ่มไว้สำหรับ debug path, `return;` หลงเหลือที่ผลิต `undefined`) ที่ผู้เขียนอาจไม่ได้ตั้งใจให้เป็นส่วนหนึ่งของ return type สาธารณะเลย
+
+<SpotTheBug code={`function buildQuery<T extends string>(fields: T[], sortBy?: T): { fields: T[]; sortBy?: T } {
+  return { fields, sortBy };
+}
+
+const query = buildQuery(["id", "name", "email"], "createdAt");
+console.log(query.fields.includes("createdAt"));`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย และ `query.fields` มี type เป็น `("id" | "name" | "email" | "createdAt")[]` -- กว้างกว่า field ที่ query ได้จริงที่ caller list ไว้ `sortBy` คือ inference site จริงสำหรับ `T` ตัวเดียวกับ `fields` เหมือน parameter `defaultColor` ในตัวอย่าง `NoInfer` ของโมดูล generics เป๊ะ: การส่ง `"createdAt"` (value ที่ไม่เคยเป็นหนึ่งใน `fields` จริง) widen `T` ให้รวมมันเข้าไป ดังนั้น type ของ `query.fields` โตขึ้นแบบเงียบ ๆ ให้ตรงกัน การเรียก `.includes("createdAt")` บรรทัดสุดท้ายดูเหมือน membership test จริงที่ถูกเช็ค แต่จริง ๆ กำลังเช็คความเป็นไปได้ที่ถูกสร้างขึ้นมาที่ไม่เคยอยู่ใน array จริงเลย -- type system เห็นด้วยกับคำโกหกที่มาจาก site ที่ไม่มีใครตั้งใจให้เป็นหนึ่งใน "ตัวเลือกจริง" ทางแก้คือ `sortBy?: NoInfer<T>` ซึ่งเอา parameter นี้ออกจากการเก็บ candidate ไปเลย: `T` จะถูก infer จาก `fields` ล้วน ๆ เป็น `"id" | "name" | "email"` และการส่ง value นอกชุดให้ `sortBy` กลายเป็น `TS2345` จริงแทนที่จะเป็นการ widen แบบเงียบ ๆ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Inference คือการค้นหาผ่านทุก site ที่ type parameter (หรือ literal ที่ไม่มี annotation) มาได้ ถูก resolve ด้วยลำดับ priority ที่เข้มงวด — explicit type argument แล้ว argument ซ้ายไปขวาเทียบกับ working candidate แล้ว contextual type เป็นทางเลือกสุดท้ายเท่านั้น — และ widening ที่ site แบบ `let`/mutable-property/return-position คือคำถาม "สิ่งนี้ reassign หรือถูกเรียกอีกครั้งได้ไหม" เดียวกัน ใช้ลึกลงไปหนึ่งชั้น ต่อ site กับ literal ธรรมดาแทนที่จะเป็น type parameter
+</Callout>
+
+export const quizInference = [
+  {
+    q: 'เมื่อ explicit type argument, argument value และ contextual (expected) type ทั้งหมดสามารถให้ candidate สำหรับ `T` เดียวกันได้ ตัวไหนชนะ?',
+    options: [
+      'ถูก merge เข้าเป็น union ของทั้งสามตัว',
+      'explicit type argument ชนะเด็ดขาด; มีแค่ตอนที่ไม่มีตัวไหนถูกเขียนไว้เท่านั้นที่ตำแหน่ง argument ถูกเช็ค และมีแค่ตอนที่ไม่มี argument ไหนให้ candidate เท่านั้นที่ contextual type ถูกปรึกษา',
+      'contextual type ชนะเสมอ เพราะมันแทน "สิ่งที่ caller ต้องการจริง ๆ"',
+      'ตัวไหนก็ตามที่ปรากฏก่อนใน source file',
+    ],
+    answer: 1,
+    explain: 'Verify แล้ว: `identity<string | number>(42)` ให้ `string | number` ไม่ใช่ `number` -- explicit type argument override สิ่งที่ argument literal `42` จะมีส่วนร่วมตามปกติ และ priority นี้เข้มงวด ไม่ใช่การ merge',
+  },
+  {
+    q: '```ts\nconst obj = { method: "GET" };\nobj.method = "POST";\n```\nอันนี้ compile ผ่านโดยไม่มี error เลย นี่พิสูจน์อะไรเกี่ยวกับ inferred type ของ `obj.method`?',
+    options: [
+      'ไม่พิสูจน์อะไรพิเศษ -- property ของ object literal ถูก widen เสมอ',
+      'พิสูจน์ว่า `obj.method` ถูก infer เป็น `string` ไม่ใช่ literal `"GET"` -- property ที่ MUTABLE widen ได้แม้ `obj` เองถูกประกาศด้วย `const`',
+      'พิสูจน์ว่า TypeScript เมิน object literal type ไปเลย',
+      'compile ผ่านแค่เพราะ `strict` ปิดอยู่',
+    ],
+    answer: 1,
+    explain: 'Widening ตาม reassignability ของ binding เฉพาะตัว ไม่ใช่ keyword ของตัวแปรชั้นนอก -- `obj` เป็น `const` ป้องกันแค่การ rebind ตัว `obj` เอง; property `method` mutable ข้างในยัง reassign ได้ ดังนั้นมัน widen เป็น `string` ตอน inference',
+  },
+  {
+    q: '```ts\nfunction classify(n: number) {\n  if (n > 0) return "positive";\n  if (n < 0) return "negative";\n  return 0;\n}\n```\nไม่มี return-type annotation inferred return type คืออะไร?',
+    options: [
+      'string -- return ที่เป็น string-like ทั้งหมดถูก merge',
+      '"positive" | "negative" | 0 -- union ของทุก return statement ที่ reachable verify ด้วยการ assign ผลลัพธ์เข้า union เป๊ะนั้น',
+      'type ของแค่ return statement สุดท้าย `0`',
+      'any เพราะฟังก์ชันมี return หลายอัน',
+    ],
+    answer: 1,
+    explain: 'Verify แล้ว: การ assign classify(1) ให้ตัวแปรที่ type เป็น "positive" | "negative" | 0 compile สะอาด ในขณะที่ narrow เหลือแค่ "positive" | "negative" พังด้วย TS2322 ที่ระบุ union สามสมาชิกเต็ม ๆ เป็น source -- แต่ละ return คือ inference site ของตัวเองเข้าสู่ union ผลลัพธ์ร่วมกันหนึ่งอัน',
+  },
+  {
+    q: '`NoInfer<T>` ทำอะไรกับ parameter ที่มันห่ออยู่จริง ๆ?',
+    options: [
+      'เปลี่ยน type ของ parameter นั้นเป็น `unknown`',
+      'เอาตำแหน่งเฉพาะนั้นออกจากการเก็บ candidate สำหรับ `T` โดยไม่เปลี่ยนว่า `T` resolve เป็นอะไรเมื่อ infer จากที่อื่น -- กลไก site-suppression ไม่ใช่การแปลง type',
+      'บังคับให้ `T` ต้องถูกระบุโดย caller ชัดเจน',
+      'ทำให้ parameter เป็น optional',
+    ],
+    answer: 1,
+    explain: '`NoInfer<T>` erase เป็น `T` ในระดับ type -- ตำแหน่งที่ห่อไว้ยังถูกเช็คกับ `T` ที่ infer จาก site อื่นอยู่ มันแค่หยุดมีส่วนร่วมกับ candidate ของตัวเอง ซึ่งเป๊ะคือสิ่งที่หยุด fallback/default value จาก widen ผลลัพธ์',
+  },
+  {
+    q: 'ทำไม TypeScript 6.0 ถึงเปลี่ยนวิธี infer context-sensitive callback ใน object literal?',
+    options: [
+      'มันเพิ่ม flag ใหม่ชื่อ `strictCallbackInference` ที่ developer ต้อง opt-in',
+      'ก่อน 6.0 ฟังก์ชันถูกปฏิบัติเป็น context-sensitive (และถูก defer บางครั้งทิ้ง sibling ที่ไม่มี annotation ไว้เป็น `unknown`) กระตือรือร้นเกินไป; ตั้งแต่ 6.0 ฟังก์ชันที่ไม่เคย reference `this` เลยไม่นับเป็น context-sensitive ด้วยเหตุผลนั้นอีกต่อไป ดังนั้น callback ที่ต้อง defer น้อยลงและแชร์ T ที่ infer ได้มากขึ้น',
+      'มันเอา context-sensitive inference ออกจากภาษาไปเลย',
+      'มันมีผลแค่ arrow function เท่านั้น ไม่เกี่ยวกับ method shorthand',
+    ],
+    answer: 1,
+    explain: 'กลไกสองรอบข้างใต้ (defer สิ่งที่ขึ้นกับ type ที่ยังไม่ resolve, resolve ที่เหลือก่อน แล้วเช็ค body ที่ถูก defer) ไม่เปลี่ยน -- 6.0 แคบลงว่าฟังก์ชันไหนถูก flag ว่าต้องการ defer ตั้งแต่แรก ซึ่งเป็นนิยามที่แคบกว่าและแม่นยำกว่าอย่างเข้มงวด ไม่ใช่พฤติกรรม opt-in ใหม่',
+  },
+  {
+    q: '```ts\ntype Colors = "red" | "green" | "blue";\nconst paletteAnnotated: Record<Colors, string | number[]> = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n};\nconst paletteSatisfies = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n} satisfies Record<Colors, string | number[]>;\n```\nทำไม `paletteAnnotated.red.push(0)` พังด้วย `TS2339` ในขณะที่ `paletteSatisfies.red.push(0)` compile ผ่าน?',
+    options: [
+      'เป็นเรื่องบังเอิญ -- ทั้งคู่ควรมีพฤติกรรมเหมือนกัน',
+      'annotation ตรง ๆ บังคับทุก value ให้เป็น union ที่ประกาศไว้ `string | number[]` ดังนั้น `.red` เสีย shape ที่เฉพาะเจาะจงกว่า `number[]` ไป; `satisfies` แค่ validate กับ union นั้นโดยไม่ป้อนมันกลับเข้าไปเป็น type ของ expression เอง ดังนั้น `.red` เก็บ `number[]` ที่ infer ของตัวเองไว้',
+      '`satisfies` ปิด strict mode สำหรับ expression นั้น',
+      '`paletteAnnotated` ใช้ `let` ข้างในในขณะที่ `paletteSatisfies` ใช้ `const`',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้ว: paletteAnnotated.red.push(0) เป็น TS2339 จริง ("push does not exist on type string | number[]") เพราะ annotation widen ทุก property เป็น union เต็ม satisfies validate object เดียวกันกับ union เดียวกันแต่เก็บ inferred type ที่แคบกว่าของแต่ละ property ไว้ ดังนั้น .push ยังอยู่บน paletteSatisfies.red',
+  },
+];
+
+<Quiz client:visible id="checker-internals/inference" questions={quizInference} />
+
+<ProgressTracker client:visible id="checker-internals/inference" />

@@ -1,0 +1,278 @@
+---
+title: 'Inference'
+description: 'How the checker actually picks a type argument you never wrote — inference sites and candidate priority, literal widening rules, contextual typing, return-type inference, NoInfer, and why context-sensitive callbacks used to get deferred.'
+sidebar:
+  order: 3
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## An inference site is a place, not a value
+
+Before the checker can pick a type for `T` in a generic call, it needs to know **where to look**. Every position `T` appears in — a parameter, a return type, the type a result is being assigned into — is a candidate **inference site**, and the checker visits every one of them, collecting a candidate type from each, before deciding what `T` actually is. This lesson is about that collection-and-decision process itself: which sites get visited, in what order, and what happens when they disagree — the mechanism underneath the generics module's [Inference & `infer`](/typescript/en/generics/inference-and-infer/) lesson, which is the place to go for the day-to-day syntax (`NoInfer`, `infer X extends`, template-literal `infer`) this lesson only recaps in passing.
+
+## Priority: explicit beats argument beats context
+
+When more than one site offers a candidate, they don't get averaged or unioned by default — they're tried in a strict order, and the first one that has an answer wins:
+
+```ts
+// @expect-error TS2322
+function identity<T>(x: T): T { return x; }
+
+const a = identity<string | number>(42);
+const narrow: number = a; // proves `a` is string | number, NOT narrowed to just number
+```
+
+`42` is a `number`, and left alone, inference from the argument would make `T` (and therefore `a`) just `number`. But an **explicit type argument** was supplied (`identity<string | number>`), and that wins outright over whatever the argument would have suggested — `a` really is `string | number` (verified: assigning it to a `number`-typed variable fails with `TS2322`, listing `string | number` as the source). The order, most specific first, is: **(1)** an explicit type argument, if one was written, settles the question immediately; **(2)** otherwise, argument positions are checked left to right, each new argument checked *against the working candidate* rather than merged into a wider common type; **(3)** only if no argument supplied a candidate does the *contextual* (expected) type — the type of whatever the result is being assigned into or passed as — get consulted at all.
+
+## Literal widening depends on *where* the value lands, not what it looks like
+
+The same string literal `"GET"` gets a different inferred type depending on the position it's inferred *into* — this is widening, and it's really an inference-site rule, not a property of the literal itself:
+
+```ts
+const a = "GET"; // top-level const, primitive initializer: literal type "GET" is kept
+let b = "GET";
+b = "POST"; // compiles -- `b`'s inferred type already widened to `string` at declaration
+
+const obj = { method: "GET" }; // a mutable object PROPERTY widens even inside a const object
+obj.method = "POST"; // compiles -- obj.method's type widened to string, same reason as `let`
+```
+
+Both reassignments above compile with zero errors (verified) — which is only possible if `b` and `obj.method` were inferred as `string`, not as the literal `"GET"`. The rule isn't "does the variable use `let`" specifically; it's "can this binding be assigned something else later" — a `const` primitive can't, so it keeps the precise literal; a `let`, or a mutable property (even one initialized inside an object literal bound to a `const`), can be reassigned, so the checker widens up front to the type that covers every future assignment, not just the first one.
+
+An unannotated function's **return position** widens the exact same way, for the exact same reason — a caller could receive this function's result and there's no way to know every call site expects the one specific literal:
+
+```ts
+// @expect-error TS2322
+function g() { return "GET"; }
+const x: "POST" = g(); // "Type 'string' is not assignable to type '\"POST\"'" -- g()'s return already widened
+```
+
+Compare an **annotated** return type, which suppresses widening because the annotation itself becomes the contextual type the `return` expression is checked against, not merely inferred and then generalized:
+
+```ts
+function g(): "GET" { return "GET"; }
+const x: "GET" = g(); // compiles -- the annotation kept the literal
+```
+
+The [Literals & Widening](/typescript/en/everyday-types/literals-and-widening/) lesson covers the practical fixes (`as const`, an explicit annotation, `satisfies`); this is the mechanism behind why they work: each one either removes the "could be reassigned" property from the binding, or supplies a contextual type the value gets checked against directly instead of independently inferred and generalized.
+
+## Contextual typing: inference can run *backwards*, from target to value
+
+Every example so far infers `T` from something already typed. Contextual typing is the reverse flow: the *expected* type at a position flows *into* an untyped expression, most visibly a callback parameter with no annotation at all:
+
+```ts
+const nums = [1, 2, 3];
+// n's type isn't written anywhere -- it's contextually typed as `number`,
+// from Array<number>.map's own parameter signature
+const doubled = nums.map((n) => n * 2);
+//    ^? number[]
+```
+
+This is also, from the inference-priority ordering above, exactly the "contextual type" source that only gets consulted when no argument supplies a candidate directly — `map`'s callback parameter isn't itself an argument *to* a generic `T` in the same call, it's the expected type flowing the other direction, into the callback's own un-annotated parameter.
+
+## Return-type inference: last resort is still the contextual type, and a union of every return
+
+With genuinely no argument to infer from, the contextual type becomes the *only* source left, and the checker will use it:
+
+```ts
+function make<T>(): T[] { return []; }
+
+const arr: string[] = make();
+//    ^? string[]   -- T inferred as string purely from the assignment's contextual type
+```
+
+Take away even that annotation and there is nothing left to infer `T` from at all — not an error, just the same "nothing to infer from" outcome the [Generic Classes & Interfaces](/typescript/en/generics/generic-classes-and-interfaces/) lesson showed for `new Stack()`: `T` becomes `unknown`.
+
+A function with **multiple** `return` statements and no return-type annotation gets exactly the union of what every reachable `return` produces — not the first one, not the "most specific" one:
+
+<TSPlayground code={returnUnionCode} id="checker-inference-return-union" title="Inferred return type is a union of every return statement" />
+
+export const returnUnionCode = `// @expect-error TS2322
+function classify(n: number) {
+  if (n > 0) return "positive";
+  if (n < 0) return "negative";
+  return 0;
+}
+
+// This compiles -- it IS the inferred union:
+const real: "positive" | "negative" | 0 = classify(1);
+
+// This does NOT -- it proves the inferred type is wider than just the string branches:
+const tooNarrow: "positive" | "negative" = classify(1);
+console.log(real, tooNarrow);`;
+
+Verified: assigning `classify`'s result to a variable typed `"positive" | "negative" | 0` compiles clean; assigning it to `"positive" | "negative"` alone fails with `TS2322`, naming the full three-member union as the source. Every `return` is its own inference site into one shared result position, and the checker doesn't pick a "primary" branch — it unions every one of them, `number` return included alongside the two string literals, exactly like the distributive-conditional and generic-candidate cases elsewhere in this course where multiple candidates for the same position become a union rather than a single winner.
+
+## Blocking a site on purpose: `NoInfer<T>`
+
+Not every occurrence of `T` in a parameter list is one you *want* contributing a candidate — a "default value" or "fallback" parameter is the classic offender, since it's also a real inference site and will happily widen the result to include a value that was never actually one of the real options. `NoInfer<T>` (5.4) removes a specific position from candidate collection without changing what `T` resolves to — it's a site-suppression mechanism, not a type transformation. The [Inference & `infer`](/typescript/en/generics/inference-and-infer/) lesson has the full walkthrough with a concrete "off-brand color sneaks into the union" example; the mechanism is exactly the priority model above with one site removed from consideration before priority is even evaluated.
+
+## Why context-sensitive callbacks used to need a second pass — and why 6.0 needed fewer of them
+
+An object literal holding several callbacks, where `T` can only be inferred from *one* of them, creates a real ordering problem: to type-check an un-annotated callback's body, the checker needs to already know its parameter types — but those parameter types might depend on `T`, and `T` might depend on inferring *another* callback in the same object first. TypeScript's answer is a two-pass process: defer any parameter whose type is "context-sensitive" (can't be determined without already knowing the surrounding call's inferred types), resolve everything that *doesn't* depend on a deferred site first, then come back and check the deferred bodies once real types are available. Before TypeScript 6.0, a function that merely appeared in the same object literal as another context-sensitive callback was *itself* treated as context-sensitive too eagerly, so a whole group could get deferred together and give up, leaving un-annotated parameters `unknown`. Since 6.0, a function that never references `this` no longer counts as context-sensitive on that basis, which is a strictly narrower definition of "needs deferring" — so inference can resolve `T` from one annotated callback and flow the real type into a sibling callback's parameters in more cases than before. The [Inference & `infer`](/typescript/en/generics/inference-and-infer/) lesson has the exact before/after code; the mechanism reason it matters is this two-pass deferral process, which is also *why* annotating a stubborn parameter by hand always works as a fallback — it removes the need to defer that particular site at all.
+
+## There is no `strictInference` flag
+
+This module's [Assignability](/typescript/en/checker-internals/assignability/) and other lessons make a point of verifying claims against the real compiler rather than folklore, and this is the inference module's version of that check: running `tsc --help --all` against TypeScript 7.0.2 lists `strict`, `strictBindCallApply`, `strictBuiltinIteratorReturn`, `strictFunctionTypes`, `strictNullChecks`, and `strictPropertyInitialization` — no `strictInference`. The "candidate inference got tighter in 5.9" behavior the generics module's inference lesson describes is unconditional; there is no flag that turns it on or off. If a generic call that used to infer a wider type now infers something narrower after an upgrade and breaks a call site, the fix is the same one that applies throughout this lesson: supply the type argument explicitly, which — per the priority order above — always wins regardless of what any site would otherwise have inferred.
+
+## Forcing a specific inference outcome
+
+Three tools, three different points in the priority order they intervene at:
+
+```ts
+// @expect-error TS2339
+// 1. Explicit type argument -- overrides every other site outright (priority #1 above)
+function identity<T>(x: T): T { return x; }
+const wide = identity<string | number>(42);
+
+// 2. `as const` -- changes what the argument ITSELF offers as a candidate (a literal, not a widened type)
+function tag<T>(value: T): T { return value; }
+const literal = tag("GET" as const);
+//    ^? "GET" -- without `as const`, this site would have offered `string` instead
+
+// 3. `satisfies` -- validates against a type WITHOUT forcing the expression's inferred type UP to it
+type Colors = "red" | "green" | "blue";
+const paletteAnnotated: Record<Colors, string | number[]> = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+};
+paletteAnnotated.red.push(0); // the ANNOTATION widened every value to `string | number[]` -- no .push
+
+const paletteSatisfies = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+} satisfies Record<Colors, string | number[]>;
+paletteSatisfies.red.push(0); // `red` keeps its own inferred type, number[] -- satisfies validated, didn't widen
+```
+
+`satisfies` in particular is worth being precise about: it validates the expression against the given type and reports an error if it doesn't match, but it does **not** feed that type back in as the expression's own inferred type the way an annotation would. `paletteAnnotated`'s declared type forces *every* value in the record to the full union `string | number[]`, so `.red` loses its more specific `number[]` shape and `.push` disappears (verified: real `TS2339`). `paletteSatisfies` only uses the given type to check for mismatches — each property keeps whatever the checker would have inferred for it standalone, so `.red` stays `number[]` and `.push` still exists. This is exactly why `satisfies` is the standard tool for "validate this against a shape, but keep whatever the narrowest correct per-property inference already was."
+
+## Mental Model
+
+<Mermaid title="Priority order narrows one question to one answer" code={inferenceMentalDiagram} />
+
+export const inferenceMentalDiagram = `flowchart TD
+  q["What is T at this call?"] --> explicit{"Explicit type argument written?"}
+  explicit -->|yes| done1["T is exactly that -- done, nothing else consulted"]
+  explicit -->|no| args{"Any argument positions supply a candidate?"}
+  args -->|yes, in order| working["Each argument checked against the WORKING candidate\n(not merged into a common wider type)"]
+  args -->|no arguments to check| context{"Is there a contextual (expected) type?"}
+  context -->|yes| fromContext["T comes from the contextual type\n(assignment target, callback's own expected type)"]
+  context -->|no| unknownT["Nothing to infer from -- T becomes unknown"]`;
+
+Every surprising inference result in this module and the generics module both reduce to the same read: find every site `T` (or a plain, non-generic literal) could be inferred from, order them by the priority above, and ask what the *first* site with an answer actually offers. Widening is the same story one level down, applied per-site instead of per-call: a `const` primitive, an annotated return type, or an explicit type argument all short-circuit the "could this be reassigned or called again with something else" question that ordinary widening exists to answer conservatively — remove the possibility of a future disagreement, and the checker keeps the precise value it already has instead of generalizing it.
+
+## Trade-offs
+
+| Mechanism | Benefit | Cost |
+|---|---|---|
+| Priority order (explicit > argument > context) | Predictable, resolvable in one deterministic pass — no backtracking needed | A stray explicit type argument or default parameter silently overrides what a reader expects to be inferred normally |
+| Widening at `let`/mutable-property/return-position sites | The type stays valid for every future reassignment or call, not just the first observed value | The literal precision needed for a discriminated-union tag or a string-enum-like value is lost by default, requiring `as const`/an annotation to recover |
+| Contextual typing (backwards inference) | Callback parameters and object literals rarely need explicit annotations at all | The inference is only as good as the expected type it borrows — a poorly-typed or `any`-returning contextual source contextually types nothing usefully |
+| `NoInfer<T>` | Removes exactly one problem site without restructuring the whole generic signature | One more thing to remember to add — the default behavior (every occurrence is a site) still surprises people who haven't hit it yet |
+| Two-pass deferral for context-sensitive callbacks | Lets sibling callbacks in the same object literal share one inferred `T` at all | Historically over-deferred (pre-6.0) whenever any callback in the group looked context-sensitive; still requires understanding *why* a stubborn case needs a manual annotation |
+
+## Common Misconceptions
+
+- **When two arguments both provide a candidate for the same `T`, TypeScript unions them into a common type automatically.** Only when the *return position itself* is genuinely a union (multiple `return` statements) does that happen. For a shared type parameter, the first argument sets a working candidate and later arguments are checked *against* it — a mismatch is a real error (`TS2345`), not an automatic union, exactly the "candidate conflict" case the generics module's `both(1, "two")` example demonstrates.
+- **`const` always preserves a literal type, and `let` always widens.** The real rule is reassignability, which usually but not always tracks the keyword — a mutable *property* inside an object bound with `const` still widens, because the property itself, not the outer binding, is what could be reassigned later.
+- **`satisfies` narrows or widens an expression's type.** It does neither — it only validates against the given type and reports an error on mismatch, while the expression keeps exactly the type it would have inferred without the `satisfies` clause at all.
+- **A flag exists to make generic inference "stricter" the way `strictNullChecks` makes null-checking stricter.** Verified against `tsc --help --all` on 7.0.2: no `strictInference` flag exists. Tighter candidate inference from 5.9 is unconditional behavior.
+
+## Reading AI-generated code
+
+Inference-related bugs in generated code are almost always a *site* the author didn't realize was contributing (or not contributing) a candidate:
+
+- A "default" or "fallback" parameter position that's actually a live inference site (no `NoInfer`) silently widens the whole result type to include a value that was never meant to be a real option — check every parameter that shares a generic's type parameter, not just the ones that look like "the real input."
+- A generic helper called with no explicit type argument, whose result is stored in a `let` or a mutable object property: the literal precision from the argument may already be gone by the time it's read back, purely from widening at the *storage* site, with nothing to do with the generic call itself.
+- A function with multiple `return` statements and no annotated return type: the inferred type is the union of every reachable branch, including an accidental one (an early `return null` added for a debug path, a stray `return;` producing `undefined`) that the author may not have intended to be part of the public return type at all.
+
+<SpotTheBug code={`function buildQuery<T extends string>(fields: T[], sortBy?: T): { fields: T[]; sortBy?: T } {
+  return { fields, sortBy };
+}
+
+const query = buildQuery(["id", "name", "email"], "createdAt");
+console.log(query.fields.includes("createdAt"));`}>
+This compiles with zero errors, and `query.fields` is typed `("id" | "name" | "email" | "createdAt")[]` -- wider than the real, queryable fields the caller listed. `sortBy` is a genuine inference site for the same `T` as `fields`, exactly like the `defaultColor` parameter in the generics module's `NoInfer` example: passing `"createdAt"` (a value that was never one of the real `fields`) widens `T` to include it, so `query.fields`'s type silently grows to match. The `.includes("createdAt")` call on the last line looks like a real, checked membership test but is really checking a fabricated possibility that was never in the actual array -- the type system agreed to a lie contributed by a site nobody meant to treat as one of "the real options." The fix is `sortBy?: NoInfer<T>`, which removes this parameter from candidate collection entirely: `T` would then be inferred purely from `fields` as `"id" | "name" | "email"`, and passing an out-of-set value for `sortBy` becomes a real `TS2345` instead of a silent widening.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Inference is a search over every site a type parameter (or an un-annotated literal) could come from, resolved by a strict priority order — explicit type argument, then arguments left to right against a working candidate, then the contextual type only as a last resort — and widening at `let`/mutable-property/return-position sites is the same "could this be reassigned or called again" question applied one level down, per site, to plain literals instead of type parameters.
+</Callout>
+
+export const quizInference = [
+  {
+    q: 'When an explicit type argument, an argument value, and a contextual (expected) type could all supply a candidate for the same `T`, which one wins?',
+    options: [
+      'They are merged into a union of all three',
+      'The explicit type argument wins outright; only if none is written are argument positions checked, and only if no argument supplies a candidate is the contextual type consulted',
+      'The contextual type always wins, since it represents what the caller "really wants"',
+      'Whichever appears textually first in the source file',
+    ],
+    answer: 1,
+    explain: 'Verified: `identity<string | number>(42)` produces `string | number`, not `number` -- the explicit type argument overrides what the literal `42` argument would otherwise have contributed, and this priority is strict, not a merge.',
+  },
+  {
+    q: '```ts\nconst obj = { method: "GET" };\nobj.method = "POST";\n```\nThis compiles with zero errors. What does that prove about `obj.method`\'s inferred type?',
+    options: [
+      'It proves nothing unusual -- object literal properties are always widened',
+      'It proves `obj.method` was inferred as `string`, not the literal `"GET"` -- a MUTABLE property widens even though `obj` itself is declared with `const`',
+      'It proves TypeScript ignores object literal types entirely',
+      'It only compiles because `strict` is off',
+    ],
+    answer: 1,
+    explain: 'Widening tracks reassignability of the specific binding, not the outer variable\'s keyword -- `obj` being `const` only prevents rebinding `obj` itself; the mutable property `method` inside it can still be reassigned, so it widens to `string` at inference time.',
+  },
+  {
+    q: '```ts\nfunction classify(n: number) {\n  if (n > 0) return "positive";\n  if (n < 0) return "negative";\n  return 0;\n}\n```\nWith no return-type annotation, what is the inferred return type?',
+    options: [
+      'string -- all string-like returns are merged',
+      '"positive" | "negative" | 0 -- the union of every reachable return statement\'s type, verified by assigning the result to that exact union',
+      'The type of only the LAST return statement, `0`',
+      'any, because the function has multiple return statements',
+    ],
+    answer: 1,
+    explain: 'Verified: assigning classify(1) to a variable typed "positive" | "negative" | 0 compiles clean, while narrowing to just "positive" | "negative" fails with TS2322 naming the full three-member union as the source -- every return is its own inference site into one shared union result.',
+  },
+  {
+    q: 'What does `NoInfer<T>` actually do to a parameter it wraps?',
+    options: [
+      'It changes that parameter\'s type to `unknown`',
+      'It removes that specific position from candidate collection for `T`, without changing what `T` resolves to once inferred from elsewhere -- a site-suppression mechanism, not a type transformation',
+      'It forces `T` to be explicitly supplied by the caller',
+      'It makes the parameter optional',
+    ],
+    answer: 1,
+    explain: '`NoInfer<T>` erases to `T` at the type level -- the wrapped position is still checked against whatever `T` was inferred from other sites, it simply stops contributing its OWN candidate, which is exactly what stops a fallback/default value from widening the result.',
+  },
+  {
+    q: 'Why did TypeScript 6.0 change how context-sensitive callbacks inside an object literal are inferred?',
+    options: [
+      'It added a new `strictCallbackInference` flag developers must opt into',
+      'Before 6.0, a function was treated as context-sensitive (and deferred, sometimes leaving un-annotated siblings as `unknown`) too eagerly; since 6.0, a function that never references `this` no longer counts as context-sensitive on that basis, so fewer callbacks need deferring and more can share one inferred T',
+      'It removed context-sensitive inference from the language entirely',
+      'It only affects arrow functions, never method shorthand',
+    ],
+    answer: 1,
+    explain: 'The underlying two-pass mechanism (defer what depends on unresolved types, resolve the rest first, then check deferred bodies) is unchanged -- 6.0 narrowed WHICH functions get flagged as needing deferral in the first place, which is a strictly narrower and more precise definition, not a new opt-in behavior.',
+  },
+  {
+    q: '```ts\ntype Colors = "red" | "green" | "blue";\nconst paletteAnnotated: Record<Colors, string | number[]> = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n};\nconst paletteSatisfies = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n} satisfies Record<Colors, string | number[]>;\n```\nWhy does `paletteAnnotated.red.push(0)` fail with `TS2339`, while `paletteSatisfies.red.push(0)` compiles?',
+    options: [
+      'It is a coincidence -- both should behave identically',
+      'The direct annotation forces EVERY value to the declared union `string | number[]`, so `.red` loses its more specific `number[]` shape; `satisfies` only validates against that union without feeding it back in as the expression\'s own type, so `.red` keeps its own inferred `number[]`',
+      '`satisfies` disables strict mode for that expression',
+      '`paletteAnnotated` uses `let` internally while `paletteSatisfies` uses `const`',
+    ],
+    answer: 1,
+    explain: 'Verified directly: paletteAnnotated.red.push(0) is a real TS2339 ("push does not exist on type string | number[]") because the annotation widens every property to the full union. satisfies validates the same object against the same union but keeps each property\'s own narrower inferred type, so .push still exists on paletteSatisfies.red.',
+  },
+];
+
+<Quiz client:visible id="checker-internals/inference" questions={quizInference} />
+
+<ProgressTracker client:visible id="checker-internals/inference" />

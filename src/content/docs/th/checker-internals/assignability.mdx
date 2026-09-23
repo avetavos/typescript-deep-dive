@@ -1,0 +1,323 @@
+---
+title: 'Assignability'
+description: 'อัลกอริทึม structural assignability ทีละขั้น — เทียบ property ทีละตัว ทำไม readonly ไม่ถูกเช็ค method bivariance เทียบ property contravariance, any/unknown/never, excess check ของ fresh literal, comparability และวิธีเทียบ recursive type'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## "`A` assignable ให้ `B` ไหม?" คืออัลกอริทึมจริง ไม่ใช่ความรู้สึก
+
+ทุก `TS2322` ทุกการเช็ค generic constraint ทุกการเช็ค argument ตอนเรียกฟังก์ชัน — ทั้งหมดลดรูปเหลือคำถามเดียวที่ checker ถามซ้ำ ๆ: type *source* assignable ให้ type *target* ไหม บทนี้พูดเรื่องว่าเช็คนั้นทำอะไรจริง ๆ เพราะ "structural typing" ในฐานะสโลแกน ("shape เหมือนกัน ก็ compatible") ซ่อนกฎหลายข้อที่โผล่มาก็ตอนที่คุณดูการเทียบจริงรันเท่านั้น
+
+แก่นของอัลกอริทึม สำหรับ object type สองตัว คือ: **สำหรับทุก property ที่ target ประกาศว่าต้องมี source ต้องมี property compatible ชื่อเดียวกัน** ไม่ใช่ "property ชุดเดียวกัน" — แต่เป็น property ของ*target* ที่ถูกเช็คทีละตัว source-มีไหม-แล้ว-compatible-ไหม:
+
+```ts
+interface Target { name: string; age: number }
+interface Source { name: string; age: number; email: string }
+
+declare const s: Source;
+const t: Target = s; // OK -- Source has every property Target requires, plus more
+```
+
+`Source` มี field `email` เพิ่มที่ `Target` ไม่เคยขอ — ไม่เกี่ยว การเทียบเดินตาม property list ของ `Target` ไม่ใช่ของ `Source` กฎข้อนี้ข้อเดียวก็เป็นเหตุผลว่าทำไม type ที่*กว้างกว่า* (มี value ที่เป็นไปได้มากกว่า อย่าง `object` เฉย ๆ) *ไม่*ค่อย assignable ให้ type ที่*แคบกว่า* (มี value ที่เป็นไปได้น้อยกว่า property เฉพาะเจาะจงกว่า): property ที่ type แคบกว่าต้องการอาจไม่มีอยู่จริง
+
+## อ่าน assignability error จริง: chain ระบุความล้มเหลวแรกแล้วหยุด
+
+เมื่อการเทียบเกี่ยวกับ object ที่ซ้อนกัน checker ไม่ dump ทุกจุดที่ไม่ตรงพร้อมกัน — มันเดินเข้าไปที่ property ที่ไม่ compatible ตัวแรก แล้ว property ที่ไม่ compatible ตัวแรก*ของอันนั้น*ต่อไปเรื่อย ๆ พิมพ์ path ที่มันเดินออกมาเป๊ะ:
+
+<TSPlayground code={nestedChainCode} id="checker-assignability-nested-chain" title="A 3-level nested mismatch, and how the checker reports it" />
+
+export const nestedChainCode = `// @expect-error TS2322
+interface Address { city: string; zip: number }
+interface Company { name: string; address: Address }
+interface Employee { id: string; company: Company }
+
+declare const e: Employee;
+const bad: { id: string; company: { name: string; address: { city: string; zip: string } } } = e;
+//    ^? error TS2322
+console.log(bad);`;
+
+Compile อันนั้น (verify กับ 7.0.2 แล้ว) พิมพ์:
+
+```text
+error TS2322: Type 'Employee' is not assignable to type '{ id: string; company: { name: string; address: { city: string; zip: string; }; }; }'.
+  The types of 'company.address.zip' are incompatible between these types.
+    Type 'number' is not assignable to type 'string'.
+```
+
+สามบรรทัด สามชั้น ความไม่ compatible จริงหนึ่งจุด บรรทัดบนสุดระบุ type ทั้งก้อนสองตัวที่เกี่ยวข้อง — นั่นคือ context ไม่ใช่ตัวบั๊ก แต่ละบรรทัดที่ซ้อนลงไปแคบ path ลงทีละ property (`company` แล้ว `address` แล้ว `zip`) จนถึงคู่ type ที่*ไม่ compatible จริง*ๆ (`number` กับ `string`) แล้วหยุดตรงนั้น — มันไม่เดินต่อเข้าไปในทุก property อื่นที่บังเอิญต่างกัน และไม่รายงานมากกว่า path เดียวที่ทำให้การเทียบพัง การอ่าน assignability chain แบบไหนก็ตามด้วยวิธีเดียวกันนี้ — ข้ามไปบรรทัดในสุดเพื่อดูสาเหตุจริง อ่านบรรทัดนอก ๆ เป็น "นี่คือ property path ที่นำไปถึงตรงนั้น" — เปลี่ยนกำแพง type ที่ซ้อนกันให้เป็นข้อเท็จจริงที่เป็นรูปธรรมหนึ่งอย่าง
+
+## `readonly` ไม่ใช่ส่วนหนึ่งของ assignability — เลย
+
+เรื่องนี้ทำให้แทบทุกคนเซอร์ไพรส์ตอนเห็นครั้งแรก: modifier `readonly` มีผลว่า*คุณ*เขียนทับ property ได้ไหม แต่มัน**ไม่มีบทบาทเลย**ในการตัดสินว่า type หนึ่ง assignable ให้อีก type ไหม ทั้งสองทิศทาง:
+
+```ts
+interface Mutable { x: number }
+interface ReadonlyPoint { readonly x: number }
+
+declare const m: Mutable;
+declare const r: ReadonlyPoint;
+
+const a: ReadonlyPoint = m; // mutable -> readonly: fine
+const b: Mutable = r;       // readonly -> mutable: ALSO fine
+console.log(a, b);
+```
+
+ทั้งสองทิศทาง compile ผ่านโดยไม่มี error เลย (verify แล้ว) checker เทียบแค่ *value type* ของแต่ละ property — `x: number` match กับ `x: number` ไม่ว่าฝั่งไหนจะสะกดว่า `readonly` checker เทียบแค่ *value type* ของแต่ละ property นี่คือ footgun จริงที่คม: `b.x = 99` compile ผ่านแล้ว mutate แบบเงียบ ๆ ผ่าน reference ที่ควรได้รับการปกป้อง เพราะ `readonly` ของ type system เป็น annotation ตอน compile-time เท่านั้นบน*binding* ไม่ใช่ข้อเท็จจริงที่ฝังอยู่ใน structural identity ของ object แบบเดียวกับชื่อ property หรือ value type
+
+## Method เป็น bivariant; property function ไม่ใช่
+
+member ที่มี*shape*เป็นฟังก์ชันมีพฤติกรรมต่างกันขึ้นอยู่กับว่ามันถูกประกาศเป็น method (`handle(a: Animal): void`) หรือเป็น property ที่เก็บ function value (`handle: (a: Animal) => void`) — และความต่างนี้ไม่ใช่แค่ผิวเผิน:
+
+```ts
+// @expect-error TS2322
+interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+interface WithProperty { handle: (a: Animal) => void } // property function -- checked contravariantly
+
+const dogOnly = (a: Dog) => { a.bark(); };
+const p: WithProperty = { handle: dogOnly };
+```
+
+`dogOnly` รู้แค่วิธี handle `Dog` (มันเรียก `.bark()` ซึ่งมีแค่ `Dog` เท่านั้นที่มี) แต่ `WithProperty.handle` สัญญาว่าจะรับ `Animal` *อะไรก็ได้* การ assign มันจึง unsound จริง ๆ — ถ้ามีอะไรเรียก `p.handle(someCat)` `dogOnly` เรียก `.bark()` บน `Cat` แล้ว crash — และ `strictFunctionTypes` ปฏิเสธมันถูกต้องด้วย `TS2322` จริง
+
+ทีนี้ความ unsound เดียวกันเป๊ะ ผ่าน signature แบบ **method** แทน property:
+
+```ts
+interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+interface WithMethod { handle(a: Animal): void } // method shorthand -- checked bivariantly
+
+const dogOnly = (a: Dog) => { a.bark(); };
+const m: WithMethod = { handle: dogOnly }; // compiles -- zero errors
+```
+
+อันนี้ compile สะอาด (verify แล้ว) — การ assign แบบ unsound เป๊ะที่ `strictFunctionTypes` block ไว้สำหรับ property function ถูกอนุญาตสำหรับ method นี่คือ **method bivariance** และไม่ใช่ความผิดพลาดที่หลุดมา: มันมีอยู่เพราะทำให้ pattern generic container ที่พบทั่วไป (method ของ array อย่าง `.push`, method ของ class ที่ถูก override ใน subclass ด้วย parameter ที่แคบกว่า) ใช้งานได้โดยไม่มีแรงเสียดทานคอยกวนใจ แลกกับช่องโหว่เฉพาะที่มีเอกสารรองรับหนึ่งจุดนี้ กฎที่ใช้จริงตอนอ่าน (หรือเขียน) โค้ด: function type ที่ประกาศเป็น **method** (`name(args): ret`) ได้เช็คที่ผ่อนปรนกว่า ไม่ sound เป็นบางครั้ง; function type เดียวกันเป๊ะที่ประกาศเป็น **property** (`name: (args) => ret`) ได้เช็คที่เข้มและ sound ไม่มีอะไรอื่นในสองรูปแบบนี้ต่างกันเลย
+
+## `any`, `unknown` และ `never` แต่ละตัวทำลายกฎปกติคนละแบบ
+
+สาม type ถูก special-case ใน assignability relation และแต่ละตัวทำลายมันไปคนละทิศทางเฉพาะของตัวเอง:
+
+```ts
+// @expect-error TS2322
+declare const a: any;
+const s1: string = a;   // any -> string: OK (any is assignable TO anything)
+declare const s2: string;
+const a2: any = s2;     // string -> any: OK (anything is assignable TO any)
+
+declare const u: unknown;
+const s3: string = u;   // unknown -> string: error -- must narrow first
+declare const s4: string;
+const u2: unknown = s4; // string -> unknown: OK -- unknown accepts everything
+
+declare const n: never;
+const s5: string = n;   // never -> string: OK (never is assignable to everything)
+const bad: never = "x"; // string -> never: error -- nothing but never is assignable TO never
+```
+
+`any` assignable **ได้ทั้งสองทาง** — เข้าไปและออกมา — ซึ่งเป๊ะคือสิ่งที่ทำให้มันอันตราย: มัน disable เช็คทั้งสองทิศทางพร้อมกันแบบเงียบ ๆ `unknown` รับทุกอย่าง**เข้าไป**ได้ แต่ไม่มีอะไรออกมา**โดยไม่ narrow ก่อน** — มันคือน้องที่ระวังความปลอดภัยของ `any` flexibility เต็มที่ตอน input ไม่มี trust เลยตอน output `never` อยู่ขั้วตรงข้ามกับ `any`: มัน assignable *ไปยัง*ทุกอย่าง (ไม่มี value ที่จะไปละเมิด requirement ของ target ไหนได้) แต่ไม่มีอะไร assignable *เข้าไปที่*มัน (ไม่มี value ไหนเป็น `never` ได้เลย) นี่ก็เป็นเหตุผลว่าทำไม "subtype ของ" กับ "assignable ให้" ไม่ใช่คำพ้องความหมายกันเป๊ะทั้งที่ตรงกันแทบทุกที่อื่น: `never` คือ subtype ล่างสุดของทุก type และพฤติกรรม "ล่างสุดของทุกอย่าง" นี้คือสิ่งที่ exhaustiveness check (พูดถึงในบท [Narrowing](/typescript/th/everyday-types/narrowing/)) พึ่งพาจริง ๆ
+
+function type ที่ return `void` มี special case อีกอันที่ควรรู้: ฟังก์ชันที่ return อะไรบางอย่าง*ที่ไม่ใช่* `void` ก็ยัง assignable ในที่ที่ `() => void` ถูกคาดหวัง เพราะเข้าใจกันว่า caller จะทิ้งผลลัพธ์ไปเฉย ๆ:
+
+```ts
+type VoidFn = () => void;
+declare const takesVoidFn: (f: VoidFn) => void;
+takesVoidFn(() => 42); // OK -- the number is just ignored by whoever calls f()
+```
+
+และ numeric enum รักษาความสัมพันธ์หลวม ๆ ที่โด่งดังกับ `number` ทั้งสองทิศทาง — `number` เฉย ๆ assignable ให้ตัวแปรที่ type เป็น enum ได้ และ enum member assignable ให้ `number` ได้ โดยไม่มีการเช็ค range เลยทั้งสองทาง (นี่คือ "weak range checking" ที่ section เรื่อง enum ของบท [Objects, Arrays & Tuples](/typescript/th/everyday-types/objects-arrays-tuples/) ชี้ว่าเป็น footgun จริง ไม่ใช่เรื่องที่แต่งขึ้น)
+
+## Fresh object literal ได้เช็คพิเศษเพิ่มหนึ่งอย่าง; อย่างอื่นไม่ได้
+
+excess-property check — สิ่งที่ทำให้ `{ x: 1, y: 2, z: 3 }` เป็น error เมื่อฟังก์ชันคาดหวัง `{ x: number; y: number }` — **ไม่ใช่**ส่วนหนึ่งของ structural assignability ปกติ มันคือเช็คแยกที่แคบกว่า ซึ่งรันแค่บน object literal ที่ **fresh**: อันที่เขียนตรง ๆ ณ จุดที่ถูกเช็ค ไม่มีตัวแปรคั่นกลาง:
+
+```ts
+// @expect-error TS2353
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+
+takes({ x: 1, y: 2, z: 3 }); // fresh literal -- excess property check fires
+```
+
+```ts
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+
+const obj = { x: 1, y: 2, z: 3 };
+takes(obj); // NOT fresh -- ordinary structural assignability, extra props allowed
+```
+
+ทั้งสอง snippet compile shape `{ x, y, z }` เดียวกันเป๊ะเข้าสู่ parameter ที่เป็น shape `Point` เดียวกันเป๊ะ — ความต่างเดียวคือ object literal ถูกเขียนแบบ inline (fresh) หรือถูกเก็บในตัวแปรก่อน (ไม่ fresh กฎ structural อย่างเดียว) นี่คือเหตุผลเป๊ะว่าทำไม "แค่ assign ให้ตัวแปรก่อน" คือวิธีมาตรฐาน แม้จะดูแปลกนิดหน่อย ในการข้าม excess-property mistake จริง ๆ ตอนที่คุณตั้งใจจะส่ง field เพิ่มผ่านไปจริง ๆ
+
+## Comparability: `===` มีเช็คของตัวเองแยกต่างหาก
+
+`==`/`===` ระหว่าง operand สองตัวที่**ไม่มีจุดที่ overlap กันเลย**ถูก flag เป็น `TS2367` — ไม่ใช่ assignability error แต่เป็น relation คนละอันเลยเรียกว่า *comparability* ซึ่งหลวมกว่า assignability โดยตั้งใจ (type ไม่จำเป็นต้อง assignable ให้กันเพื่อจะ comparable ได้ แค่ต้องแชร์ value ที่เป็นไปได้*บางอัน*):
+
+```ts
+// @expect-error TS2367
+declare const x: "a" | "b";
+declare const y: "c" | "d";
+if (x === y) {}
+```
+
+ทั้ง `"a" | "b"` และ `"c" | "d"` ไม่ assignable ให้กันและกัน แต่นั่นไม่ใช่เหตุผลที่มัน error — คู่ที่ไม่ assignable กันเยอะแยะ (`string` กับ `"a"`) ก็ compare ได้สบาย มัน error เพราะ literal union ทั้งสองแชร์ value ที่เป็นไปได้**เป็นศูนย์** ดังนั้นการเปรียบเทียบมีทางเดียวคือเป็น `false` เสมอ ซึ่งเกือบทุกครั้งเป็น typo (เทียบตัวแปรผิดตัว หรือ value ที่ควรถูก update แต่ไม่ได้) มากกว่าจะเป็นเช็คจริง `TS2367` มีอยู่เป็น guard ของตัวเองก็เพราะ assignability อย่างเดียวจับสิ่งนี้ไม่ได้: type สองตัวที่ไม่เกี่ยวกันแต่ overlap กันเทียบกันได้สบาย และ type สองตัวที่เกี่ยวกันด้วย assignability ก็เทียบกันได้สบายอยู่แล้ว — มันเจาะจงกรณี "พิสูจน์แล้วว่าแยกจากกันสนิท" ที่เกือบแน่นอนว่าเป็นบั๊ก
+
+## Recursive type เทียบกันด้วย structure ไม่ใช่ด้วยชื่อ
+
+recursive type alias อ้างถึงตัวเอง ซึ่งทำให้เกิดคำถามชัดเจน: checker เทียบชื่อ recursive สอง*ชื่อที่ต่างกัน*โดยไม่วนไม่รู้จบได้ยังไง?
+
+```ts
+type A = { a: A };
+type B = { a: B };
+
+declare const av: A;
+const bv: B = av; // compiles -- zero errors
+```
+
+`A` กับ `B` คือ recursive shape สองอันที่แยกกัน ชื่อต่างกัน และ TypeScript ถือว่า assignable ให้กันได้อยู่ดี (verify แล้ว) — structural typing แปลว่าชื่อไม่เคยสำคัญตั้งแต่แรกอยู่แล้ว ดังนั้น recursive type สองตัวที่ structure เหมือนกันเป๊ะก็คือ type เดียวกันจริง ๆ ในสายตาของ assignability สิ่งที่หยุดการเทียบไม่ให้วนไม่รู้จบคือ checker ติดตามการเทียบที่กำลังดำเนินอยู่: เมื่อมันถูกถามว่า "`A` assignable ให้ `B` ไหม" และคำถามเป๊ะนี้กำลังถูกตอบอยู่ที่ไหนสักแห่งสูงกว่าใน call stack เดียวกันอยู่แล้ว (เพราะการเทียบ `A.a` กับ `B.a` ต้องเทียบ `A` กับ `B` อีกรอบ) มันไม่ recurse เป็นรอบที่สอง — มันสมมติชั่วคราวว่าคำตอบคือ "ใช่ เท่าที่ผ่านมา" สำหรับคู่ที่กำลังทำอยู่นั้น แล้วปล่อยให้การเทียบชั้นนอกเสร็จ จะล้มเหลวจริงก็ต่อเมื่อส่วน*อื่น*ของ structure ที่ไม่ใช่ recursive ไม่ตรงกัน นี่คือสิ่งที่ทำให้ shape ที่อ้างตัวเองลึก (หรือแม้แต่ไม่รู้จบ) เทียบกันเสร็จในเวลาจำกัดได้เลย และก็เป็นเหตุผลว่าทำไม recursive shape ที่ต่างกันจริง ๆ (เช่น `type C = { a: C; b: number }`) จึงไม่ match `A` อย่างถูกต้อง เมื่อถึงส่วน `b: number` ที่ไม่ใช่ recursive ของการเทียบ
+
+## Mental Model
+
+<Mermaid title="Assignability walks the target's properties; three types opt out; two extra checks apply narrowly" code={assignMentalDiagram} />
+
+export const assignMentalDiagram = `flowchart TD
+  start["Is Source assignable to Target?"] --> walk["For every property Target requires,\ndoes Source have a compatible one?"]
+  walk --> ro["readonly on either side? Ignored -- not part of the comparison"]
+  walk --> fn{"Is this member a method or a property function?"}
+  fn -->|method shorthand| biv["Checked bivariantly (looser)"]
+  fn -->|property function| contra["Checked contravariantly under strictFunctionTypes (sound)"]
+  walk --> special{"Is Source or Target any, unknown, or never?"}
+  special -->|any| both["Assignable both ways -- the check is disabled"]
+  special -->|unknown| into["Assignable INTO it only"]
+  special -->|never| outof["Assignable OUT of it only"]
+  fresh["Is Source a FRESH object literal?"] -->|yes| excess["Extra check: no excess properties allowed"]
+  fresh -->|no, stored in a variable| walk`;
+
+ทุกกฎในบทนี้คือ variation ของการกระทำเดียว: เทียบสอง shape ทีละ property ขับเคลื่อนด้วยสิ่งที่*target*ต้องการ `readonly` ไม่เคยเข้าไปในการเทียบนั้นเลยเพราะมันไม่ใช่ property ของ shape ของ value มันคือข้อจำกัดบน binding method bivariance และ property contravariance คือการเทียบเดียวกันที่ใช้กับ member ที่เป็นฟังก์ชัน โดยรูปแบบ method ถูกผ่อนปรนโดยตั้งใจ `any`/`unknown`/`never` คือสามวิธีที่ต่างกันในการ short-circuit การเดินทั้งหมด แต่ละคนคนละทิศทาง excess-property check กับ comparability (`TS2367`) คือสองจุดที่ checker รันกฎ*เพิ่มเติม*ที่แคบกว่าทับบน assignability ปกติ เพราะการเทียบ structural ธรรมดาจับสิ่งที่พวกมันมีไว้จับไม่ได้ (typo ในตัวอักษร, การเปรียบเทียบที่เป็น false เสมอ)
+
+## ข้อแลกเปลี่ยน
+
+| กฎ | ข้อดี | ต้นทุน |
+|---|---|---|
+| Structural (เทียบ property ทีละตัว) assignability | type สองตัวที่ประกาศแยกกันโดยไม่รู้จักกันแต่ shape เหมือนกันก็ใช้ด้วยกันได้เลย — ไม่ต้องมีพิธี "implements" ชัดเจน | type สองตัวที่บังเอิญเหมือนกันแต่ไม่เคยตั้งใจให้ใช้แทนกันได้ ก็ใช้แทนกันได้อยู่ดี |
+| `readonly` ไม่รวมใน assignability | รักษา assignability relation ให้ง่าย เป็น shape ล้วน ๆ | object ที่เป็น `readonly` ถูกส่งแบบเงียบ ๆ ให้โค้ดที่ mutate มันผ่าน alias ที่ type เป็น `Mutable` ได้ ทำลายการป้องกันที่ `readonly` ดูเหมือนจะให้ |
+| Method bivariance | pattern generic-container และ override ที่พบทั่วไป type-check ผ่านโดยไม่มีพิธีเพิ่ม | ความ unsound เป๊ะที่ `strictFunctionTypes` ถูกสร้างมาป้องกันยังหลุดผ่านได้ ตราบใดที่มันสะกดเป็น method แทนที่จะเป็น property function |
+| เช็ค excess ของ fresh-literal | จับ typo ที่พบบ่อยที่สุด (property สะกดผิดหรือเกิน) ตรง call site เลย | ทำงานแค่บน literal ที่เขียน inline เท่านั้น — ความผิดพลาดเดียวกันเป๊ะผ่านตัวแปรเงียบไป ซึ่งทำให้คนที่ไม่รู้กฎนี้เซอร์ไพรส์ |
+| Comparability `TS2367` | flag การเปรียบเทียบที่เป็น `false` ได้ทางเดียวเสมอ — เกือบทุกครั้งเป็นบั๊กจริง | บางครั้งขึ้นกับเช็คที่ defensive จริง ๆ ที่ผู้เขียนรู้ว่า unreachable อยู่ตอนนี้แต่อยากเก็บไว้กันอนาคต |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`readonly` ทำให้ type สองตัว incompatible กันถ้าตัวหนึ่งมีอีกตัวไม่มี** มันไม่เคยเข้าร่วมใน assignability เลย — เทียบแค่ value type ของ property เท่านั้น การรับประกันแบบ `readonly` ถูกทิ้งแบบเงียบ ๆ ได้ด้วยการ assign ผ่าน alias ที่ type ไม่ใช่ `readonly`
+- **method กับ property ที่เก็บ function type เดียวกันถูกเช็คเหมือนกัน** ไม่เหมือน: method signature (`f(x: T): void`) ถูกเช็คแบบ bivariant; function type เดียวกันเป๊ะที่สะกดเป็น property (`f: (x: T) => void`) ถูกเช็คแบบ contravariant และมีแค่แบบหลังเท่านั้นที่ sound เต็มที่ภายใต้ `strictFunctionTypes`
+- **excess-property check เป็นส่วนหนึ่งของ structural typing ปกติ** มันคือกฎแยกที่แคบกว่า ใช้แค่กับ object literal ที่เขียนตรง ๆ ณ ตำแหน่งที่ถูกเช็คเท่านั้น — เก็บ literal เดียวกันไว้ในตัวแปรก่อนแล้วมันหายไปเลย โดย shape จริงของ literal ไม่เปลี่ยนเลย
+- **`any`, `unknown` และ `never` เป็นแค่เวอร์ชัน "หลวม" ของกันและกัน** พวกมันทำลายกฎ assignability ไปคนละทิศทางเฉพาะ: `any` ทั้งสองทาง, `unknown` ทางเข้าอย่างเดียว, `never` ทางออกอย่างเดียว การสับสนว่า boundary ไหนใช้ตัวไหนเปลี่ยนสิ่งที่ถูกยอมรับแบบเงียบ ๆ เทียบกับถูกปฏิเสธตรงนั้นเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+ช่องว่างของ assignability คือหนึ่งในบั๊กที่เงียบที่สุดในโค้ด generate เพราะทุกอันข้างล่าง compile สะอาด:
+
+- parameter หรือ return type ที่ถูกขยายเป็น `any` (ตรง ๆ, หรือผ่าน callback ของ third-party ที่ไม่มี annotation, หรือผ่าน `JSON.parse`) disable การเช็ค assignability ทั้ง**สอง**ทิศทางตรง boundary นั้น — เช็คว่าโค้ดรอบข้าง narrow หรือ validate มันก่อนหรือเปล่าก่อนที่จะเชื่ออะไรที่อยู่ downstream
+- callback parameter ที่ type เป็น bare function property (`onError: (e: Error) => void`) ที่ adapter ที่ generate มา assign handler ที่ type แคบกว่าให้ คือ property-contravariance case เป๊ะจากบทนี้ — ถ้ามันเกิดขึ้นจริงจะเป็น `TS2322` จริง ดังนั้นถ้าคุณเห็นมัน compile ผ่าน เช็คว่ารูปแบบไหน (method หรือ property) กำลังถูกใช้อยู่
+- ค่าสองตัวเทียบด้วย `===` ที่ type ดูไม่เกี่ยวกันแต่ compile ผ่าน: โอเค (comparability หลวมกว่า assignability โดยตั้งใจ) — แต่ถ้า `tsc` รายงาน `TS2367` บนการเปรียบเทียบที่ generate มา นั่นคือสัญญาณแรงว่าเป็น copy-paste ผิดชื่อตัวแปร ไม่ใช่ false positive ที่ควรเมิน
+
+<SpotTheBug code={`interface Config { readonly apiUrl: string; readonly retries: number }
+
+function withDefaults(overrides: Partial<Config>): Config {
+  return { apiUrl: "https://api.example.com", retries: 3, ...overrides };
+}
+
+function resetRetries(config: { apiUrl: string; retries: number }) {
+  config.retries = 0;
+}
+
+const config = withDefaults({});
+resetRetries(config);
+console.log(config.retries);`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย และมันก็ mutate value ที่ type `Config` เรียกว่า `readonly` จริง parameter type ของ `resetRetries` คือ `{ apiUrl: string; retries: number }` ซึ่ง compatible กับ `Config` ในทุกทางที่ `readonly` ไม่มีผล (property ชื่อเดียวกัน value type เดียวกัน) และเพราะ `readonly` ไม่มีบทบาทใน assignability เลย การส่ง `Config` ไปในที่ที่ shape mutable ธรรมดานั้นถูกคาดหวังจึงถูกกฎหมายเต็มที่ พอเข้าไปใน `resetRetries` แล้ว `config.retries = 0` คือการเขียนธรรมดาบน property ที่ type ของ*parameter เอง*ไม่เคย mark เป็น `readonly` เลย — ตัวแปรที่ type เป็น `Config` เดิมตอนนี้ field ที่ "ถูกป้องกัน" ของมันถูกเปลี่ยนแบบเงียบ ๆ ทางแก้ไม่ใช่ cast หรือ assertion แต่คือการรู้ว่า `readonly` เป็นตัวเตือนตอน compile-time สำหรับโค้ดที่ reference value*ผ่าน type `Config`*เท่านั้น ไม่ใช่การรับประกันที่รอดจากการถูกส่งให้โค้ดที่เขียนเทียบกับ type ที่ structurally เหมือนกันแต่ไม่ได้ mark ไว้
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Assignability เดินตาม required property ของ target type ทีละตัวและถามว่า source มี match ที่ compatible สำหรับแต่ละตัวไหม — `readonly` ไม่เคยเป็นส่วนหนึ่งของการเทียบนั้นเลย member ที่เป็น method ถูกเช็คหลวมกว่า (bivariant) function type เดียวกันเป๊ะที่สะกดเป็น property, `any`/`unknown`/`never` แต่ละตัว disable กฎปกติไปคนละทิศทางเฉพาะ และเช็คที่แคบกว่าสองอัน — excess property บน fresh literal และ comparability สำหรับ `===` — รันแค่ในสถานการณ์เฉพาะแคบ ๆ ของตัวเองทับบนการเดินหลักเดียวกัน
+</Callout>
+
+export const quizAssignability = [
+  {
+    q: 'core assignability check เทียบอะไรจริง ๆ สำหรับ object type สองตัว?',
+    options: [
+      'ทั้งสอง type มี property set เดียวกันเป๊ะไหม',
+      'สำหรับทุก property ที่ TARGET ต้องการ source มี property compatible ชื่อเดียวกันไหม -- property เกินบน source ไม่เกี่ยว',
+      'ทั้งสอง type ถูกประกาศด้วย keyword เดียวกันไหม (interface เทียบ type)',
+      'ทั้งสอง type แชร์ base class เดียวกันไหม',
+    ],
+    answer: 1,
+    explain: 'การเทียบขับเคลื่อนด้วย target: มันเดินตาม required property ของ target แล้วเช็คแต่ละตัวกับ source source ที่มี property เพิ่มที่ target ไม่เคยถามก็ยัง assignable ได้',
+  },
+  {
+    q: '```ts\ninterface Mutable { x: number }\ninterface ReadonlyPoint { readonly x: number }\ndeclare const m: Mutable;\ndeclare const r: ReadonlyPoint;\nconst a: ReadonlyPoint = m;\nconst b: Mutable = r;\n```\nทั้งสองการ assign compile ผ่านไหม?',
+    options: [
+      'ไม่ -- การ assign value ที่ type readonly ให้ตัวแปรที่ type Mutable เป็น error เสมอ',
+      'ใช่ ทั้งคู่ compile ผ่านโดยไม่มี error เลย -- readonly ไม่มีบทบาทใน assignability ทั้งสองทิศทาง',
+      'compile ผ่านแค่อันแรก อันที่สองต้องใช้ cast',
+      'ไม่มีอันไหน compile ผ่านภายใต้ strict',
+    ],
+    answer: 1,
+    explain: 'verify ตรงแล้ว: ทั้งสองทิศทาง compile สะอาด readonly จำกัดการเขียนผ่าน binding ตัวใดตัวหนึ่งเท่านั้น แต่ไม่ใช่ส่วนหนึ่งของ structural shape ที่ assignability check เทียบ',
+  },
+  {
+    q: 'ทำไม `const m: WithMethod = { handle: dogOnly }` compile ผ่าน (ที่ `dogOnly` รับแค่ `Dog`, และ `WithMethod.handle` ถูกประกาศเป็น `handle(a: Animal): void`) ในขณะที่การ assign เดียวกันเป๊ะผ่าน property-typed `handle: (a: Animal) => void` เป็น `TS2322` จริง?',
+    options: [
+      'มันคือบั๊กใน compiler ที่ไม่มีคำอธิบายจริง',
+      'method-shorthand signature ถูกเช็คแบบ bivariant (หลวมกว่า ไม่ sound เป็นบางครั้ง); function type เดียวกันเป๊ะที่ประกาศเป็น property ถูกเช็คแบบ contravariant ภายใต้ strictFunctionTypes (sound) -- ต่างกันแค่รูปแบบ syntax',
+      'เพราะ `Dog` เป็น subtype ของ `Animal` ทั้งคู่ควรได้รับอนุญาตเสมอ',
+      'เพราะ method ไม่มีทาง assign ผิดได้เลย',
+    ],
+    answer: 1,
+    explain: 'นี่คือ method bivariance: TypeScript ตั้งใจเช็ค method-shorthand member หลวมกว่า function type เดียวกันเป๊ะที่สะกดเป็น property แลก soundness บางส่วนกับ compatibility กับ pattern ที่พบทั่วไปอย่าง method ของ array และการ override method',
+  },
+  {
+    q: 'ตัวไหนใน `any`, `unknown`, `never` ที่ assignable ได้ทั้งเข้าไปและออกมาจาก type อะไรก็ได้ disable เช็คทั้งสองทิศทางพร้อมกัน?',
+    options: [
+      '`unknown`',
+      '`any`',
+      '`never`',
+      'ทั้งสามตัวพฤติกรรมเหมือนกันเป๊ะ',
+    ],
+    answer: 1,
+    explain: '`any` assignable ให้อะไรก็ได้ และอะไรก็ได้ assignable ให้มัน -- ทั้งสองทิศทางไม่ถูกเช็ค `unknown` รับ value เข้าอย่างเดียว (ไม่มีอะไรออกโดยไม่ narrow); `never` ไหลออกอย่างเดียว (ไม่มีอะไรนอกจาก never assign เข้าไปได้)',
+  },
+  {
+    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const takes: (p: Point) => void;\nconst obj = { x: 1, y: 2, z: 3 };\ntakes(obj);\n```\nอันนี้ compile ผ่านไหม ทั้งที่ `obj` มี property `z` เกินที่ `Point` ไม่ได้ประกาศ?',
+    options: [
+      'ไม่ -- เป็น excess-property error เดียวกับการส่ง literal ตรง ๆ',
+      'ใช่ -- excess-property check ใช้แค่กับ object literal ที่ FRESH เขียนตรง ๆ ณ ตำแหน่งที่ถูกเช็คเท่านั้น พอถูกเก็บในตัวแปรแล้ว structural assignability ปกติใช้แทน และ property เกินได้รับอนุญาต',
+      'ไม่ เพราะ `z` ชนกับ index signature ที่แฝงอยู่',
+      'ใช่ แต่แค่เพราะ `strict` ปิดอยู่',
+    ],
+    answer: 1,
+    explain: 'verify แล้ว: การส่ง literal ตรง ๆ (`takes({ x: 1, y: 2, z: 3 })`) trigger TS2353 แต่การเก็บมันใน `obj` ก่อนแล้วส่ง `obj` compile สะอาด -- excess-property check แคบกว่า assignability ปกติและทำงานแค่ตอน freshness เท่านั้น',
+  },
+  {
+    q: '```ts\ndeclare const x: "a" | "b";\ndeclare const y: "c" | "d";\nif (x === y) {}\n```\nเกิดอะไรขึ้น และทำไมนี่ถึงเป็นเช็คที่ต่างจาก assignability?',
+    options: [
+      'compile ผ่านสบาย -- string literal union เทียบกันได้เสมอ',
+      'มันคือ TS2367 "no overlap" -- comparability เช็คว่า type สองตัวแชร์ value ที่เป็นไปได้กันได้ไหม ซึ่งเข้มกว่า assignability ตรงนี้ ทั้งที่ `"a" | "b"` ก็ไม่ assignable ให้ `"c" | "d"` ด้วยเหตุผลอื่นที่ไม่เกี่ยวกันเช่นกัน',
+      'มันคือ TS2322 assignability error',
+      'error เกิดแค่ตอน strictNullChecks ปิดอยู่เท่านั้น',
+    ],
+    answer: 1,
+    explain: '"a" | "b" กับ "c" | "d" แชร์ value ที่เป็นไปได้เป็นศูนย์ ดังนั้นการเปรียบเทียบมีทางเดียวคือเป็น false เสมอ -- TS2367 flag case "พิสูจน์แล้วว่าแยกจากกันสนิท" นี้เป๊ะว่าเกือบแน่นอนเป็นบั๊ก โดยใช้ comparability relation ที่หลวมกว่า assignability ในกรณีอื่น (type ที่ไม่เกี่ยวกันแต่ overlap กันเทียบกันได้สบาย)',
+  },
+];
+
+<Quiz client:visible id="checker-internals/assignability" questions={quizAssignability} />
+
+<ProgressTracker client:visible id="checker-internals/assignability" />

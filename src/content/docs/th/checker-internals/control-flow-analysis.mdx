@@ -1,0 +1,387 @@
+---
+title: 'Control-Flow Analysis'
+description: 'Narrowing จริง ๆ คือปัญหา graph — CFA graph ของ node การ assignment และ branch ทำไม narrowing รอดใน closure หรือหายไป ตรงข้ามกับ await, ขีดจำกัดของ aliased condition, inferred predicate, definite assignment และ reachability'
+sidebar:
+  order: 4
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Narrowing คือ graph ที่ถูกเดินครั้งเดียว ต่อฟังก์ชัน
+
+บท [Narrowing](/typescript/th/everyday-types/narrowing/) สอนคำศัพท์ให้แล้ว — `typeof`, `instanceof`, `in`, discriminant, truthiness, equality — และแต่ละอัน narrow union ใน branch ที่มันคุ้มกันยังไง บทนี้พูดเรื่องกลไกที่อยู่ใต้ทั้งหมดนั้น: **control-flow analysis** (CFA) ซึ่งสร้าง graph ของทุก assignment, condition และ branch ใน function body แล้วถามคำถามเดียวที่ทุกจุดที่ตัวแปรถูกอ่าน: *จากทุก path ที่เป็นไปได้ที่มาถึงจุดนี้เป๊ะ type ของตัวแปรนี้ตรงนี้คืออะไร?*
+
+<Mermaid title="CFA is a graph of assignments, conditions, and merges" code={cfaGraphDiagram} />
+
+export const cfaGraphDiagram = `flowchart TD
+  entry["function entry: shape is Circle | Square"] --> cond{"shape.kind === 'circle'?"}
+  cond -->|true branch| circleNode["shape narrowed to Circle here"]
+  cond -->|false branch| squareNode["shape narrowed to Square here"]
+  circleNode --> merge["after the if: back to Circle | Square\n(both branches rejoin)"]
+  squareNode --> merge`;
+
+ทุก `if`, `switch`, `&&`, `||`, ternary และ loop คือ node ที่แยกหรือรวม graph นี้ type ณ จุดใดจุดหนึ่งไม่ใช่ label คงที่ที่ติดอยู่กับตัวแปร — มันคือ union ของสิ่งที่ทุก path ที่เข้ามาถึงจุดนั้น narrow มันไป ซึ่งเป็นเหตุผลเป๊ะที่ type widen กลับออกทันทีที่ branch ที่ narrow ต่างกันสองอันมารวมกัน (node `merge` ในไดอะแกรมข้างบนเป็น `Circle | Square` อีกครั้ง ไม่ใช่ `Circle` แม้แต่ละ branch ที่ป้อนเข้ามาจะแคบกว่าก็ตาม)
+
+## ทำไม narrowing รอดตอนอ่านใน graph เดียวกัน แต่ไม่รอดใน closure
+
+การอ่านตัวแปรที่ narrow แล้วยังคงแคบตราบใดที่มันเกิด**ทีหลังใน control-flow graph เดียวกัน** — function body เดียวกัน ยังตาม edge จาก narrowing condition อยู่ ฟังก์ชันที่ซ้อนอยู่ข้างในคือ graph ที่**ต่างกัน**ไปเลย ที่ checker ไม่มีทางรู้ว่าจะรันตอนไหนเทียบกับ graph ข้างนอก ดังนั้นมันปฏิเสธที่จะพก property narrowing ข้าม boundary นั้นไปแบบระมัดระวัง:
+
+```ts
+// @expect-error TS2339
+interface State { id: string | number }
+declare const state: State;
+
+if (typeof state.id === "string") {
+  state.id.toUpperCase(); // fine -- same graph, same branch
+  function readLater() {
+    state.id.toUpperCase(); // lost -- a NEW graph; readLater could run at any time
+  }
+}
+```
+
+ทางแก้ที่บท [Narrowing](/typescript/th/everyday-types/narrowing/) ให้ไว้ — capture value ที่ narrow แล้วเข้า local `const` *ก่อน*ที่ closure จะถูกสร้าง — ได้ผลเพราะ `const` local ไม่ใช่ property ที่อ่านซ้ำได้ narrowed type ของมันถูกกำหนดตายตัวที่จุดเดียวที่มันถูกสร้าง และการอ่าน `const` ข้างใน closure คือการกลับเข้าไปในข้อเท็จจริงที่*settled*แล้วของ graph ชั้นนอก แทนที่จะถามใหม่ว่า "`state.id` จะเป็นอะไรได้บ้างตอนที่นี่รัน"
+
+## `await` ไม่ได้เริ่ม graph ใหม่ — narrowing รอดผ่านมันด้วยการมองโลกในแง่ดีและ unsound
+
+นี่คือจุดเดียวที่กฎข้างบนวิ่งกลับด้าน และควรค่าแก่ความแม่นยำว่าทำไม: `await` **ไม่**สร้าง function scope ใหม่แบบที่ closure ที่ซ้อนอยู่ทำ control flow หลัง `await` ยังเป็น graph *เดียวกัน* แค่ถูกพักแล้วกลับมาต่อ — ดังนั้น narrowing จากก่อน `await` ยังถูกเชื่อหลังจากนั้น แม้ว่าโค้ดจริง อะไรก็ได้ อาจรันไปแล้วระหว่างที่ฟังก์ชันถูกพักอยู่:
+
+```ts
+interface State { id: string | number }
+
+async function corrupt(state: State) {
+  state.id = 42; // runs while the caller is suspended at its own await
+}
+
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state); // TypeScript has no idea this mutates state.id
+    state.id.toUpperCase(); // still "narrowed" to string -- compiles, unsoundly
+  }
+}
+```
+
+โค้ดนี้ compile ผ่านโดย**ไม่มี error เลย**และ throw ตอน runtime เมื่อ `state.id` เป็น `42` จริง ๆ ตอนที่ `.toUpperCase()` รัน บท [Narrowing](/typescript/th/everyday-types/narrowing/) พิสูจน์ความ unsound นี้เต็ม ๆ แล้ว; เหตุผลเชิงกลไกอยู่ตรงนี้: TypeScript ไม่มี interprocedural analysis (มันไม่เคยดูข้างใน body ของ `corrupt` เพื่อดูว่ามันทำอะไรกับ `state`) และเพราะ `await` ไม่แยก control-flow graph แบบที่ closure ทำ ไม่มีสัญญาณเชิงโครงสร้างบอก checker ให้ระมัดระวังแบบที่มันเป็นข้าม closure boundary จริง ความไม่สมมาตรนี้ตั้งใจ ไม่ใช่บั๊ก: closure *อาจ*รันทีหลัง ตอนที่ไม่รู้เวลา ดังนั้น checker ระมัดระวัง; `await` กลับมาต่อใน function *เดียวกัน* ดังนั้น checker ยังมองโลกในแง่ดีอยู่ — แม้ว่า ต่างจาก case ของ closure มีอะไรอื่นรันไปจริง ๆ ในระหว่างนั้น
+
+## `let` เทียบ `const` และ closure ที่ถูกสร้าง*หลัง*การ assign ครั้งสุดท้าย
+
+Reassignability คือคุณสมบัติเป๊ะที่ตัดสินว่า local ที่ถูก capture รอดเข้าไปใน nested function แบบ narrowed หรือไม่ เหมือนกับที่มันตัดสิน literal widening ในบท [Inference](/typescript/th/checker-internals/inference/):
+
+```ts
+// process is a DOM/Node global in script scope -- named handleValue to avoid colliding with it
+function handleValue(value: string | number) {
+  if (typeof value === "string") {
+    const later = () => value.toUpperCase(); // OK -- `value` is a const-like parameter here, never reassigned after this point
+    later();
+  }
+}
+handleValue("hi");
+```
+
+`let` (หรือ parameter) ที่อาจถูก reassign จริง ๆ ที่ไหนสักแห่งทีหลังในฟังก์ชัน ถูกปฏิบัติแบบเดียวกับที่ property ที่อ่านผ่าน closure ถูกปฏิบัติ: checker มั่นใจไม่ได้ว่า closure รันก่อนหรือหลังการ reassign ทีหลัง ดังนั้นมันไม่เชื่อ narrowing ข้างในนั้น `const` หรือ `let`/parameter ที่พิสูจน์แล้วว่าไม่ถูก reassign อีกหลังจากจุด narrowing ไม่มีความคลุมเครือแบบนั้น — ไม่มีการเขียนทีหลังให้แข่งด้วย — ดังนั้น closure ที่สร้างจากมันเก็บ narrowed type ไว้
+
+## Aliased condition (4.4): narrowing ผ่าน boolean local พร้อมขีดจำกัดความลึกจริง
+
+ตั้งแต่ TypeScript 4.4 `const` boolean local ที่เก็บ*ผลลัพธ์*ของ narrowing condition พก narrowing นั้นไปด้วย — คุณไม่ต้องพูด condition ซ้ำที่ `if`:
+
+```ts
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+
+function area(shape: Shape) {
+  const isCircle = shape.kind === "circle"; // the CONDITION's result, aliased
+  if (isCircle) {
+    return Math.PI * shape.radius ** 2; // narrowed via the alias, not a repeated condition
+  }
+  return shape.side ** 2;
+}
+```
+
+อันนี้ compile สะอาด (verify แล้ว) — `isCircle` ถูกปฏิบัติเหมือนพก narrowing information เดียวกับที่ `shape.kind === "circle"` จะมี ตรง ๆ ที่ `if` มีขีดจำกัดจริงสองอันที่ควรรู้ ทั้งคู่ verify กับ 7.0.2 แล้ว:
+
+**มีแค่ `const` เท่านั้นที่ใช้ได้** `let` ที่ถือ condition เดียวกันเป๊ะไม่พก narrowing ไปด้วย ด้วยเหตุผล reassignability เดียวกันเป๊ะจาก section ข้างบน — `let` อาจถูก reassign ระหว่างจุดที่ถูกตั้งกับจุดที่ถูกอ่าน ดังนั้น checker เชื่อมันแบบเดียวกันไม่ได้:
+
+```ts
+// @expect-error TS2339
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+
+function area(shape: Shape) {
+  let isCircle = shape.kind === "circle"; // let, not const -- alias is NOT trusted
+  if (isCircle) {
+    return Math.PI * shape.radius ** 2;
+  }
+  return shape.side ** 2;
+}
+```
+
+**มีขีดจำกัดความลึกของ chain จริง: ห้า** การ alias ผ่าน chain ของ `const` ที่แต่ละตัว copy ตัวก่อนหน้ายังทำงานได้ถึงห้าระดับลึก แล้วพังที่ระดับที่หก:
+
+<TSPlayground code={aliasDepthCode} id="checker-cfa-alias-depth" title="Aliased-condition narrowing through five levels — the sixth breaks it" />
+
+export const aliasDepthCode = `// @expect-error TS2339
+interface Circle { kind: "circle"; radius: number }
+interface Square { kind: "square"; side: number }
+type Shape = Circle | Square;
+
+function areaFive(shape: Shape) {
+  const a = shape.kind === "circle";
+  const b = a;
+  const c = b;
+  const d = c;
+  const e = d; // five levels of aliasing -- still narrows
+  if (e) {
+    return Math.PI * shape.radius ** 2;
+  }
+  return shape.side ** 2;
+}
+
+function areaSix(shape: Shape) {
+  const a = shape.kind === "circle";
+  const b = a;
+  const c = b;
+  const d = c;
+  const e = d;
+  const f = e; // sixth level -- narrowing breaks here
+  if (f) {
+    return Math.PI * shape.radius ** 2; // errors -- 'radius' does not exist on type 'Shape'
+  }
+  return shape.side ** 2;
+}`;
+
+นี่คือข้อเท็จจริงที่ลึกลับจริง ๆ วัดผิดง่าย ซึ่งเป็นเหตุผลเป๊ะว่าทำไมถึงควร verify แทนที่จะพูดซ้ำจากความจำ: `areaFive` compile ผ่านโดยไม่มี error เลย และ `areaSix` — เหมือนกันทุกอย่างยกเว้นมีชั้น `const x = y` เพิ่มอีกหนึ่งชั้น — รายงาน `TS2339` จริงสองอัน (`radius` ไม่มีบน `Shape`, `side` ไม่มีบน `Shape`) บน 7.0.2 ไม่มีใครควรเขียน alias chain ลึกหกชั้นโดยตั้งใจ แต่โค้ดที่ generate มาจากการแปลงหรือ inline ตัวแปรแบบกลไกอาจข้าม boundary นี้พอดีโดยบังเอิญ ทำให้ narrowing หายไปแบบเงียบ ๆ โดยไม่มีอะไรอื่นใน logic เปลี่ยนแปลงให้เห็น
+
+## Inferred type predicate (5.5): อะไรที่ได้เข้าเกณฑ์จริง ๆ
+
+ตั้งแต่ TypeScript 5.5 ฟังก์ชันที่ return boolean expression ที่ narrow parameter ของตัวเองได้ inferred `x is T` return type อัตโนมัติ โดยไม่ต้องเขียน syntax `is` ด้วยมือเลย:
+
+```ts
+function isString(x: unknown) {
+  return typeof x === "string"; // no `: x is string` written anywhere
+}
+
+function demo(x: unknown) {
+  if (isString(x)) {
+    x.toUpperCase(); // compiles -- isString's return type was inferred as `x is string`
+  }
+}
+```
+
+มีสองวิธีจริงที่ verify แล้วที่ inference นี้**ไม่**ทำงาน ทั้งคู่ควรเช็คตรง ๆ แทนที่จะสมมติว่า inference "ทำงานเสมอ" กับ helper ที่ return boolean ไหนก็ได้:
+
+```ts
+// @expect-error TS18046
+function isStringReassigned(x: unknown) {
+  x = x; // any reassignment to the parameter disqualifies inference -- even a no-op one
+  return typeof x === "string";
+}
+
+function demo1(x: unknown) {
+  if (isStringReassigned(x)) {
+    x.toUpperCase(); // x is still `unknown` here -- no predicate was inferred
+  }
+}
+```
+
+```ts
+// @expect-error TS18046
+function helper(x: unknown): boolean {
+  return typeof x === "string";
+}
+function isStringIndirect(x: unknown) {
+  return helper(x); // delegates to another function -- not a DIRECT narrowing expression on x
+}
+
+function demo2(x: unknown) {
+  if (isStringIndirect(x)) {
+    x.toUpperCase(); // still unknown -- inference only looks at THIS function's own body
+  }
+}
+```
+
+ทั้งคู่ compile ผ่านโดย parameter ยังเป็น `unknown` อยู่ข้างใน branch ที่ guard ไว้ (verify แล้ว: `TS18046` จริง "is of type unknown") inference แคบโดยตั้งใจ: มันทำงานแค่ตอนที่ body*ของฟังก์ชันเอง*ทำ narrowing check ตรง ๆ บน parameter*ของตัวเอง* โดย parameter ไม่ถูก reassign เลย — เงื่อนไขระดับ syntax ท้องถิ่นจริง ๆ ไม่ใช่การวิเคราะห์ทั่วไปว่า "ฟังก์ชันนี้ทำตัวเหมือน type guard ไหม" helper ที่ wrap หรือ delegate การเช็คจริงให้ฟังก์ชันอื่นต้องการ annotation `is` เขียนด้วยมือ เหมือนก่อน 5.5 เป๊ะ
+
+## Definite assignment กับ reachability: สองเช็คที่ถามคำถามต่างกัน
+
+`TS2454` ("used before being assigned") คือ checker ติดตามว่าทุก path ที่มาถึง read เขียนตัวแปรไปแล้วหรือยัง — แต่ case เฉพาะของตัวแปรที่ถูกอ่านแค่จากข้างใน**nested function** และไม่เคยถูก assign*ที่ไหนเลย*ใน enclosing scope คือกฎที่เข้มกว่า แยกต่างหาก ที่เพิ่มใน TypeScript 5.7 ("never-initialized variables"): มันทำงานแม้ nested function ไม่เคยถูกเรียกเลย เพราะไม่มี path ไหนเลยที่ตัวแปรจะมี value:
+
+```ts
+// @expect-error TS2454
+function demo() {
+  let result: number;
+  function print() { console.log(result); }
+}
+```
+
+เพิ่ม assignment แม้แต่หนึ่งอันที่ไหนใน enclosing scope แล้วเช็คเฉพาะนี้จะไม่ใช้อีกต่อไป — กฎ "used before assigned" ทั่วไปจะติดตามแค่ flow*เชิงเส้น*ของ function body เดียวกัน ซึ่งไม่ตามเข้าไปใน nested function แบบที่เช็คเฉพาะของ 5.7 นี้ทำ `TS7027` ("unreachable code detected") ถามคำถามที่ต่างไปเลย — ไม่ใช่ "ตัวแปรนี้ถูก assign แน่นอนไหม" แต่ "control flow มาถึง statement นี้ได้เลยไหม" — และควรค่าแก่ความแม่นยำว่ามันทำงานจริงตอนไหน:
+
+```ts
+function f(): number {
+  return 1;
+  console.log("dead"); // dead code, but this compiles with zero errors under this course's default flags
+}
+```
+
+อันนี้ compile สะอาดภายใต้ `strict` เฉย ๆ (verify แล้ว) — `allowUnreachableCode` default ไม่เป็นทั้ง `true` และ `false` และใน default state นั้น checker ยังติดตาม reachability ข้างในอยู่ (editor ทำให้บรรทัดนี้จาง) แต่ไม่เปลี่ยนมันเป็น hard error มีแค่การตั้ง flag ชัดเจนเป็น `false` เท่านั้นที่เปลี่ยนการวิเคราะห์เดียวกันให้เป็น diagnostic จริง:
+
+```text
+$ tsc --ignoreConfig --noEmit --strict --allowUnreachableCode false --target es2025 unreachable.ts
+unreachable.ts(3,3): error TS7027: Unreachable code detected.
+```
+
+ทั้ง `TS2454` และ `TS7027` ขับเคลื่อนด้วย CFA และทั้งคู่เกี่ยวกับ*reachability*ในความหมายกว้าง (ของ value หรือของ statement) แต่มันทำงานบนเงื่อนไขเชิงโครงสร้างที่ต่างกัน และมีแค่อันเดียวที่เปิดโดย default ภายใต้ `strict` — `TS2454` ไม่ต้องการอะไรเพิ่ม ในขณะที่ `TS7027` ต้องการ `allowUnreachableCode: false` ตั้งชัดเจนก่อนที่มันจะกลายเป็น error เลย
+
+## Assertion function: narrowing ที่ต่อเนื่องหลัง call ไม่ใช่แค่ข้างใน branch
+
+Type predicate (`x is T`) narrow แค่ข้างใน branch ที่มันคุ้มกัน **Assertion function** (`asserts x is T`) narrow ทุกบรรทัด*หลัง*ที่ call return แบบปกติ โดยไม่ต้องมี `if` เลย — เพราะประเด็นทั้งหมดของการเรียกมันคือฟังก์ชัน throw แทนที่จะ return เมื่อ assertion ล้มเหลว:
+
+```ts
+function assertIsString(x: unknown): asserts x is string {
+  if (typeof x !== "string") throw new Error("not a string");
+}
+
+function demo(x: unknown) {
+  assertIsString(x);
+  x.toUpperCase(); // narrowed for the rest of the function -- no `if` wraps this
+}
+```
+
+อันนี้ compile สะอาด (verify แล้ว) — CFA graph ปฏิบัติกับการเรียก `asserts` function เป็น narrowing node ที่ใช้กับทุก path*หลัง*มันแบบไม่มีเงื่อนไข ด้วยเหตุผลว่าทางเดียวที่ execution จะดำเนินต่อหลัง call นั้นคือถ้า assertion เป็นจริง มันยังเชื่อใจเท่ากับ type predicate ธรรมดาเป๊ะ: checker เชื่อ*signature*โดยไม่มีการ verify ว่า body จริง ๆ throw ตามที่มันอ้าง — body ที่ return แทนที่จะ throw ตอน fail narrow ได้มั่นใจเท่ากันเป๊ะ และผิดเท่ากันเป๊ะ
+
+## Mental Model
+
+<Mermaid title="Three different boundaries, three different trust rules" code={cfaMentalDiagram} />
+
+export const cfaMentalDiagram = `flowchart TD
+  n["A narrowing fact exists here"] --> same{"Read later in the SAME graph?\n(if/else, switch, after an await)"}
+  same -->|yes| trusted["Narrowing holds -- still the same linear flow"]
+  n --> closure{"Read inside a NESTED function (closure)?"}
+  closure -->|property access| lost["Lost -- could run at any later time, conservative"]
+  closure -->|captured const, or never-reassigned local| kept["Kept -- no later write could invalidate it"]
+  n --> awaited{"Read after an await IN THE SAME function?"}
+  awaited -->|yes| optimistic["Kept -- optimistically, even though other code genuinely ran in between"]`;
+
+ทุกกฎในบทนี้คือคำถามเดียวกันที่อยู่ข้างใต้ ตอบด้วยว่า checker เห็นได้มากแค่ไหนจริง ๆ: claim ที่ถูกติดตามผ่าน flow เชิงเส้นตรงของ function body เดียว (`if`/`else`, `switch`, ผ่าน `await` ที่กลับมาต่อ function เดียวกัน) ถูกเชื่อ เพราะ CFA เห็นทุก edge claim ที่กำลังจะข้ามไปยังโค้ดชิ้นที่แยกออกไปจริง ๆ ที่รันทีหลัง — closure ที่อาจรันตอนไหนก็ได้ — ไม่ถูกเชื่อสำหรับ*การอ่าน property* เพราะไม่มีอะไรใน graph บอก checker ว่าโค้ดนั้นรันเมื่อไหร่หรือรันไหมเทียบกับ mutation อื่น; claim เดียวกันเกี่ยวกับ `const` local*ถูก*เชื่อ เพราะไม่มี mutation เหลือให้แข่งด้วย `await` คือความไม่สมมาตรเดียวที่ควรจำเพราะมันดูเหมือนควรทำตัวแบบ closure boundary แต่ไม่ทำ: มันยังอยู่ใน graph เดียวกัน ดังนั้น narrowing เก่ารอดผ่านมัน — ด้วยการมองโลกในแง่ดี ไม่ใช่เพราะมันปลอดภัยจริง
+
+## ข้อแลกเปลี่ยน
+
+| กฎ | ข้อดี | ต้นทุน |
+|---|---|---|
+| Property narrowing หายข้าม closure | ระมัดระวังและ sound — ไม่เคยเชื่อ fact ที่ mutation ทีหลัง รันตอนไม่รู้เวลา อาจทำให้ไม่จริงได้ | ต้องการวิธีแก้ "capture เข้า local `const` ก่อน" ซึ่งลืมง่ายและไม่มี error เตือนให้ทำ |
+| Narrowing รอดข้าม `await` | ไม่ต้องมีพิธีเพิ่มเพื่อใช้ value ที่เช็คไปแล้วต่อ ในกรณีทั่วไปที่ไม่มีอะไร mutate มันจริง | unsound จริง ๆ — call ที่ await ได้ mutate shared state ระหว่างพักได้ และ checker ไม่มีทางรู้หรือเตือนคุณ |
+| Aliased condition (4.4) | ให้ boolean local อ่านเหมือนเช็คที่มีชื่อ ใช้ซ้ำได้ แทนที่จะพูด condition ซ้ำ | `let` alias หรือ chain ที่ลึกกว่าห้า `const` หยุด narrow แบบเงียบ ๆ โดยไม่มี error อธิบายว่าทำไม |
+| Inferred type predicate (5.5) | type guard ง่าย ๆ ส่วนใหญ่ไม่ต้องการ annotation `is` เลยอีกต่อไป | ทำงานแค่ตอนที่เป็นเช็ค narrowing ตรง ๆ ของฟังก์ชันเอง ไม่ถูก reassign body เดียว — wrapper หรือ delegate ต้องการ annotation เขียนด้วยมือเหมือนเดิม |
+| Assertion function | narrow ทุกบรรทัดถัดไปโดยไม่ต้องซ้อน `if` ตรงกับ control flow จริง (throw เทียบ continue) | ไม่ถูก verify เหมือน type predicate เป๊ะ — body ที่ return เงียบ ๆ แทนที่จะ throw narrow ได้มั่นใจเท่ากันและผิดเท่ากัน |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **Narrowing หายทั้งข้าม closure และ `await` ด้วยเหตุผลเดียวกัน** พวกมันเป็นผลลัพธ์ตรงข้ามกันด้วยเหตุผล: closure คือโค้ดชิ้นที่แยกจริง ๆ ที่รันทีหลังที่ checker ถูกต้องแล้วที่ไม่เชื่อ; `await` กลับมาต่อ function*เดียวกัน*และ checker (แบบ unsound) ยังเชื่อมันอยู่ดี แม้โค้ดจริงจะรันไปแล้วระหว่างที่พัก
+- **Aliased-condition narrowing (4.4) ทำงานผ่านตัวแปร local ไหนก็ได้ที่ถือ boolean** มีแค่ `const` เท่านั้น — `let` ที่ถือ condition เดียวกันเป๊ะไม่ narrow และแม้แต่ `const` chain ก็หยุดทำงานเกินห้าระดับของการ alias (verify แล้ว: ห้าระดับ compile สะอาด หกระดับให้ `TS2339` จริง)
+- **TypeScript 5.5 infer type predicate ให้ฟังก์ชันไหนก็ได้ที่ "ทำตัวเหมือน" type guard** มันทำงานแค่ตอนที่ body ของฟังก์ชันเองทำ narrowing check ตรง ๆ บน parameter ของตัวเองที่ไม่ถูก reassign — การ delegate ให้ helper หรือการ reassign parameter แม้แต่แบบ no-op ก็ตัดสิทธิ์ทั้งคู่ (verify แล้ว: ทั้งคู่ทิ้ง parameter ไว้เป็น `unknown`, `TS18046` จริง)
+- **narrowing ของ assertion function ถูก verify กับ implementation ของมัน** มันถูกเชื่อจาก signature ล้วน ๆ เหมือน type predicate ธรรมดาเป๊ะ — ฟังก์ชันที่ประกาศ `asserts x is string` ที่แค่ return โดยไม่เช็คอะไรเลย narrow ได้มั่นใจเท่ากับตัวที่ throw จริง ๆ
+
+## อ่านโค้ดที่ AI เขียน
+
+บั๊กเรื่อง control-flow ในโค้ด generate เกือบทุกครั้งเป็น narrowing fact ที่ถูกเชื่อที่ที่ CFA graph ไม่สามารถรับประกันได้เชิงโครงสร้าง:
+
+- property (ไม่ใช่ local ที่ capture ไว้) ที่ถูกอ่านข้างใน callback, event handler หรือ `setTimeout` ที่ประกาศข้างใน narrowing branch: เช็คว่ามันเป็น `const` ที่ capture จริง ที่เก็บ narrowing ไว้ หรือเป็น property ที่ยังมีชีวิตถูกอ่านซ้ำผ่าน object ที่ไม่เก็บ
+- shared object หรือ module-level value ที่ narrow แล้วถูกใช้ทันทีหลัง `await` โดยไม่เช็คซ้ำ: อันนี้ compile สะอาดไม่ว่าจะเป็นไหน เพราะ checker เชื่อมันไม่ว่ายังไง — คำถามคือมีอะไรที่ call ที่ await แตะแล้วอาจ mutate มันได้ไหม
+- helper "type guard" ที่ delegate ให้ฟังก์ชันอื่น หรือ reassign parameter ของตัวเองก่อนเช็ค: inferred predicate ของ TypeScript 5.5 จะไม่ทำงานสำหรับทั้งสอง shape ดังนั้นถ้า caller พึ่ง narrowing โดยไม่มี annotation `is` ชัดเจนบน helper ให้เช็คว่า inference ทำงานจริงหรือ parameter ยังเป็น type กว้างเดิมแบบเงียบ ๆ
+
+<SpotTheBug code={`interface Task { id: string; assignee?: string }
+
+function hasAssignee(task: Task) {
+  const check = () => typeof task.assignee === "string";
+  return check();
+}
+
+function notify(task: Task) {
+  if (hasAssignee(task)) {
+    console.log(task.assignee!.toUpperCase());
+  }
+}`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error เลย และ `!` กำลังทำงานจริง แบบเงียบ ๆ: ถ้าไม่มี `!` `task.assignee.toUpperCase()` จะเป็น `TS18048` จริง ("possibly undefined") เพราะ `task.assignee` ข้างใน branch ของ `notify` ยัง type เป็น `string | undefined` อยู่ — เช็ค `if (hasAssignee(task))` ไม่ได้ narrow มันจริง ๆ เลย body ของ `hasAssignee` เองไม่ได้ทำ narrowing check ตรง ๆ บน parameter ของตัวเอง — มัน delegate ให้ closure ที่ซ้อนอยู่ `check` แล้ว return ผลลัพธ์ของ `check()` กฎ inferred-predicate ของ TypeScript 5.5 ดูแค่ body ตรง ๆ ของฟังก์ชันเองสำหรับ narrowing expression บน parameter ของตัวเอง การ delegate เช็คจริงให้ฟังก์ชันอื่น (แม้แต่ closure ที่ประกาศบรรทัดเดียวข้างบน) คือ shape "ทางอ้อม" เป๊ะที่ section inferred-predicate ของบทนี้โชว์ว่าไม่เข้าเกณฑ์ ดังนั้น `hasAssignee` ยังเป็นฟังก์ชันที่ return `boolean` ธรรมดา และ `notify` ไม่เคย narrow `task.assignee` จริง ๆ เลย ใครสักคน (หรืออะไรสักอย่าง) เห็น compiler ยัง complain อยู่หลังจากเพิ่ม `if` แล้ว "แก้" ด้วย `!` แทนที่จะถามว่าทำไม guard ไม่ทำงาน เปลี่ยนบั๊กที่ checker จับได้จริงให้กลายเป็นบั๊กที่เงียบ ที่ throw ตอน runtime เมื่อ `task.assignee` ขาดหายไปจริง ๆ ทางแก้จริงคือ inline เช็คตรง ๆ ใน return statement ของ `hasAssignee` เอง หรือเขียน predicate `task is Task & { assignee: string }` ด้วยมือ
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+Narrowing คือ fact ที่ถูกติดตามผ่าน control-flow graph และทุกกฎในบทนี้เป็นเรื่องว่า graph นั้นให้ fact เดินทางได้ไกลแค่ไหนก่อนที่อะไรบางอย่างจะทำให้มันไม่จริงได้: มันรอด flow เชิงเส้นตรงของ function เดียว (รวมถึงผ่าน `await` แบบมองโลกในแง่ดีและ unsound) แต่หายไปตอนข้ามเข้า closure ที่แยกจริง ๆ เว้นแต่ถูก capture ใน local ที่ไม่ถูก reassign; aliased-condition narrowing (4.4) เชื่อแค่ `const` ถึงห้าระดับของการ chain; และ inferred type predicate (5.5) ทำงานแค่ตอนที่เป็นเช็ค narrowing ตรง ๆ ของฟังก์ชันเองที่ไม่ถูก reassign ไม่เคยเป็นแบบ delegate
+</Callout>
+
+export const quizCFA = [
+  {
+    q: 'ทำไม narrowing ถึงรอดตอนอ่านหลัง `await` แต่หายตอนอ่านข้างใน nested closure?',
+    options: [
+      'พฤติกรรมเหมือนกัน -- ทั้งคู่หาย narrowing',
+      '`await` ไม่สร้าง function scope ใหม่ -- control flow กลับมาต่อใน graph เดียวกัน ดังนั้น narrowing เก่าถูกเชื่อไว้ (ด้วยการมองโลกในแง่ดี unsound); closure คือโค้ดชิ้นที่แยกจริง ๆ ที่รันทีหลังที่ checker วางตำแหน่งเทียบกับ mutation อื่นไม่ได้ ดังนั้นมันถูกทิ้งแบบระมัดระวัง',
+      '`await` verify narrowing condition ใหม่อัตโนมัติเสมอ',
+      'Closure ไม่เคยหาย narrowing สำหรับ local const เลย หายแค่ let',
+    ],
+    answer: 1,
+    explain: 'นี่คือความไม่สมมาตรจริงที่มีเอกสารรองรับ: await เก็บ value ที่เชื่อไว้ข้ามการพักที่โค้ดอะไรก็ได้อาจ mutate มันได้ (unsound) ในขณะที่ closure boundary ถูกปฏิบัติแบบระมัดระวังเพราะ checker ไม่มีทางรู้ว่ามันจะรันเมื่อไหร่',
+  },
+  {
+    q: '```ts\nfunction area(shape: Shape) {\n  let isCircle = shape.kind === "circle";\n  if (isCircle) {\n    return shape.radius; // does this narrow?\n  }\n}\n```\naliased-condition narrowing จาก TypeScript 4.4 ใช้ตรงนี้ได้ไหม?',
+    options: [
+      'ได้ -- local ไหนก็ได้ที่ถือ boolean condition narrow แบบเดียวกัน',
+      'ไม่ได้ -- aliased-condition narrowing เชื่อแค่ `const`; `let` ที่ถือ condition เดียวกันเป๊ะไม่ narrow ด้วยเหตุผล reassignability เดียวกับที่ mutable property หาย narrowing ข้าม closure',
+      'ได้ แต่แค่ใน non-strict mode',
+      'ไม่ได้ aliased condition ถูกเอาออกใน TypeScript 5.0',
+    ],
+    answer: 1,
+    explain: 'Verify บน 7.0.2 แล้ว: การเปลี่ยน `const isCircle` เป็น `let isCircle` ในฟังก์ชันที่เหมือนกันทุกอย่างให้ TS2339 จริง -- มีแค่ const alias เท่านั้นที่พก narrowing',
+  },
+  {
+    q: 'Aliased-condition narrowing ผ่าน chain ของ `const` ที่แต่ละตัว copy ตัวก่อนหน้า (`const b = a; const c = b; ...`) ทำงานได้ลึกกี่ระดับ verify กับ TypeScript 7.0.2 แล้ว?',
+    options: [
+      'ไม่จำกัด -- ไม่มีขีดจำกัดความลึก',
+      'ห้า -- chain ห้าระดับ compile สะอาด และระดับที่หกให้ TS2339 จริง',
+      'สอง',
+      'ขึ้นกับขนาดของ union ที่ถูก narrow',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้ว: chain ของ const alias ห้าอัน (a ถึง e) ยัง narrow ถูกต้อง; เพิ่มอีกหนึ่งระดับ (f) ทำให้พัง ให้ TS2339 จริงสองอันบนฟังก์ชันที่เหมือนกันเป๊ะ',
+  },
+  {
+    q: '```ts\nfunction helper(x: unknown): boolean {\n  return typeof x === "string";\n}\nfunction isStringIndirect(x: unknown) {\n  return helper(x);\n}\n```\nTypeScript 5.5 infer type predicate ให้ `isStringIndirect` ไหม?',
+    options: [
+      'ได้ -- ฟังก์ชันที่ return boolean ที่สุดท้าย narrow ได้นับหมด',
+      'ไม่ได้ -- inferred predicate ทำงานแค่ตอนที่ body ของฟังก์ชัน*เอง*ทำ narrowing check ตรง ๆ บน parameter ของตัวเอง; การ delegate ให้ฟังก์ชันอื่นไม่เข้าเกณฑ์ verify ได้จาก parameter ที่ยังเป็น `unknown` (TS18046 จริง) ที่ call site',
+      'ได้ แต่แค่ถ้า `helper` ก็ถูก export ด้วย',
+      'ไม่ได้ เพราะ `helper` มี return annotation `: boolean` ชัดเจน',
+    ],
+    answer: 1,
+    explain: 'Inference คือเงื่อนไขระดับ syntax แคบ ๆ บน body ของฟังก์ชันเอง ไม่ใช่การวิเคราะห์ทั่วไปว่า "นี่ทำตัวเหมือน guard ไหม" -- wrapper ที่ delegate ต้องการ annotation `x is T` เขียนด้วยมือเหมือนที่มันต้องการก่อน TypeScript 5.5',
+  },
+  {
+    q: 'ภายใต้ `strict` เฉย ๆ ไม่มี flag อื่น `function f(): number { return 1; console.log("dead"); }` ให้ error ไหม?',
+    options: [
+      'ให้ -- TS7027 ทำงานอัตโนมัติเมื่อไหร่ก็ตามที่โค้ด unreachable',
+      'ไม่ให้ -- compile ผ่านโดยไม่มี error เลย (verify แล้ว) `allowUnreachableCode` default ไม่เป็นทั้ง true และ false และใน default state นั้นโค้ด unreachable ไม่ใช่ hard error มีแค่การตั้ง `allowUnreachableCode: false` ชัดเจนเท่านั้นที่เปลี่ยนการวิเคราะห์เดียวกันให้เป็น TS7027 จริง',
+      'ไม่ให้ แต่แค่เพราะฟังก์ชันไม่เคยถูกเรียก',
+      'ให้ แต่เป็น TS2454 ไม่ใช่ TS7027',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้ว: ไฟล์เดียวกันเป๊ะ compile สะอาดภายใต้ --strict และให้ TS7027 จริงแค่ตอนที่เพิ่ม --allowUnreachableCode false ชัดเจนเท่านั้น -- ต่างจาก TS2454 (used before being assigned) ที่ไม่ต้องการ flag เพิ่มนอกจาก strict เลย',
+  },
+  {
+    q: 'TypeScript verify ไหมว่าฟังก์ชัน `asserts x is T` throw จริงตอน assertion ล้มเหลว?',
+    options: [
+      'verify -- compiler วิเคราะห์ function body เพื่อยืนยันว่ามัน throw ตอน case false',
+      'ไม่ verify -- เหมือน type predicate ธรรมดาเป๊ะ signature ถูกเชื่อจากความไว้ใจล้วน ๆ ฟังก์ชันที่ประกาศ `asserts x is string` ที่แค่ return โดยไม่เช็คอะไรเลย narrow ทุกบรรทัดหลังมันได้มั่นใจเท่ากับตัวที่ throw จริง ๆ',
+      'verify แค่ภายใต้ `strict` เท่านั้น',
+      'verify แค่ถ้าฟังก์ชันไม่มี statement อื่นนอกจาก throw',
+    ],
+    answer: 1,
+    explain: 'Assertion function ขยาย model เดียวกับที่ type predicate ใช้ คือเชื่อ signature -- CFA graph ปฏิบัติกับการเรียกมันเป็น narrowing node แบบไม่มีเงื่อนไขสำหรับทุก path หลังมัน โดยอิงจาก signature `asserts` ที่ประกาศไว้ล้วน ๆ ไม่เคยดู implementation เลย',
+  },
+];
+
+<Quiz client:visible id="checker-internals/control-flow-analysis" questions={quizCFA} />
+
+<ProgressTracker client:visible id="checker-internals/control-flow-analysis" />

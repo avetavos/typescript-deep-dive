@@ -1,5 +1,14 @@
 # typescript-deep-dive
 
+## Modules
+
+`src/content/docs/{en,th}/`: `foundations`, `everyday-types`, `generics`,
+`type-level-programming`, `classes-and-oop`, `compiler-and-tooling`,
+`practical-mastery`, `checker-internals` ("How the Checker Thinks" —
+assignability, inference, control-flow analysis, erasure & emit, performance
+model), `reading-typescript` ("Reading & Reviewing TypeScript" — AI bug
+catalog, review checklist, verification tools, worked reviews), `glossary`.
+
 ## `<TSPlayground>`
 
 Renders a `code` prop with Expressive Code, followed by a toolbar: **Check

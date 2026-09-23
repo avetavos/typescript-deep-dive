@@ -1,0 +1,273 @@
+---
+title: 'Erasure & Emit'
+description: 'The complete erasable-vs-not list with real TS1294 codes per construct, what .d.ts emit needs (isolatedDeclarations and its TS90xx codes), and a real emit table across tsc, tsx, esbuild, node --experimental-strip-types, and transpileModule.'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Emit is the fourth stage — and most of TypeScript's syntax skips it entirely
+
+The [index](/typescript/en/checker-internals/) lesson's pipeline — parse, bind, check, emit — ends with emit turning a checked AST into JavaScript (and, if asked, `.d.ts`). The overwhelming majority of what makes TypeScript *TypeScript* — every type annotation, interface, generic, `as` cast — contributes nothing to that output at all: it's deleted, in full, the moment checking finishes. This lesson is about the short, specific, enumerable list of syntax that is the exception — constructs that need the compiler to **generate different code**, not merely delete an annotation — and about what still needs to happen even after every type is gone (`.d.ts` emit).
+
+## The complete erasable-vs-not list, with the real code per item
+
+`--erasableSyntaxOnly` (5.8) exists to make this list mechanically checkable rather than a matter of memory: it rejects exactly the constructs that need a transform, and nothing else. Every diagnostic below is the real, verified `TS1294` from compiling the smallest file that triggers it on 7.0.2 — one item per row, so a mixed file can be diagnosed construct by construct:
+
+| Construct | Erasable? | Verified result under `--erasableSyntaxOnly` |
+|---|---|---|
+| `enum Color { Red, Green }` | **No** | `TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.` |
+| `const enum Color { Red, Green }` | **No** | Same `TS1294` — `const` changes the emit *strategy* (see below), not whether the syntax needs one |
+| `namespace Ns { export const x = 1; }` (has runtime values) | **No** | Same `TS1294` |
+| `namespace Ns { export interface Foo { x: number } }` (type-only) | **Yes** | Compiles clean — a namespace containing only types has nothing to emit |
+| `constructor(public x: number, public y: number) {}` (parameter properties) | **No** | Two separate `TS1294`s — one per modified parameter, since each one independently needs a `this.x = x` assignment generated |
+| `import fs = require("node:fs")` | **No** | `TS1294` |
+| `export = Widget` | **No** | `TS1294` (also `TS1203` if the module target is ESM-only — a separate, unrelated complaint about the target, not about erasability) |
+| Legacy decorators (`experimentalDecorators`) | **Yes**, by this flag's own rule | No `TS1294` — the syntax (`@dec` on a class) is identical to stage-3 decorators; `erasableSyntaxOnly` is a purely syntactic check and cannot tell legacy and stage-3 apart from the `@` alone |
+| Stage-3 decorators (standard, no flag needed) | **Yes** | Compiles clean under `--erasableSyntaxOnly` |
+| JSX (`<div>hi</div>`) | Not part of this list at all | `--erasableSyntaxOnly` never flags JSX either way — it isn't TypeScript-specific syntax, so it's outside the scope of a flag whose entire purpose is catching *TypeScript's own* non-erasable constructs |
+
+Two results above are worth pausing on because they contradict a natural guess. First, a **type-only namespace compiles clean** — the rule isn't "namespaces are banned," it's "a namespace with nothing but types has nothing to generate," which is exactly consistent with everything else on this list. Second, **legacy decorators pass this specific check** even though the [Classes & Advanced OOP module's decorators lesson](/typescript/en/classes-and-oop/decorators/) already establishes that legacy decorators depend on `tsc`'s own emit and can't run under a type-stripping runtime — `erasableSyntaxOnly` and "can this actually run without a real compile step" are two different axes, and legacy decorators land on opposite sides of each: syntactically erasable-looking, but semantically dependent on a transform the flag doesn't check for.
+
+```ts
+// @skip-verify --erasableSyntaxOnly isn't part of this course's fixed verification flags,
+// and `import =`/`export =` need a CommonJS module target this file's flags don't set either --
+// this is illustrative source; the real command and output are quoted below, run on this machine
+enum Color { Red, Green }
+const enum ConstColor { Red, Green }
+namespace HasValues { export const x = 1; }
+namespace TypesOnly { export interface Foo { x: number } } // erasable -- no TS1294 for this line
+class Point { constructor(public x: number, public y: number) {} }
+import fs = require("node:fs");
+class Widget {}
+export = Widget;
+```
+
+```text
+$ tsc --ignoreConfig --noEmit --erasableSyntaxOnly --strict --target es2025 --module commonjs --skipLibCheck --types node erasable-demo.ts
+erasable-demo.ts(1,6): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(2,12): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(3,11): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(5,27): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(5,45): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(6,1): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(8,1): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+```
+
+Seven diagnostics, all `TS1294`, none on line 4 — one per non-erasable construct, and two for the parameter-property line (one per modified parameter, `x` and `y` independently).
+
+## `.d.ts` emit: `isolatedDeclarations` and its real `TS90xx` codes
+
+Ordinary `--declaration` emit can print a type it never had to fully re-derive, because the whole-program checker already resolved everything — including, as the [index](/typescript/en/checker-internals/) lesson's `TS4094` example showed, structurally inlining a type that has no exported name to reference. `--isolatedDeclarations` (5.5) is a narrower, stricter opt-in: it requires every **exported** value to carry an explicit type annotation, so a `.d.ts` can be generated **one file at a time**, in parallel, by a tool that never runs the full checker — exactly what a bundler plugin or a fast, non-`tsc` build step needs.
+
+```ts
+// @skip-verify --isolatedDeclarations, like --erasableSyntaxOnly above, isn't part of this
+// course's fixed verification flags -- illustrative source; real output quoted below
+export function add(a: number, b: number) {
+  return a + b;
+}
+```
+
+```text
+$ tsc --ignoreConfig --isolatedDeclarations --declaration --emitDeclarationOnly --strict --target es2025 --skipLibCheck add.ts
+add.ts(2,10): error TS9013: Expression type can't be inferred with --isolatedDeclarations.
+```
+
+The return type is entirely inferable in an ordinary build, but a single-file tool has no way to look at `a + b` and know the answer without re-implementing a chunk of the checker, so the flag simply requires the annotation up front: `export function add(a: number, b: number): number`. A second, differently-shaped `TS90xx` fires for a different single-file blind spot:
+
+```ts
+// @skip-verify --isolatedDeclarations again -- illustrative source; real output quoted below
+const pair = { x: 1, y: 2 };
+export const { x, y } = pair;
+```
+
+```text
+$ tsc --ignoreConfig --isolatedDeclarations --declaration --emitDeclarationOnly --strict --target es2025 --skipLibCheck destructure.ts
+destructure.ts(2,16): error TS9019: Binding elements can't be exported directly with --isolatedDeclarations.
+destructure.ts(2,19): error TS9019: Binding elements can't be exported directly with --isolatedDeclarations.
+```
+
+A destructured export requires resolving `pair`'s shape to know what `x` and `y` even are (one `TS9019` per destructured name), which is exactly the kind of cross-expression inference a single-file tool can't do. Both diagnostics share one underlying rule: `isolatedDeclarations` is only satisfied when a `.d.ts` generator could produce the *exact same* declaration output looking at one export at a time, with zero type inference — which is a strictly narrower bar than plain `--declaration`, and precisely why real generated code sometimes fails it even when the equivalent whole-program build succeeds.
+
+## `const enum`: erasure that only works with whole-program knowledge
+
+A `const enum` is TypeScript's most instructive erasure case, because whether it actually gets erased depends entirely on *how much of the program the tool doing the emitting can see* — not on anything about the enum declaration itself:
+
+```text
+// Same const enum, three different emitting contexts, three different outcomes (verified):
+
+// 1. tsc, whole program, this enum used in the SAME file it's declared in:
+const enum Color { Red, Green, Blue }
+export const c = Color.Green;
+//   emits: export const c = 1 /* Color.Green */;   -- fully inlined, the enum itself vanishes
+
+// 2. A single-file tool (ts.transpileModule -- the same engine that powers
+//    this course's TSPlayground) sees only this one file, with no idea what
+//    the rest of the program does with `Color`:
+//   emits: a full runtime object for Color, IDENTICAL to what a real (non-const) enum
+//   would emit -- transpileModule cannot inline what it cannot see used elsewhere
+
+// 3. An ambient const enum from ANOTHER package, imported under --isolatedModules:
+export declare const enum Color { Red, Green, Blue } // in a .d.ts from a dependency
+import { Color } from "some-package";
+export const c = Color.Green;
+//   real error: TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.
+```
+
+Case 1 is the ordinary, celebrated behavior: `const enum` promises "no runtime object, just inlined literals," and a real `tsc` build with full program knowledge keeps that promise. Case 2 is a genuine, verified surprise: `ts.transpileModule` — a single-file transform with no cross-file knowledge, the same kind of tool `tsx`, most bundlers, and this course's own in-browser playground use — cannot inline a value it has no way to resolve in isolation, so it silently falls back to emitting the exact same runtime object a plain `enum` would produce. Case 3 is the one TypeScript actively refuses rather than silently degrading: an *ambient* `const enum` (`declare const enum`, the shape a `.d.ts` from an external package uses) crossing an `isolatedModules` boundary is refused outright with `TS2748`, because `isolatedModules` promises every file can be compiled without looking at any other file, and inlining a value declared *only* in another package's `.d.ts` — with no local implementation to fall back to the way case 2 had — is exactly the cross-file knowledge that promise rules out. `preserveConstEnums` sits between these: it keeps `const enum`'s compile-time inlining behavior for values used within the checked program, while *also* emitting the backing runtime object (rather than erasing it, as case 1 does by default) — useful specifically when some other, less whole-program-aware tool downstream needs the object to exist even though `tsc` itself no longer needs it.
+
+This is precisely the shape of bug the [`ai-bug-catalog`](/typescript/en/reading-typescript/) lesson's "`const enum` across a package boundary" entry describes from the reviewing-code angle; the mechanism reason it happens is this lesson's case 3 exactly.
+
+Case 2 is provable live, right here, and along the way it demonstrates something else worth knowing about this course's two buttons: **Check types** and **Run** use two different engines that don't have to agree. A raw numeric reverse-mapping lookup on a `const enum` (`Color[1]`, or `Color[Color.Green]`) is flagged by real semantic checking — `TS2476: A const enum member can only be accessed using a string literal` — precisely *because* the checker can't guarantee a reverse-mapping object survives inlining in the general case. **Run** doesn't type-check at all; it transpiles with `ts.transpileModule` (syntax-directed only) and executes whatever comes out. Click **Check types** below and you'll see the real `TS2476`. Click **Run** anyway, and it executes fine — proof, empirically, that in this single-file context the object genuinely exists to look up:
+
+<TSPlayground code={constEnumRunCode} id="checker-erasure-const-enum-run" title="Check types rejects this; Run executes it anyway — proving the object exists" />
+
+export const constEnumRunCode = `// @expect-error TS2476
+const enum Color { Red, Green, Blue }
+console.log(Color.Green);        // 1 -- looks inlined so far...
+console.log(Color[Color.Green]); // Check types: real TS2476. Run it anyway -- it works.
+// Run output:
+// 1
+// Green`;
+
+## The emit table: what actually happens to each construct, tool by tool
+
+The [Compiler & Tooling module](/typescript/en/compiler-and-tooling/build-and-emit/) covers this same territory from the *tooling* angle — which tool to reach for and why. This is the *checker's* angle: for each non-erasable construct, does a given emitting path even attempt the transform, and does the result run? Every cell below is a real, verified result on this machine — not a claim from documentation.
+
+| Construct | `tsc` (real emit) | `tsx` (runs it) | `esbuild --loader=ts` | `node --experimental-strip-types` |
+|---|---|---|---|---|
+| `enum Color { Red, Green }` | Full runtime object, IIFE-wrapped | Runs, prints correct values | Full runtime object (near-identical shape to `tsc`'s) | **Rejected** — type-stripping only, no transform |
+| Parameter properties (`constructor(public x)`) | Emits the `this.x = x` assignment | Runs, `this.x` assignment present | Emits the field + assignment, same shape | **Rejected** |
+| `namespace Ns { export const x = 1 }` | Emits an IIFE wrapping `Ns` | Runs correctly | Emits an IIFE, same shape | **Rejected** |
+| `export = Widget` | Emits `module.exports = Widget` (CJS) | Runs correctly | Emits `module.exports = Widget` under `--format=cjs` | **Rejected** |
+| Legacy decorators (`experimentalDecorators`) | Emits `__decorate` helper + calls | Runs correctly | Emits its own `__decorateClass` helper + calls (same idea, different helper name) | Runs *the syntax*, but as a **stage-3** decorator call — a different runtime semantics than what `experimentalDecorators` promised, since stripping types does not run tsc's own decorator transform |
+| Stage-3 decorators (standard syntax) | Passes through with minimal transform | Runs correctly | Passes through | Runs correctly — this is real, engine-native ECMAScript syntax as of recent Node/V8, not something that needs erasing |
+
+The `node --experimental-strip-types` row is the one that matters most in practice: it is a **type-stripping** runtime, meaning it deletes annotations and nothing else — it has no transform step at all, so every construct in the left column above that needs one is a hard rejection, not a degraded or partial result. `tsx` and `esbuild` both do carry a real transform (they aren't just stripping), which is why they succeed on every row — the meaningful line isn't "does this tool understand TypeScript," it's "does this tool merely strip, or does it also transform," and only Node's built-in path is strip-only among the four.
+
+## One-line history: `importsNotUsedAsValues` → `verbatimModuleSyntax`
+
+TypeScript briefly had two separate, narrower flags for the same underlying problem — whether an import gets kept or erased — before consolidating them: `--importsNotUsedAsValues` and `--preserveValueImports` were deprecated in TypeScript 5.0's own words because understanding their combined edge cases was "hard, and there are still some edge cases with unexpected behavior," in favor of `--verbatimModuleSyntax`'s single, much simpler rule quoted directly from the same release: "any imports or exports without a `type` modifier are left around \[kept\]. Anything that uses the `type` modifier is dropped entirely." The [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/) lesson covers `verbatimModuleSyntax` itself in full; the reason it exists at all is this lesson's theme one more time — a rule about what gets erased is only trustworthy if it's simple enough to predict without running the compiler and reading the output.
+
+## Mental Model
+
+<Mermaid title="Erasability is a property of syntax; emit needs are a property of the tool doing the emitting" code={erasureMentalDiagram} />
+
+export const erasureMentalDiagram = `flowchart TD
+  syntax["A TypeScript construct"] --> ask{"Does the compiler need to GENERATE\ndifferent code, or just DELETE an annotation?"}
+  ask -->|generate| nonErasable["Non-erasable: enum, namespace-with-values,\nparameter properties, import =, export =\n(erasableSyntaxOnly: real TS1294)"]
+  ask -->|delete only| erasable["Erasable: types, interfaces, generics,\ntype-only namespaces, stage-3 decorators, JSX"]
+  nonErasable --> tool{"What tool is emitting it?"}
+  tool -->|tsc, full program| works["Transformed correctly, whole-program knowledge available"]
+  tool -->|tsx, esbuild -- single-file WITH a transform| worksToo["Transformed correctly -- these tools carry the emit logic themselves"]
+  tool -->|node --experimental-strip-types -- STRIP ONLY, no transform| rejected["Hard rejection -- there is no transform step to fall back on"]`;
+
+Two independent questions run through every fact in this lesson, and conflating them is the single most common mistake: "is this syntax erasable" is a property of the *construct itself*, checkable by `--erasableSyntaxOnly` with no knowledge of any particular runtime; "will this specific tool actually produce working output for it" depends entirely on whether that tool carries a real transform (`tsc`, `tsx`, `esbuild`) or merely deletes annotations (`node --experimental-strip-types`). A construct can be syntactically non-erasable and still run everywhere that has a transform, or syntactically "erasable-looking" (stage-3 decorators) yet only run correctly on a runtime new enough to understand it natively — erasability and runnability are related, but they are not the same axis.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Writing only erasable syntax (`--erasableSyntaxOnly`) | Guaranteed to run under Node's type-stripping, `tsx`, and every other strip-only path with zero transform step needed | Gives up `enum`'s reverse mapping, parameter-property shorthand, and legacy decorators — real ergonomic losses for real ergonomic gains |
+| `const enum` | Zero runtime cost when a whole-program build can see every use site | Silently degrades to a full runtime enum under a single-file tool (`transpileModule`), and is refused outright (`TS2748`) as an ambient import across an `isolatedModules` boundary — its "zero cost" promise is conditional, not universal |
+| `--isolatedDeclarations` | `.d.ts` files can be generated per-file, in parallel, by a tool that never runs the full checker | Real, verified friction (`TS9013`, `TS9019`) on code that would compile fine under plain `--declaration` — a strictly narrower bar |
+| `verbatimModuleSyntax` over the older `importsNotUsedAsValues`/`preserveValueImports` pair | One simple, predictable rule (`type` modifier present or not) instead of two flags' worth of edge cases | Requires actually annotating type-only imports with `type` — a real, if small, migration cost for existing code |
+
+## Common Misconceptions
+
+- **`--erasableSyntaxOnly` checks whether code will run on a given runtime.** It checks a narrower, purely syntactic question: does this construct need the compiler to *generate* something. Legacy decorators pass this check (same syntax as stage-3) yet still can't run under type-stripping, because they depend on `tsc`'s own emitted helper functions — a separate, semantic dependency `erasableSyntaxOnly` doesn't detect.
+- **`const enum` is always erased to a bare literal, with zero runtime footprint, no matter what compiles it.** Only true when the tool doing the emitting has whole-program knowledge. A single-file transform (`transpileModule`, and by extension anything built on the same kind of isolated transform) falls back to emitting a full runtime object instead — verified directly, not a theoretical edge case.
+- **`isolatedDeclarations` is just a stricter version of `--declaration` that catches the same things earlier.** It's a genuinely different bar: code that compiles cleanly under plain `--declaration` (because the whole-program checker can infer everything) can fail `isolatedDeclarations` (`TS9013`, `TS9019`) specifically because a single-file declaration generator couldn't have inferred the same thing alone.
+- **JSX must be one of the "erasable" or "non-erasable" TypeScript constructs, since it also gets transformed away.** `--erasableSyntaxOnly` never mentions it either way — JSX isn't TypeScript-specific syntax, so it sits entirely outside the scope of a flag whose only job is policing TypeScript's own non-standard constructs.
+
+## Reading AI-generated code
+
+Emit-related bugs in generated code tend to surface only once the code leaves the environment it was written and tested in:
+
+- Any generated `.ts` file meant to run directly under Node's type-stripping, or in `tsx`/Deno/Bun with a similar strip-only fast path, that uses `enum`, a parameter property, or `namespace` with real values: this is a real, hard rejection, not a warning — check for these constructs specifically before assuming "it's just TypeScript, it'll run somewhere."
+- A `const enum` exported from one package and imported by another under `isolatedModules`: this is exactly the shape that produces `TS2748` for an *ambient* declaration, or silently degrades to a full runtime object under a single-file build tool for a non-ambient one — neither failure mode is obvious from reading the enum declaration alone.
+- Generated code claiming `isolatedDeclarations`-compatibility (common in monorepo/library-scaffolding output) that actually has un-annotated exports or destructured exports: verify with the real flag rather than trusting the generator's claim, since the two real diagnostics in this lesson (`TS9013`, `TS9019`) are exactly the shapes that slip through when a generator was only checked against plain `--declaration`.
+
+<SpotTheBug code={`// utils.ts (a shared internal package)
+export const enum LogLevel { Debug, Info, Warn, Error }
+
+// app.ts (a consumer, built with isolatedModules for fast per-file bundling)
+import { LogLevel } from "./utils";
+
+export function shouldLog(level: LogLevel, threshold: LogLevel) {
+  return level >= threshold;
+}`}>
+Whether this compiles depends entirely on one detail this snippet doesn't show: whether `utils.ts`'s declaration is consumed as a real source file or as an *ambient* one (a `.d.ts` shipped from a package, using `declare const enum` instead of a plain `const enum`). If `app.ts` compiles `utils.ts` directly as part of the same program, this is fine — the const enum's values are inlined normally. But the moment `utils.ts` becomes a real, separately-published package (exactly what "a shared internal package" implies), consumers only ever see its `.d.ts`, where a `const enum` becomes `declare const enum` — and importing that under `--isolatedModules` (which per-file bundlers for fast builds routinely turn on) is a real, hard `TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.` The type-checks-today, breaks-once-actually-published-and-consumed-for-real nature of this bug is exactly why `const enum` across a genuine package boundary is flagged as a pattern to avoid outright, rather than something to configure around case by case — the fix is a plain `enum` (accepting the runtime object) or an `as const` object (accepting the loss of a numeric reverse mapping), not a `const enum` at all.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+`--erasableSyntaxOnly` names the short, exact list of TypeScript syntax that needs the compiler to generate real code rather than just delete an annotation (`enum`, `namespace` with values, parameter properties, `import =`, `export =` — legacy decorators pass this check syntactically but still need `tsc`'s own emit to run correctly, and JSX is outside the check's scope entirely); whether any of that non-erasable syntax actually *runs* is a separate question that depends on whether the tool doing the emitting carries a real transform (`tsc`, `tsx`, `esbuild`) or only strips annotations (`node --experimental-strip-types`); and `.d.ts` emit has its own narrower bar, `isolatedDeclarations`, that a whole-program `--declaration` build can satisfy invisibly but a single-file generator (`TS9013`, `TS9019`) cannot.
+</Callout>
+
+export const quizErasure = [
+  {
+    q: 'Under `--erasableSyntaxOnly`, does a namespace containing only type declarations (`namespace Ns { export interface Foo { x: number } }`) produce `TS1294`?',
+    options: [
+      'Yes -- all namespaces are rejected regardless of content',
+      'No -- it compiles clean, because a namespace with nothing but types has nothing for the compiler to generate; the rule is about needing to GENERATE code, not about the `namespace` keyword itself',
+      'Yes, but only in strict mode',
+      'No, but only if the namespace is marked `declare`',
+    ],
+    answer: 1,
+    explain: 'Verified directly: a namespace holding only an interface compiles clean under --erasableSyntaxOnly, while the identical namespace holding `export const x = 1` produces a real TS1294 -- the deciding factor is whether there is runtime code to emit, not the namespace syntax on its own.',
+  },
+  {
+    q: 'Do legacy decorators (`experimentalDecorators: true`) produce `TS1294` under `--erasableSyntaxOnly`?',
+    options: [
+      'Yes, exactly like enum and parameter properties',
+      'No -- the check is purely syntactic, and legacy-decorator syntax (`@dec` on a class) is identical to stage-3 decorator syntax, so the flag cannot and does not distinguish them; legacy decorators still cannot run under type-stripping, but for a different, semantic reason this flag does not check',
+      'Only if the decorated class is exported',
+      'No, because legacy decorators were removed in TypeScript 5.8',
+    ],
+    answer: 1,
+    explain: 'Verified: a class with a legacy `@dec` decorator and experimentalDecorators enabled produces no TS1294. erasableSyntaxOnly is a syntax-level check, and the actual incompatibility (legacy decorators depend on tsc\'s own emitted __decorate helper) is a separate, semantic fact this flag was never designed to catch.',
+  },
+  {
+    q: 'A `const enum` is compiled by `ts.transpileModule` (a single-file transform, the same kind of engine that powers browser-based TypeScript playgrounds) rather than a real whole-program `tsc` build. What happens?',
+    options: [
+      'It is rejected with an error, the same as under isolatedModules for an ambient const enum',
+      'It silently falls back to emitting a full runtime object -- IDENTICAL in shape to what a plain (non-const) enum would produce -- because a single-file tool has no way to see and inline every use site the way a whole-program build can',
+      'It is inlined exactly the same way a whole-program tsc build would inline it',
+      'It is left completely untouched in the output, including the TypeScript syntax',
+    ],
+    answer: 1,
+    explain: 'Verified directly with the real typescript package\'s transpileModule API: a const enum used within the same single file still gets a full runtime object emitted, not an inlined literal -- transpileModule cannot see enough of the program to erase it the way a real tsc build can.',
+  },
+  {
+    q: 'What does `TS9013` (`isolatedDeclarations`) actually flag, and why doesn\'t the same code error under plain `--declaration`?',
+    options: [
+      'A syntax error that both plain --declaration and --isolatedDeclarations reject equally',
+      'An exported value whose type cannot be inferred WITHOUT running a real type checker on the expression (e.g. `export function add(a: number, b: number) { return a + b; }`) -- plain --declaration succeeds because the whole-program checker already resolved the return type; isolatedDeclarations requires every export to be self-evidently typed so a single-file generator could produce the same output alone',
+      'Any function that has more than one parameter',
+      'Only ambient (declare) exports are affected',
+    ],
+    answer: 1,
+    explain: 'Verified directly: the exact function compiles fine under plain --declaration but produces a real TS9013 under --isolatedDeclarations, specifically because isolatedDeclarations requires per-file inferability with no cross-expression reasoning, a strictly narrower bar than a full checker run provides.',
+  },
+  {
+    q: 'Of the four emitting paths in this lesson\'s table (tsc, tsx, esbuild, node --experimental-strip-types), which one rejects every non-erasable construct (enum, parameter properties, namespace-with-values, export =) outright, and why?',
+    options: [
+      'tsc, because it is the strictest checker',
+      '`node --experimental-strip-types` -- it is a type-STRIPPING runtime with no transform step at all, so any construct that needs generated code (not just deleted annotations) has nothing to fall back on',
+      'esbuild, because it does not understand TypeScript decorators',
+      'tsx, because it only supports ES modules',
+    ],
+    answer: 1,
+    explain: 'tsc, tsx, and esbuild all carry a real transform and succeed on every construct in the verified table. node --experimental-strip-types only deletes type annotations -- it has no emit logic for constructs that need generated JavaScript, so every one of them is a hard, verified rejection.',
+  },
+];
+
+<Quiz client:visible id="checker-internals/erasure-and-emit" questions={quizErasure} />
+
+<ProgressTracker client:visible id="checker-internals/erasure-and-emit" />

@@ -1,0 +1,323 @@
+---
+title: 'Assignability'
+description: 'The structural assignability algorithm step by step — property-by-property comparison, why readonly is not checked, method bivariance vs property contravariance, any/unknown/never, fresh literal excess checks, comparability, and how recursive types compare.'
+sidebar:
+  order: 2
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## "Is `A` assignable to `B`?" is a real algorithm, not a vibe
+
+Every `TS2322`, every generic constraint check, every function-call argument check — all of it reduces to one question the checker asks over and over: is the *source* type assignable to the *target* type? This lesson is about what that check actually does, because "structural typing" as a slogan ("same shape, compatible") hides several rules that only show up when you watch a real comparison run.
+
+The core of the algorithm, for two object types, is: **for every required property the target declares, the source must have a compatible property of the same name.** Not "the same properties" — the *target's* properties, checked one at a time, source-has-it-and-it's-compatible:
+
+```ts
+interface Target { name: string; age: number }
+interface Source { name: string; age: number; email: string }
+
+declare const s: Source;
+const t: Target = s; // OK -- Source has every property Target requires, plus more
+```
+
+`Source` has an extra `email` field `Target` never asked for — irrelevant. The comparison walks `Target`'s property list, not `Source`'s. This one rule is also why a *wider* type (more possible values, like a plain `object`) is *not* generally assignable to a *narrower* one (fewer possible values, more specific properties): the extra properties the narrower type demands might not be there.
+
+## Reading a real assignability error: the chain names the first failure, then stops
+
+When a comparison involves nested objects, the checker doesn't dump every mismatch at once — it walks into the first incompatible property, then the first incompatible property *of that*, and so on, printing exactly the path it took:
+
+<TSPlayground code={nestedChainCode} id="checker-assignability-nested-chain" title="A 3-level nested mismatch, and how the checker reports it" />
+
+export const nestedChainCode = `// @expect-error TS2322
+interface Address { city: string; zip: number }
+interface Company { name: string; address: Address }
+interface Employee { id: string; company: Company }
+
+declare const e: Employee;
+const bad: { id: string; company: { name: string; address: { city: string; zip: string } } } = e;
+//    ^? error TS2322
+console.log(bad);`;
+
+Compiling that (verified on 7.0.2) prints:
+
+```text
+error TS2322: Type 'Employee' is not assignable to type '{ id: string; company: { name: string; address: { city: string; zip: string; }; }; }'.
+  The types of 'company.address.zip' are incompatible between these types.
+    Type 'number' is not assignable to type 'string'.
+```
+
+Three lines, three levels, one real incompatibility. The top line names the two whole types involved — that's context, not the bug. Each nested line narrows the path by one property (`company`, then `address`, then `zip`) until it reaches a pair of types that are *actually* incompatible (`number` vs `string`), and stops there — it does not keep walking into every other property that happens to differ, and it does not report more than the one path that broke the comparison. Reading any assignability chain the same way — skip to the innermost line for the real cause, read the outer lines as "here's the property path that led there" — turns a wall of nested types into one concrete fact.
+
+## `readonly` is not part of assignability — at all
+
+This surprises almost everyone the first time they see it: a `readonly` modifier affects whether *you* can write to a property, but it plays **no role** in whether one type is assignable to another, in either direction:
+
+```ts
+interface Mutable { x: number }
+interface ReadonlyPoint { readonly x: number }
+
+declare const m: Mutable;
+declare const r: ReadonlyPoint;
+
+const a: ReadonlyPoint = m; // mutable -> readonly: fine
+const b: Mutable = r;       // readonly -> mutable: ALSO fine
+console.log(a, b);
+```
+
+Both directions compile with zero errors (verified). The checker only compares the *value type* of each property — `x: number` matches `x: number` regardless of which side spells it `readonly`. This is a real, sharp footgun: `b.x = 99` now compiles, silently mutating through a reference that was supposed to be protected, because the type system's `readonly` is a compile-time-only annotation on the *binding*, not a fact baked into the object's structural identity the way a property's name or value type is.
+
+## Methods are bivariant; property functions are not
+
+A function-*shaped* member behaves differently depending on whether it's declared as a method (`handle(a: Animal): void`) or as a property holding a function value (`handle: (a: Animal) => void`) — and the difference is not cosmetic:
+
+```ts
+// @expect-error TS2322
+interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+interface WithProperty { handle: (a: Animal) => void } // property function -- checked contravariantly
+
+const dogOnly = (a: Dog) => { a.bark(); };
+const p: WithProperty = { handle: dogOnly };
+```
+
+`dogOnly` only knows how to handle a `Dog` (it calls `.bark()`, which only `Dog` has), but `WithProperty.handle` promises to accept *any* `Animal`. Assigning it is genuinely unsound — if something calls `p.handle(someCat)`, `dogOnly` calls `.bark()` on a `Cat` and crashes — and `strictFunctionTypes` correctly rejects it with real `TS2322`.
+
+Now the identical unsoundness, through a **method** signature instead of a property:
+
+```ts
+interface Animal { name: string }
+interface Dog extends Animal { bark(): void }
+
+interface WithMethod { handle(a: Animal): void } // method shorthand -- checked bivariantly
+
+const dogOnly = (a: Dog) => { a.bark(); };
+const m: WithMethod = { handle: dogOnly }; // compiles -- zero errors
+```
+
+This compiles clean (verified) — the exact same unsound assignment `strictFunctionTypes` blocks for a property function is allowed for a method. This is **method bivariance**, and it's not an oversight: it exists because it makes common generic container patterns (an array method like `.push`, a class method overridden in a subclass with a narrower parameter) usable without constant friction, at the cost of this one specific, documented hole. The practical rule for reading (or writing) code: a function type declared as a **method** (`name(args): ret`) gets the more permissive, occasionally-unsound check; the identical function type declared as a **property** (`name: (args) => ret`) gets the strict, sound one. Nothing else about the two forms differs.
+
+## `any`, `unknown`, and `never` each break the normal rule differently
+
+Three types get special-cased in the assignability relation, and each breaks it in its own specific direction:
+
+```ts
+// @expect-error TS2322
+declare const a: any;
+const s1: string = a;   // any -> string: OK (any is assignable TO anything)
+declare const s2: string;
+const a2: any = s2;     // string -> any: OK (anything is assignable TO any)
+
+declare const u: unknown;
+const s3: string = u;   // unknown -> string: error -- must narrow first
+declare const s4: string;
+const u2: unknown = s4; // string -> unknown: OK -- unknown accepts everything
+
+declare const n: never;
+const s5: string = n;   // never -> string: OK (never is assignable to everything)
+const bad: never = "x"; // string -> never: error -- nothing but never is assignable TO never
+```
+
+`any` is assignable **both ways** — into it and out of it — which is precisely what makes it dangerous: it disables the check in both directions at once, silently. `unknown` accepts anything **into** it, but nothing comes back out **without narrowing** — it's `any`'s safety-conscious sibling, all of the flexibility on input, none of the trust on output. `never` sits at the opposite pole from `any`: it's assignable *to* everything (there are no values to violate any target's requirements) but nothing is assignable *to* it (there's no value that could ever be a `never`). This is also why "subtype of" and "assignable to" aren't quite synonyms even though they coincide almost everywhere else: `never` is the bottom subtype of every type, and this bottom-of-everything behavior is what exhaustiveness checks (covered in the [Narrowing](/typescript/en/everyday-types/narrowing/) lesson) actually lean on.
+
+A `void`-returning function type has one more special case worth knowing: a function that returns something *other* than `void` is still assignable where a `() => void` is expected, because the caller is understood to simply discard the result:
+
+```ts
+type VoidFn = () => void;
+declare const takesVoidFn: (f: VoidFn) => void;
+takesVoidFn(() => 42); // OK -- the number is just ignored by whoever calls f()
+```
+
+And numeric enums keep one famously loose relationship with `number` in both directions — a plain `number` is assignable to an enum-typed variable, and an enum member is assignable to `number`, with no range check either way (this is the "weak range checking" the [Objects, Arrays & Tuples](/typescript/en/everyday-types/objects-arrays-tuples/) lesson's enum section flags as a real footgun, not a made-up one).
+
+## Fresh object literals get one extra check; everything else doesn't
+
+The excess-property check — the thing that makes `{ x: 1, y: 2, z: 3 }` an error when a function expects `{ x: number; y: number }` — is **not** part of ordinary structural assignability. It's a separate, narrower check that only runs on a **fresh** object literal: one written directly at the point where it's being checked, with no variable in between:
+
+```ts
+// @expect-error TS2353
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+
+takes({ x: 1, y: 2, z: 3 }); // fresh literal -- excess property check fires
+```
+
+```ts
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+
+const obj = { x: 1, y: 2, z: 3 };
+takes(obj); // NOT fresh -- ordinary structural assignability, extra props allowed
+```
+
+Both snippets compile the exact same `{ x, y, z }` shape into the exact same `Point`-shaped parameter — the only difference is whether the object literal is written inline (fresh) or stored in a variable first (not fresh, structural rules only). This is exactly why "just assign it to a variable first" is the standard, if slightly odd-looking, way to bypass a genuine excess-property mistake when you actually mean to pass extra fields through.
+
+## Comparability: `===` has its own, separate check
+
+`==`/`===` between two operands with **no overlap at all** is flagged as `TS2367` — not an assignability error, a different relation entirely called *comparability*, which is deliberately looser than assignability (types don't need to be assignable to each other to be comparable, only to share *some* possible value):
+
+```ts
+// @expect-error TS2367
+declare const x: "a" | "b";
+declare const y: "c" | "d";
+if (x === y) {}
+```
+
+Neither `"a" | "b"` nor `"c" | "d"` is assignable to the other, but that's not why this errors — plenty of non-assignable pairs (`string` vs `"a"`) compare just fine. It errors because the two *literal* unions share **zero** possible values, so the comparison can only ever be `false`, which is almost always a typo (comparing the wrong variable, or a value that was supposed to update but didn't) rather than a real check. `TS2367` exists as its own guard specifically because assignability alone wouldn't catch this: two unrelated-but-overlapping types compare fine, and two related-by-assignability types obviously compare fine — it's specifically the "provably disjoint" case that's almost certainly a bug.
+
+## Recursive types compare by structure, not by name
+
+A recursive type alias refers to itself, which raises an obvious question: how does the checker compare two *different* recursive type names without looping forever?
+
+```ts
+type A = { a: A };
+type B = { a: B };
+
+declare const av: A;
+const bv: B = av; // compiles -- zero errors
+```
+
+`A` and `B` are two distinct, separately-named recursive shapes, and TypeScript treats them as assignable to each other anyway (verified) — structural typing means names never mattered in the first place, so two recursive types with identical structure really are the same type as far as assignability is concerned. What stops the comparison from recursing forever is that the checker tracks in-progress comparisons: when it's asked "is `A` assignable to `B`" and that exact question is already being answered somewhere higher up the same call stack (because comparing `A.a` to `B.a` requires comparing `A` to `B` again), it doesn't recurse a second time — it provisionally assumes the answer is "yes, so far" for that in-flight pair and lets the outer comparison finish, only actually failing if some *other*, non-recursive part of the structure disagrees. This is what allows deeply (even infinitely) self-referential type shapes to compare in finite time at all, and it's also *why* a genuinely different recursive shape (say, `type C = { a: C; b: number }`) correctly fails to match `A`, once the non-recursive `b: number` part of the comparison is reached.
+
+## Mental Model
+
+<Mermaid title="Assignability walks the target's properties; three types opt out; two extra checks apply narrowly" code={assignMentalDiagram} />
+
+export const assignMentalDiagram = `flowchart TD
+  start["Is Source assignable to Target?"] --> walk["For every property Target requires,\ndoes Source have a compatible one?"]
+  walk --> ro["readonly on either side? Ignored -- not part of the comparison"]
+  walk --> fn{"Is this member a method or a property function?"}
+  fn -->|method shorthand| biv["Checked bivariantly (looser)"]
+  fn -->|property function| contra["Checked contravariantly under strictFunctionTypes (sound)"]
+  walk --> special{"Is Source or Target any, unknown, or never?"}
+  special -->|any| both["Assignable both ways -- the check is disabled"]
+  special -->|unknown| into["Assignable INTO it only"]
+  special -->|never| outof["Assignable OUT of it only"]
+  fresh["Is Source a FRESH object literal?"] -->|yes| excess["Extra check: no excess properties allowed"]
+  fresh -->|no, stored in a variable| walk`;
+
+Every rule in this lesson is a variation on one act: comparing two shapes property by property, driven by what the *target* requires. `readonly` never enters that comparison because it's not a property of the value's shape, it's a restriction on the binding. Method bivariance and property contravariance are the same comparison applied to a function-shaped member, with the method form deliberately loosened. `any`/`unknown`/`never` are three different ways of short-circuiting the walk entirely, each in a different direction. The excess-property check and comparability (`TS2367`) are the two places the checker runs an *additional*, narrower rule on top of ordinary assignability, precisely because plain structural comparison wouldn't catch what they're for (a literal typo, an always-false comparison).
+
+## Trade-offs
+
+| Rule | Benefit | Cost |
+|---|---|---|
+| Structural (property-by-property) assignability | Any two independently-defined types with the same shape just work together — no explicit "implements" ceremony | Two accidentally-identical types that were never meant to be interchangeable are, anyway |
+| `readonly` excluded from assignability | Keeps the assignability relation simple and purely shape-based | A `readonly` object can be silently handed to code that mutates it through a `Mutable`-typed alias, defeating the protection `readonly` looked like it offered |
+| Method bivariance | Common generic-container and override patterns type-check without extra ceremony | The exact unsoundness `strictFunctionTypes` was built to prevent still gets through, as long as it's spelled as a method instead of a property function |
+| Fresh-literal excess check | Catches the single most common typo (a misspelled or extra property) right at the call site | Only fires on a literal written inline — the identical mistake through a variable is silent, which surprises people who don't know the rule |
+| `TS2367` comparability | Flags a comparison that can only ever be `false` — almost always a real bug | Occasionally fires on a genuinely-defensive check the author knows is currently unreachable but wants to keep for future-proofing |
+
+## Common Misconceptions
+
+- **`readonly` makes two types incompatible if one has it and the other doesn't.** It never participates in assignability at all — only the property's value type is compared. A `readonly` guarantee can be silently discarded by assigning through a non-`readonly`-typed alias.
+- **A method and a property holding the same function type are checked identically.** They aren't: a method signature (`f(x: T): void`) is checked bivariantly; the exact same function type spelled as a property (`f: (x: T) => void`) is checked contravariantly, and only the latter is fully sound under `strictFunctionTypes`.
+- **The excess-property check is part of normal structural typing.** It's a separate, narrower rule that only applies to object literals written directly at the checked position — store the same literal in a variable first and it vanishes, with no change to the literal's actual shape.
+- **`any`, `unknown`, and `never` are just "loose" versions of each other.** They break the assignability rule in three different, specific directions: `any` both ways, `unknown` inbound only, `never` outbound only. Confusing which one a boundary uses changes exactly what gets silently accepted versus rejected there.
+
+## Reading AI-generated code
+
+Assignability gaps are some of the quietest bugs in generated code, because every one of them compiles clean:
+
+- A parameter or return type widened to `any` (directly, or via an unannotated third-party callback, or via `JSON.parse`) disables assignability checking in **both** directions at that boundary — check whether the surrounding code narrows or validates it before trusting anything downstream.
+- A callback parameter typed as a bare function property (`onError: (e: Error) => void`) that a generated adapter assigns a narrower-typed handler to is exactly the property-contravariance case from this lesson — it's a real `TS2322` if it happens, so if you see it compiling, check which form (method vs. property) is actually in play.
+- Two values compared with `===` where the types look unrelated but the comparison compiles: that's fine (comparability is looser than assignability on purpose) — but if `tsc` reports `TS2367` on a generated comparison, that's a strong signal of a copy-paste variable-name mistake, not a false positive to silence.
+
+<SpotTheBug code={`interface Config { readonly apiUrl: string; readonly retries: number }
+
+function withDefaults(overrides: Partial<Config>): Config {
+  return { apiUrl: "https://api.example.com", retries: 3, ...overrides };
+}
+
+function resetRetries(config: { apiUrl: string; retries: number }) {
+  config.retries = 0;
+}
+
+const config = withDefaults({});
+resetRetries(config);
+console.log(config.retries);`}>
+This compiles with zero errors, and it does mutate a value the `Config` type calls `readonly`. `resetRetries`'s parameter type `{ apiUrl: string; retries: number }` is structurally compatible with `Config` in every way `readonly` doesn't affect (same property names, same value types), and because `readonly` plays no role in assignability at all, passing a `Config` where that plain mutable shape is expected is completely legal. Once inside `resetRetries`, `config.retries = 0` is a perfectly ordinary write to a property the *parameter's own type* never marked `readonly` — the original `Config`-typed variable now has its "protected" field silently changed. The fix isn't a cast or an assertion; it's recognizing that `readonly` is a compile-time reminder for code that references the value *through the `Config` type*, not a guarantee that survives being handed to code written against a structurally-identical but unmarked type.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+Assignability walks the target type's required properties one at a time and asks whether the source has a compatible match for each — `readonly` is never part of that comparison, a method-shaped member is checked more loosely (bivariantly) than the identical function type spelled as a property, `any`/`unknown`/`never` each disable the normal rule in a different specific direction, and two narrower checks — excess properties on a fresh literal, and comparability for `===` — run only in their own specific, narrow situations on top of the same core walk.
+</Callout>
+
+export const quizAssignability = [
+  {
+    q: 'What does the core assignability check actually compare, for two object types?',
+    options: [
+      'Whether the two types have exactly the same set of properties',
+      'For every property the TARGET requires, whether the source has a compatible property of the same name -- extra properties on the source are irrelevant',
+      'Whether the two types were declared with the same keyword (interface vs type)',
+      'Whether the two types share a common base class',
+    ],
+    answer: 1,
+    explain: 'The comparison is driven by the target: it walks the target\'s required properties and checks each one against the source. A source with additional properties the target never asked about is still assignable.',
+  },
+  {
+    q: '```ts\ninterface Mutable { x: number }\ninterface ReadonlyPoint { readonly x: number }\ndeclare const m: Mutable;\ndeclare const r: ReadonlyPoint;\nconst a: ReadonlyPoint = m;\nconst b: Mutable = r;\n```\nDo both assignments compile?',
+    options: [
+      'No -- assigning a readonly-typed value to a Mutable-typed variable is always an error',
+      'Yes, both compile with zero errors -- readonly plays no role in assignability in either direction',
+      'Only the first compiles; the second requires a cast',
+      'Neither compiles under strict',
+    ],
+    answer: 1,
+    explain: 'Verified directly: both directions compile clean. readonly restricts writes through a particular binding, but it is not part of the structural shape the assignability check compares.',
+  },
+  {
+    q: 'Why does `const m: WithMethod = { handle: dogOnly }` compile (where `dogOnly` only accepts `Dog`, and `WithMethod.handle` is declared as `handle(a: Animal): void`), while the identical assignment through a property-typed `handle: (a: Animal) => void` is a real `TS2322`?',
+    options: [
+      'It is a bug in the compiler with no real explanation',
+      'A method-shorthand signature is checked bivariantly (looser, occasionally unsound); the exact same function type declared as a property is checked contravariantly under strictFunctionTypes (sound) -- only the syntax form differs',
+      'Because `Dog` is a subtype of `Animal`, both should always be allowed',
+      'Because methods can never be assigned incorrectly',
+    ],
+    answer: 1,
+    explain: 'This is method bivariance: TypeScript deliberately checks method-shorthand members more permissively than the identical function type spelled as a property, trading some soundness for compatibility with common patterns like array methods and method overriding.',
+  },
+  {
+    q: 'Which of `any`, `unknown`, and `never` is assignable both INTO and OUT OF arbitrary types, disabling the check in both directions at once?',
+    options: [
+      '`unknown`',
+      '`any`',
+      '`never`',
+      'All three behave identically',
+    ],
+    answer: 1,
+    explain: '`any` is assignable to anything and anything is assignable to it -- both directions are unchecked. `unknown` only accepts values in (nothing comes out without narrowing); `never` only flows out (nothing but never can be assigned into it).',
+  },
+  {
+    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const takes: (p: Point) => void;\nconst obj = { x: 1, y: 2, z: 3 };\ntakes(obj);\n```\nDoes this compile, even though `obj` has an extra `z` property `Point` doesn\'t declare?',
+    options: [
+      'No -- this is the same excess-property error as passing the literal directly',
+      'Yes -- the excess-property check only applies to a FRESH object literal written directly at the checked position; once stored in a variable, ordinary structural assignability applies and extra properties are allowed',
+      'No, because `z` conflicts with an implicit index signature',
+      'Yes, but only because `strict` is off',
+    ],
+    answer: 1,
+    explain: 'Verified: passing the literal directly (`takes({ x: 1, y: 2, z: 3 })`) triggers TS2353, but storing it in `obj` first and passing `obj` compiles clean -- the excess-property check is narrower than ordinary assignability and only fires on freshness.',
+  },
+  {
+    q: '```ts\ndeclare const x: "a" | "b";\ndeclare const y: "c" | "d";\nif (x === y) {}\n```\nWhat happens, and why is this a different check than assignability?',
+    options: [
+      'It compiles fine -- string literal unions are always comparable',
+      'It is TS2367, "no overlap" -- comparability checks whether two types could ever share a possible value, which is stricter than assignability here even though `"a" | "b"` isn\'t assignable to `"c" | "d"` for an unrelated reason too',
+      'It is a TS2322 assignability error',
+      'It only errors if `strictNullChecks` is off',
+    ],
+    answer: 1,
+    explain: '"a" | "b" and "c" | "d" share zero possible values, so the comparison can only ever be false -- TS2367 flags exactly that "provably disjoint" case as almost certainly a bug, using a comparability relation that is otherwise looser than assignability (unrelated-but-overlapping types compare fine).',
+  },
+];
+
+<Quiz client:visible id="checker-internals/assignability" questions={quizAssignability} />
+
+<ProgressTracker client:visible id="checker-internals/assignability" />

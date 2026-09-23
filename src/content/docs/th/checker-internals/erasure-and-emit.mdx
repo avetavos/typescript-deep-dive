@@ -1,0 +1,273 @@
+---
+title: 'Erasure & Emit'
+description: 'รายการ erasable-vs-not เต็ม ๆ พร้อม code TS1294 จริงต่อ construct, .d.ts emit ต้องการอะไร (isolatedDeclarations กับ code TS90xx ของมัน) และตาราง emit จริงข้าม tsc, tsx, esbuild, node --experimental-strip-types และ transpileModule'
+sidebar:
+  order: 5
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Emit คือ stage ที่สี่ — และ syntax ส่วนใหญ่ของ TypeScript ข้ามมันไปเลย
+
+pipeline ของบท [index](/typescript/th/checker-internals/) — parse, bind, check, emit — จบด้วย emit ที่แปลง AST ที่ check แล้วเป็น JavaScript (และ ถ้าขอ เป็น `.d.ts`) สิ่งที่ทำให้ TypeScript เป็น *TypeScript* ส่วนใหญ่ล้นหลาม — ทุก type annotation, interface, generic, `as` cast — ไม่มีส่วนร่วมกับ output นั้นเลย: มันถูกลบทิ้งเต็ม ๆ ทันทีที่ checking จบ บทนี้พูดเรื่องรายการ syntax สั้น ๆ เฉพาะเจาะจง ระบุได้ ที่เป็นข้อยกเว้น — construct ที่ต้องการให้ compiler **generate โค้ดที่ต่างออกไป** ไม่ใช่แค่ลบ annotation — และเรื่องสิ่งที่ยังต้องเกิดขึ้นแม้ type จะหายไปหมดแล้ว (`.d.ts` emit)
+
+## รายการ erasable-vs-not เต็ม ๆ พร้อม code จริงต่อรายการ
+
+`--erasableSyntaxOnly` (5.8) มีไว้ทำให้รายการนี้ตรวจสอบได้เชิงกลไกแทนที่จะเป็นเรื่องความจำ: มันปฏิเสธ construct ที่ต้องการ transform เป๊ะ ๆ และไม่มีอะไรอื่น ทุก diagnostic ข้างล่างคือ `TS1294` จริง verify แล้ว จากการ compile ไฟล์เล็กที่สุดที่ trigger มันบน 7.0.2 — หนึ่งรายการต่อแถว เพื่อให้ไฟล์ที่ผสมกันวินิจฉัยได้ทีละ construct:
+
+| Construct | Erasable ไหม? | ผลลัพธ์ verify แล้วภายใต้ `--erasableSyntaxOnly` |
+|---|---|---|
+| `enum Color { Red, Green }` | **ไม่** | `TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.` |
+| `const enum Color { Red, Green }` | **ไม่** | `TS1294` เดียวกัน — `const` เปลี่ยน*กลยุทธ์*การ emit (ดูข้างล่าง) ไม่ใช่ว่า syntax ต้องการมันหรือไม่ |
+| `namespace Ns { export const x = 1; }` (มี runtime value) | **ไม่** | `TS1294` เดียวกัน |
+| `namespace Ns { export interface Foo { x: number } }` (type-only) | **ใช่** | Compile สะอาด — namespace ที่มีแค่ type ไม่มีอะไรให้ emit |
+| `constructor(public x: number, public y: number) {}` (parameter properties) | **ไม่** | `TS1294` แยกกันสองอัน — หนึ่งต่อ parameter ที่ถูก modify เพราะแต่ละอันต้องการ `this.x = x` assignment ที่ generate เป็นอิสระต่อกัน |
+| `import fs = require("node:fs")` | **ไม่** | `TS1294` |
+| `export = Widget` | **ไม่** | `TS1294` (และ `TS1203` ด้วยถ้า module target เป็น ESM-only — เป็นข้อร้องเรียนแยกที่ไม่เกี่ยวกัน เรื่อง target ไม่ใช่เรื่อง erasability) |
+| Legacy decorator (`experimentalDecorators`) | **ใช่** ตามกฎของ flag นี้เอง | ไม่มี `TS1294` — syntax (`@dec` บน class) เหมือนกับ stage-3 decorator เป๊ะ; `erasableSyntaxOnly` คือเช็คระดับ syntax ล้วน ๆ และแยก legacy กับ stage-3 จาก `@` เฉย ๆ ไม่ได้ |
+| Stage-3 decorator (มาตรฐาน ไม่ต้องมี flag) | **ใช่** | Compile สะอาดภายใต้ `--erasableSyntaxOnly` |
+| JSX (`<div>hi</div>`) | ไม่ได้อยู่ในรายการนี้เลย | `--erasableSyntaxOnly` ไม่เคย flag JSX ทั้งสองทาง — มันไม่ใช่ syntax เฉพาะของ TypeScript ดังนั้นมันอยู่นอกขอบเขตของ flag ที่มีจุดประสงค์ทั้งหมดเพื่อจับ construct ที่ไม่ erasable ของ*TypeScript เอง* |
+
+สองผลลัพธ์ข้างบนควรค่าแก่การหยุดคิดเพราะขัดกับการเดาตามธรรมชาติ อย่างแรก **namespace type-only compile สะอาด** — กฎไม่ใช่ "namespace ถูกแบน" แต่คือ "namespace ที่มีแค่ type ไม่มีอะไรให้ generate" ซึ่งสอดคล้องเป๊ะกับทุกอย่างอื่นในรายการนี้ อย่างที่สอง **legacy decorator ผ่านเช็คเฉพาะนี้** ทั้งที่บท [decorator ของโมดูล Classes & Advanced OOP](/typescript/th/classes-and-oop/decorators/) ยืนยันไปแล้วว่า legacy decorator ต้องพึ่ง emit ของ `tsc` เองและรันภายใต้ runtime แบบ type-stripping ไม่ได้ — `erasableSyntaxOnly` กับ "สิ่งนี้รันได้จริงโดยไม่ต้องมี compile step จริงไหม" คือสองแกนที่ต่างกัน และ legacy decorator ตกอยู่คนละฝั่งของแต่ละแกน: ดูเหมือน erasable ทาง syntax แต่พึ่ง transform ทาง semantic ที่ flag นี้ไม่เช็ค
+
+```ts
+// @skip-verify --erasableSyntaxOnly isn't part of this course's fixed verification flags,
+// and `import =`/`export =` need a CommonJS module target this file's flags don't set either --
+// this is illustrative source; the real command and output are quoted below, run on this machine
+enum Color { Red, Green }
+const enum ConstColor { Red, Green }
+namespace HasValues { export const x = 1; }
+namespace TypesOnly { export interface Foo { x: number } } // erasable -- no TS1294 for this line
+class Point { constructor(public x: number, public y: number) {} }
+import fs = require("node:fs");
+class Widget {}
+export = Widget;
+```
+
+```text
+$ tsc --ignoreConfig --noEmit --erasableSyntaxOnly --strict --target es2025 --module commonjs --skipLibCheck --types node erasable-demo.ts
+erasable-demo.ts(1,6): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(2,12): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(3,11): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(5,27): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(5,45): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(6,1): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erasable-demo.ts(8,1): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+```
+
+เจ็ด diagnostic ทั้งหมดเป็น `TS1294` ไม่มีตัวไหนอยู่บรรทัด 4 — หนึ่งต่อ construct ที่ไม่ erasable และสองอันสำหรับบรรทัด parameter-property (หนึ่งต่อ parameter ที่ถูก modify `x` กับ `y` เป็นอิสระต่อกัน)
+
+## `.d.ts` emit: `isolatedDeclarations` กับ code `TS90xx` จริงของมัน
+
+`--declaration` emit ธรรมดาพิมพ์ type ที่มันไม่เคยต้อง re-derive เต็ม ๆ ได้ เพราะ whole-program checker resolve ทุกอย่างไปแล้ว — รวมถึง อย่างที่ตัวอย่าง `TS4094` ของบท [index](/typescript/th/checker-internals/) โชว์ไป การ inline type ที่ไม่มีชื่อ export ให้ reference แบบ structural `--isolatedDeclarations` (5.5) คือ opt-in ที่แคบกว่า เข้มกว่า: มันต้องการให้ value ที่ **export** ทุกตัวมี type annotation ชัดเจน เพื่อให้ `.d.ts` ถูก generate ได้**ทีละไฟล์** แบบขนาน โดยเครื่องมือที่ไม่เคยรัน checker เต็ม — ตรงกับที่ bundler plugin หรือ build step ที่เร็ว ไม่ใช่ `tsc` ต้องการเป๊ะ
+
+```ts
+// @skip-verify --isolatedDeclarations, like --erasableSyntaxOnly above, isn't part of this
+// course's fixed verification flags -- illustrative source; real output quoted below
+export function add(a: number, b: number) {
+  return a + b;
+}
+```
+
+```text
+$ tsc --ignoreConfig --isolatedDeclarations --declaration --emitDeclarationOnly --strict --target es2025 --skipLibCheck add.ts
+add.ts(2,10): error TS9013: Expression type can't be inferred with --isolatedDeclarations.
+```
+
+return type infer ได้เต็มที่ใน build ธรรมดา แต่เครื่องมือ single-file ไม่มีทางดู `a + b` แล้วรู้คำตอบได้โดยไม่ implement chunk หนึ่งของ checker ซ้ำ ดังนั้น flag เลยต้องการ annotation ตั้งแต่แรก: `export function add(a: number, b: number): number` `TS90xx` ที่สองที่มี shape ต่างกันเกิดจากจุดบอดของ single-file อีกอัน:
+
+```ts
+// @skip-verify --isolatedDeclarations again -- illustrative source; real output quoted below
+const pair = { x: 1, y: 2 };
+export const { x, y } = pair;
+```
+
+```text
+$ tsc --ignoreConfig --isolatedDeclarations --declaration --emitDeclarationOnly --strict --target es2025 --skipLibCheck destructure.ts
+destructure.ts(2,16): error TS9019: Binding elements can't be exported directly with --isolatedDeclarations.
+destructure.ts(2,19): error TS9019: Binding elements can't be exported directly with --isolatedDeclarations.
+```
+
+การ export ที่ destructure ต้อง resolve shape ของ `pair` เพื่อรู้ว่า `x` กับ `y` คืออะไรด้วยซ้ำ (หนึ่ง `TS9019` ต่อชื่อที่ destructure) ซึ่งเป๊ะคือประเภทของ cross-expression inference ที่เครื่องมือ single-file ทำไม่ได้ diagnostic ทั้งสองแชร์กฎที่อยู่ข้างใต้อันเดียวกัน: `isolatedDeclarations` พอใจแค่ตอนที่ตัว generate `.d.ts` ผลิต declaration output*เหมือนกันเป๊ะ*โดยดูทีละ export โดยไม่มีการ infer type เลย — ซึ่งเป็นมาตรฐานที่แคบกว่า `--declaration` ธรรมดาอย่างเข้มงวด และเป็นเหตุผลเป๊ะว่าทำไมโค้ด generate จริงบางครั้งพังกับมันแม้ whole-program build ที่เทียบเท่าจะผ่านสำเร็จ
+
+## `const enum`: erasure ที่ทำงานได้แค่ตอนมี whole-program knowledge
+
+`const enum` คือ erasure case ที่สอนได้ดีที่สุดของ TypeScript เพราะมันถูก erase จริงไหมขึ้นกับ*เครื่องมือที่ emit มองเห็นโปรแกรมได้มากแค่ไหน*เป๊ะ — ไม่เกี่ยวกับอะไรใน enum declaration เอง:
+
+```text
+// Same const enum, three different emitting contexts, three different outcomes (verified):
+
+// 1. tsc, whole program, this enum used in the SAME file it's declared in:
+const enum Color { Red, Green, Blue }
+export const c = Color.Green;
+//   emits: export const c = 1 /* Color.Green */;   -- fully inlined, the enum itself vanishes
+
+// 2. A single-file tool (ts.transpileModule -- the same engine that powers
+//    this course's TSPlayground) sees only this one file, with no idea what
+//    the rest of the program does with `Color`:
+//   emits: a full runtime object for Color, IDENTICAL to what a real (non-const) enum
+//   would emit -- transpileModule cannot inline what it cannot see used elsewhere
+
+// 3. An ambient const enum from ANOTHER package, imported under --isolatedModules:
+export declare const enum Color { Red, Green, Blue } // in a .d.ts from a dependency
+import { Color } from "some-package";
+export const c = Color.Green;
+//   real error: TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.
+```
+
+Case 1 คือพฤติกรรมปกติที่ถูกยกย่อง: `const enum` สัญญาว่า "ไม่มี runtime object แค่ literal ที่ inline" และ `tsc` build จริงที่มี whole-program knowledge รักษาสัญญานั้น Case 2 คือเซอร์ไพรส์จริงที่ verify แล้ว: `ts.transpileModule` — single-file transform ที่ไม่มี cross-file knowledge เครื่องมือประเภทเดียวกับที่ `tsx`, bundler ส่วนใหญ่ และ playground ในเบราว์เซอร์ของคอร์สนี้เองใช้ — inline value ที่มันไม่มีทางเห็นว่าถูกใช้ที่อื่นไม่ได้ ดังนั้นมัน fallback แบบเงียบ ๆ ไปเป็นการ emit runtime object เหมือน enum ธรรมดา (ไม่ const) เป๊ะ Case 3 คืออันที่ TypeScript ปฏิเสธตรง ๆ แทนที่จะลดคุณภาพแบบเงียบ ๆ: `const enum` แบบ *ambient* (`declare const enum` shape ที่ `.d.ts` จาก dependency ใช้) ที่ข้าม `isolatedModules` boundary ถูกปฏิเสธตรง ๆ ด้วย `TS2748` เพราะ `isolatedModules` สัญญาว่าทุกไฟล์ compile ได้โดยไม่ต้องดูไฟล์อื่น และการ inline value ที่ประกาศไว้*เฉพาะ*ใน `.d.ts` ของอีก package — โดยไม่มี implementation ท้องถิ่นให้ fallback แบบที่ case 2 มี — คือ cross-file knowledge เป๊ะที่สัญญานั้นตัดออก `preserveConstEnums` อยู่ตรงกลางระหว่างสองอันนี้: มันเก็บพฤติกรรม inlining ตอน compile-time ของ `const enum` สำหรับ value ที่ใช้ในโปรแกรมที่ถูก check ไว้ *พร้อมกับ*emit runtime object ที่รองรับด้วย (แทนที่จะ erase มันแบบ case 1 default) มีประโยชน์เฉพาะตอนที่เครื่องมืออื่นที่ไม่รู้ whole-program ทีหลังต้องการ object นั้นมีอยู่จริงแม้ `tsc` เองจะไม่ต้องการมันแล้ว
+
+นี่คือ shape ของบั๊กเป๊ะที่ entry "`const enum` ข้าม package boundary" ของบท [`ai-bug-catalog`](/typescript/th/reading-typescript/) บรรยายจากมุมการ review โค้ด; เหตุผลเชิงกลไกที่มันเกิดคือ case 3 ของบทนี้เป๊ะ
+
+Case 2 พิสูจน์แบบสดตรงนี้ได้เลย และในระหว่างทางมันโชว์อีกอย่างที่ควรรู้เกี่ยวกับปุ่มสองปุ่มของคอร์สนี้: **Check types** กับ **Run** ใช้ engine ที่ต่างกันสองอันที่ไม่จำเป็นต้องเห็นตรงกัน การ lookup reverse-mapping แบบตัวเลขดิบบน `const enum` (`Color[1]` หรือ `Color[Color.Green]`) ถูก flag โดย semantic checking จริง — `TS2476: A const enum member can only be accessed using a string literal` — เป๊ะเพราะ checker รับประกันไม่ได้ว่า reverse-mapping object รอดจากการ inline ในกรณีทั่วไป **Run** ไม่ type-check เลย มัน transpile ด้วย `ts.transpileModule` (syntax-directed ล้วน ๆ) แล้ว execute อะไรก็ตามที่ออกมา คลิก **Check types** ข้างล่างแล้วคุณจะเห็น `TS2476` จริง คลิก **Run** ต่อไปเลย มันรันได้สบาย — เป็นหลักฐานเชิงประจักษ์ว่าใน context single-file นี้ object มีอยู่จริงให้ lookup:
+
+<TSPlayground code={constEnumRunCode} id="checker-erasure-const-enum-run" title="Check types rejects this; Run executes it anyway — proving the object exists" />
+
+export const constEnumRunCode = `// @expect-error TS2476
+const enum Color { Red, Green, Blue }
+console.log(Color.Green);        // 1 -- looks inlined so far...
+console.log(Color[Color.Green]); // Check types: real TS2476. Run it anyway -- it works.
+// Run output:
+// 1
+// Green`;
+
+## ตาราง emit: อะไรเกิดขึ้นจริงกับแต่ละ construct ทีละเครื่องมือ
+
+[โมดูล Compiler & Tooling](/typescript/th/compiler-and-tooling/build-and-emit/) ครอบคลุมพื้นที่เดียวกันนี้จากมุม*เครื่องมือ* — จะหยิบเครื่องมือไหนและทำไม นี่คือมุมของ*checker*: สำหรับแต่ละ construct ที่ไม่ erasable emitting path นั้นพยายาม transform ไหม และผลลัพธ์รันได้ไหม ทุกช่องข้างล่างคือผลลัพธ์จริง verify แล้วบนเครื่องนี้ — ไม่ใช่คำกล่าวอ้างจาก documentation:
+
+| Construct | `tsc` (emit จริง) | `tsx` (รันมัน) | `esbuild --loader=ts` | `node --experimental-strip-types` |
+|---|---|---|---|---|
+| `enum Color { Red, Green }` | Runtime object เต็ม ห่อด้วย IIFE | รัน พิมพ์ value ถูกต้อง | Runtime object เต็ม (shape เกือบเหมือน `tsc`) | **ถูกปฏิเสธ** — type-stripping อย่างเดียว ไม่มี transform |
+| Parameter properties (`constructor(public x)`) | Emit assignment `this.x = x` | รัน มี `this.x` assignment | Emit field + assignment shape เดียวกัน | **ถูกปฏิเสธ** |
+| `namespace Ns { export const x = 1 }` | Emit IIFE ห่อ `Ns` | รันถูกต้อง | Emit IIFE shape เดียวกัน | **ถูกปฏิเสธ** |
+| `export = Widget` | Emit `module.exports = Widget` (CJS) | รันถูกต้อง | Emit `module.exports = Widget` ภายใต้ `--format=cjs` | **ถูกปฏิเสธ** |
+| Legacy decorator (`experimentalDecorators`) | Emit helper `__decorate` + call | รันถูกต้อง | Emit helper `__decorateClass` ของตัวเอง + call (แนวคิดเดียวกัน ชื่อ helper ต่างกัน) | รัน*ตัว syntax* แต่เป็น call แบบ **stage-3** decorator — semantics ตอน runtime ต่างจากที่ `experimentalDecorators` สัญญาไว้ เพราะการ strip type ไม่รัน transform decorator ของ tsc เอง |
+| Stage-3 decorator (syntax มาตรฐาน) | ผ่านด้วย transform น้อยที่สุด | รันถูกต้อง | ผ่าน | รันถูกต้อง — นี่คือ ECMAScript syntax ที่ engine รองรับจริงตั้งแต่ Node/V8 รุ่นล่าสุด ไม่ใช่อะไรที่ต้อง erase |
+
+แถว `node --experimental-strip-types` คือแถวที่สำคัญที่สุดในทางปฏิบัติ: มันคือ runtime แบบ **type-stripping** แปลว่ามันลบ annotation เท่านั้นและไม่มีอะไรอื่น — ไม่มี transform step เลย ดังนั้นทุก construct ในคอลัมน์ซ้ายข้างบนที่ต้องการมันคือการปฏิเสธตรง ๆ ไม่ใช่ผลลัพธ์ที่ลดคุณภาพหรือบางส่วน `tsx` กับ `esbuild` ทั้งคู่พก transform จริง (ไม่ใช่แค่ strip) ซึ่งเป็นเหตุผลว่าทำไมมันสำเร็จทุกแถว — บรรทัดที่สำคัญไม่ใช่ "เครื่องมือนี้เข้าใจ TypeScript ไหม" แต่คือ "เครื่องมือนี้แค่ strip หรือทำ transform ด้วย" และมีแค่ path ในตัวของ Node เท่านั้นที่ strip อย่างเดียวในสี่ตัว
+
+## ประวัติหนึ่งบรรทัด: `importsNotUsedAsValues` → `verbatimModuleSyntax`
+
+TypeScript เคยมี flag แยกกันสองอันสำหรับปัญหาเดียวกันข้างใต้ — import จะถูกเก็บไว้หรือถูก erase — ก่อนจะรวมมันเข้าด้วยกัน: `--importsNotUsedAsValues` และ `--preserveValueImports` ถูก deprecate ใน TypeScript 5.0 ด้วยคำพูดของ TypeScript เองว่าเพราะการเข้าใจ edge case รวมกันของมัน "hard, and there are still some edge cases with unexpected behavior" หันไปใช้กฎเดียวที่ง่ายกว่ามากของ `--verbatimModuleSyntax` แทน อ้างตรงจาก release เดียวกัน: "any imports or exports without a `type` modifier are left around \[kept\]. Anything that uses the `type` modifier is dropped entirely." บท [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) ครอบคลุม `verbatimModuleSyntax` เองเต็ม ๆ; เหตุผลที่มันมีอยู่เลยคือธีมของบทนี้อีกครั้ง — กฎเกี่ยวกับสิ่งที่ถูก erase น่าเชื่อถือได้ก็ต่อเมื่อมันง่ายพอที่จะทำนายได้โดยไม่ต้องรัน compiler แล้วอ่าน output
+
+## Mental Model
+
+<Mermaid title="Erasability is a property of syntax; emit needs are a property of the tool doing the emitting" code={erasureMentalDiagram} />
+
+export const erasureMentalDiagram = `flowchart TD
+  syntax["A TypeScript construct"] --> ask{"Does the compiler need to GENERATE\ndifferent code, or just DELETE an annotation?"}
+  ask -->|generate| nonErasable["Non-erasable: enum, namespace-with-values,\nparameter properties, import =, export =\n(erasableSyntaxOnly: real TS1294)"]
+  ask -->|delete only| erasable["Erasable: types, interfaces, generics,\ntype-only namespaces, stage-3 decorators, JSX"]
+  nonErasable --> tool{"What tool is emitting it?"}
+  tool -->|tsc, full program| works["Transformed correctly, whole-program knowledge available"]
+  tool -->|tsx, esbuild -- single-file WITH a transform| worksToo["Transformed correctly -- these tools carry the emit logic themselves"]
+  tool -->|node --experimental-strip-types -- STRIP ONLY, no transform| rejected["Hard rejection -- there is no transform step to fall back on"]`;
+
+คำถามอิสระสองข้อวิ่งผ่านทุกข้อเท็จจริงในบทนี้ และการปนกันคือความผิดพลาดที่พบบ่อยที่สุด: "syntax นี้ erasable ไหม" คือคุณสมบัติของ*ตัว construct เอง* ตรวจได้ด้วย `--erasableSyntaxOnly` โดยไม่ต้องรู้จัก runtime ไหนเป็นพิเศษ; "เครื่องมือเฉพาะนี้จะผลิต output ที่ทำงานได้จริงสำหรับมันไหม" ขึ้นกับล้วน ๆ ว่าเครื่องมือนั้นพก transform จริง (`tsc`, `tsx`, `esbuild`) หรือแค่ลบ annotation (`node --experimental-strip-types`) construct หนึ่งอาจไม่ erasable ทาง syntax แต่ยังรันได้ทุกที่ที่มี transform หรือ "ดู erasable" ทาง syntax (stage-3 decorator) แต่รันถูกต้องแค่บน runtime ที่ใหม่พอจะเข้าใจมันโดยธรรมชาติ — erasability กับ runnability เกี่ยวข้องกัน แต่ไม่ใช่แกนเดียวกัน
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| เขียนแค่ syntax ที่ erasable (`--erasableSyntaxOnly`) | รับประกันว่ารันได้ภายใต้ type-stripping ของ Node, `tsx` และทุก strip-only path อื่นโดยไม่ต้องมี transform step เลย | เสีย reverse mapping ของ `enum`, shorthand ของ parameter property และ legacy decorator — การสูญเสียเชิง ergonomic จริงเพื่อแลกกับข้อดีเชิง ergonomic จริง |
+| `const enum` | ต้นทุน runtime เป็นศูนย์ตอนที่ whole-program build เห็นทุก use site | ลดคุณภาพแบบเงียบ ๆ เป็น runtime enum เต็มภายใต้เครื่องมือ single-file (`transpileModule`) และถูกปฏิเสธตรง ๆ (`TS2748`) ตอนเป็น ambient import ข้าม `isolatedModules` boundary — สัญญา "zero cost" ของมันมีเงื่อนไข ไม่ใช่สากล |
+| `--isolatedDeclarations` | ไฟล์ `.d.ts` generate ได้ทีละไฟล์ แบบขนาน โดยเครื่องมือที่ไม่เคยรัน checker เต็ม | แรงเสียดทานจริง verify แล้ว (`TS9013`, `TS9019`) บนโค้ดที่จะ compile ผ่านสบาย ๆ ภายใต้ `--declaration` เฉย ๆ — มาตรฐานที่แคบกว่าอย่างเข้มงวด |
+| `verbatimModuleSyntax` แทน `importsNotUsedAsValues`/`preserveValueImports` คู่เก่า | กฎเดียวที่ง่ายและคาดเดาได้ (มี `type` modifier หรือไม่) แทนที่จะเป็น edge case ของ flag สองอัน | ต้อง annotate import ที่เป็น type-only ด้วย `type` จริง ๆ — ต้นทุนการ migrate จริงแม้จะเล็ก สำหรับโค้ดที่มีอยู่ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`--erasableSyntaxOnly` เช็คว่าโค้ดจะรันบน runtime ที่กำหนดได้ไหม** มันเช็คคำถามที่แคบกว่า เป็น syntax ล้วน ๆ: construct นี้ต้องการให้ compiler *generate* อะไรบางอย่างไหม Legacy decorator ผ่านเช็คนี้ (syntax เหมือน stage-3) แต่ยังรันภายใต้ type-stripping ไม่ได้ เพราะมันพึ่ง helper function ที่ `tsc` emit เอง — dependency เชิง semantic แยกต่างหากที่ `erasableSyntaxOnly` ไม่จับ
+- **`const enum` ถูก erase เป็น literal เปล่าเสมอ ไม่มี runtime footprint เลย ไม่ว่าใครจะ compile มัน** จริงแค่ตอนที่เครื่องมือที่ emit มี whole-program knowledge เท่านั้น single-file transform (`transpileModule` และโดยขยายความ อะไรก็ตามที่สร้างบน isolated transform ประเภทเดียวกัน) fallback ไปเป็นการ emit runtime object เต็มแทน — verify ตรงแล้ว ไม่ใช่ edge case ทางทฤษฎี
+- **`isolatedDeclarations` แค่เป็น `--declaration` เวอร์ชันเข้มกว่าที่จับสิ่งเดียวกันได้เร็วกว่า** มันคือมาตรฐานที่ต่างกันจริง: โค้ดที่ compile สะอาดภายใต้ `--declaration` เฉย ๆ (เพราะ whole-program checker infer ทุกอย่างได้) พังกับ `isolatedDeclarations` ได้ (`TS9013`, `TS9019`) เพราะ generator แบบ single-file infer สิ่งเดียวกันคนเดียวไม่ได้พอดี
+- **JSX ต้องเป็นหนึ่งใน construct "erasable" หรือ "non-erasable" ของ TypeScript เพราะมันก็ถูก transform ทิ้งด้วย** `--erasableSyntaxOnly` ไม่เคยพูดถึงมันเลยทั้งสองทาง — JSX ไม่ใช่ syntax เฉพาะของ TypeScript ดังนั้นมันอยู่นอกขอบเขตของ flag ที่มีงานเดียวคือตรวจ construct ที่ไม่มาตรฐานของ TypeScript เอง
+
+## อ่านโค้ดที่ AI เขียน
+
+บั๊กเกี่ยวกับ emit ในโค้ด generate มักโผล่มาก็ตอนที่โค้ดออกจาก environment ที่มันถูกเขียนและทดสอบแล้วเท่านั้น:
+
+- ไฟล์ `.ts` ที่ generate มาให้ตั้งใจรันตรง ๆ ภายใต้ type-stripping ของ Node หรือใน `tsx`/Deno/Bun ที่มี fast path แบบ strip-only คล้ายกัน ที่ใช้ `enum`, parameter property หรือ `namespace` ที่มี value จริง: นี่คือการปฏิเสธจริง แข็ง ไม่ใช่คำเตือน — เช็ค construct เหล่านี้เฉพาะก่อนที่จะสมมติว่า "มันก็แค่ TypeScript มันรันได้ที่ไหนสักแห่งแหละ"
+- `const enum` ที่ export จาก package หนึ่งแล้ว import โดยอีกอันภายใต้ `isolatedModules`: นี่คือ shape เป๊ะที่ผลิต `TS2748` สำหรับ declaration แบบ *ambient* หรือลดคุณภาพแบบเงียบ ๆ เป็น runtime object เต็มภายใต้ build tool แบบ single-file สำหรับแบบไม่ ambient — ไม่มี failure mode ไหนชัดเจนจากการอ่าน enum declaration เพียงอย่างเดียว
+- โค้ด generate ที่อ้างว่า compatible กับ `isolatedDeclarations` (พบทั่วไปใน output ของ monorepo/library-scaffolding) ที่จริง ๆ มี export ที่ไม่มี annotation หรือ export แบบ destructure: verify กับ flag จริงแทนที่จะเชื่อคำอ้างของ generator เพราะ diagnostic จริงสองอันในบทนี้ (`TS9013`, `TS9019`) คือ shape เป๊ะที่หลุดผ่านตอน generator ถูกเช็คแค่กับ `--declaration` เฉย ๆ
+
+<SpotTheBug code={`// utils.ts (a shared internal package)
+export const enum LogLevel { Debug, Info, Warn, Error }
+
+// app.ts (a consumer, built with isolatedModules for fast per-file bundling)
+import { LogLevel } from "./utils";
+
+export function shouldLog(level: LogLevel, threshold: LogLevel) {
+  return level >= threshold;
+}`}>
+โค้ดนี้ compile ผ่านไหมขึ้นกับรายละเอียดหนึ่งเป๊ะที่ snippet นี้ไม่ได้โชว์: `utils.ts`'s declaration ถูกใช้เป็น real source file หรือเป็นไฟล์แบบ *ambient* (`.d.ts` ที่ ship มาจาก package โดยใช้ `declare const enum` แทน `const enum` ธรรมดา) ถ้า `app.ts` compile `utils.ts` ตรง ๆ เป็นส่วนหนึ่งของโปรแกรมเดียวกัน อันนี้โอเค — value ของ const enum ถูก inline ตามปกติ แต่ทันทีที่ `utils.ts` กลายเป็น package ที่ publish แยกจริง ๆ (ตรงกับที่ "shared internal package" บอกเป็นนัยเป๊ะ) consumer เห็นแค่ `.d.ts` ของมัน ที่ `const enum` กลายเป็น `declare const enum` — และการ import อันนั้นภายใต้ `--isolatedModules` (ที่ per-file bundler สำหรับ build เร็วเปิดกันเป็นประจำ) คือ `TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.` จริง แข็ง ธรรมชาติของบั๊กแบบ type-check ผ่านวันนี้-พังทันทีที่ publish และถูกใช้จริง คือเหตุผลเป๊ะว่าทำไม `const enum` ข้าม package boundary จริงถึงถูก flag ว่าเป็น pattern ที่ควรเลี่ยงตรง ๆ แทนที่จะเป็นอะไรที่ configure หลบได้เป็นกรณีไป — ทางแก้คือ `enum` ธรรมดา (ยอมรับ runtime object) หรือ object `as const` (ยอมรับการเสีย numeric reverse mapping) ไม่ใช่ `const enum` เลย
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+`--erasableSyntaxOnly` ระบุรายการ syntax ของ TypeScript ที่สั้นและแน่นอนที่ต้องการให้ compiler generate โค้ดจริงแทนที่จะแค่ลบ annotation (`enum`, `namespace` ที่มี value, parameter property, `import =`, `export =` — legacy decorator ผ่านเช็คนี้ทาง syntax แต่ยังต้องการ emit ของ `tsc` เองเพื่อรันถูกต้อง และ JSX อยู่นอกขอบเขตของเช็คนี้เลย); ว่า syntax ที่ไม่ erasable นั้น*รันจริง*ไหมเป็นคำถามแยกที่ขึ้นกับว่าเครื่องมือที่ emit พก transform จริง (`tsc`, `tsx`, `esbuild`) หรือแค่ strip annotation (`node --experimental-strip-types`); และ `.d.ts` emit มีมาตรฐานที่แคบกว่าของตัวเอง `isolatedDeclarations` ที่ `--declaration` build แบบ whole-program พอใจได้แบบมองไม่เห็น แต่ generator แบบ single-file (`TS9013`, `TS9019`) ทำไม่ได้
+</Callout>
+
+export const quizErasure = [
+  {
+    q: 'ภายใต้ `--erasableSyntaxOnly` namespace ที่มีแค่ type declaration (`namespace Ns { export interface Foo { x: number } }`) ให้ `TS1294` ไหม?',
+    options: [
+      'ให้ -- namespace ทุกอันถูกปฏิเสธไม่ว่าจะมีอะไรข้างใน',
+      'ไม่ให้ -- มัน compile สะอาด เพราะ namespace ที่มีแค่ type ไม่มีอะไรให้ compiler generate; กฎคือเรื่องความจำเป็นต้อง GENERATE โค้ด ไม่ใช่เรื่อง keyword `namespace` เอง',
+      'ให้ แต่แค่ใน strict mode',
+      'ไม่ให้ แต่แค่ถ้า namespace ถูก mark ว่า `declare`',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้ว: namespace ที่มีแค่ interface compile สะอาดภายใต้ --erasableSyntaxOnly ในขณะที่ namespace เดียวกันที่มี `export const x = 1` ให้ TS1294 จริง -- ตัวตัดสินคือมี runtime code ให้ emit ไหม ไม่ใช่ syntax ของ namespace เองล้วน ๆ',
+  },
+  {
+    q: 'Legacy decorator (`experimentalDecorators: true`) ให้ `TS1294` ภายใต้ `--erasableSyntaxOnly` ไหม?',
+    options: [
+      'ให้ เหมือน enum กับ parameter property เป๊ะ',
+      'ไม่ให้ -- เช็คเป็น syntax ล้วน ๆ และ syntax ของ legacy decorator (`@dec` บน class) เหมือนกับ syntax ของ stage-3 decorator เป๊ะ ดังนั้น flag แยกแยะพวกมันไม่ได้และไม่แยก; legacy decorator ยังรันภายใต้ type-stripping ไม่ได้ แต่ด้วยเหตุผลเชิง semantic ที่ต่างกัน ที่ flag นี้ไม่เช็ค',
+      'ให้แค่ถ้า class ที่ถูก decorate ถูก export',
+      'ไม่ให้ เพราะ legacy decorator ถูกเอาออกใน TypeScript 5.8',
+    ],
+    answer: 1,
+    explain: 'Verify แล้ว: class ที่มี legacy `@dec` decorator และเปิด experimentalDecorators ไม่ให้ TS1294 เลย erasableSyntaxOnly คือเช็คระดับ syntax และความไม่เข้ากันจริง (legacy decorator พึ่ง helper __decorate ที่ tsc emit เอง) คือข้อเท็จจริงเชิง semantic แยกต่างหากที่ flag นี้ไม่เคยถูกออกแบบมาให้จับ',
+  },
+  {
+    q: '`const enum` ถูก compile ด้วย `ts.transpileModule` (single-file transform ประเภทเดียวกับที่ขับเคลื่อน playground TypeScript บนเบราว์เซอร์) แทนที่จะเป็น `tsc` build แบบ whole-program จริง เกิดอะไรขึ้น?',
+    options: [
+      'ถูกปฏิเสธด้วย error เหมือนกับภายใต้ isolatedModules สำหรับ ambient const enum',
+      'มัน fallback แบบเงียบ ๆ ไปเป็นการ emit runtime object เต็ม -- shape เหมือนกับที่ enum ธรรมดา (ไม่ const) จะผลิตเป๊ะ -- เพราะเครื่องมือ single-file ไม่มีทางเห็นและ inline ทุก use site แบบที่ whole-program build ทำได้',
+      'ถูก inline แบบเดียวกันเป๊ะกับที่ tsc build แบบ whole-program จะ inline',
+      'ถูกปล่อยไว้เฉย ๆ ทั้งหมดใน output รวมถึง syntax ของ TypeScript',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้วกับ transpileModule API ของ package typescript จริง: const enum ที่ใช้ในไฟล์เดียวกันยังได้ runtime object เต็มถูก emit ไม่ใช่ literal ที่ inline -- transpileModule เห็นโปรแกรมไม่พอที่จะ erase มันแบบที่ tsc build จริงทำได้',
+  },
+  {
+    q: '`TS9013` (`isolatedDeclarations`) flag อะไรจริง ๆ และทำไมโค้ดเดียวกันไม่ error ภายใต้ `--declaration` เฉย ๆ?',
+    options: [
+      'syntax error ที่ทั้ง plain --declaration และ --isolatedDeclarations ปฏิเสธเท่ากัน',
+      'value ที่ export ที่ type infer ไม่ได้โดยไม่รัน type checker จริงบน expression (เช่น `export function add(a: number, b: number) { return a + b; }`) -- plain --declaration สำเร็จเพราะ whole-program checker resolve return type ไปแล้ว; isolatedDeclarations ต้องการให้ทุก export type ชัดเจนในตัวเองเพื่อให้ generator แบบ single-file ผลิต output เดียวกันได้คนเดียว',
+      'ฟังก์ชันไหนก็ตามที่มี parameter มากกว่าหนึ่งตัว',
+      'มีผลแค่กับ export แบบ ambient (declare) เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'Verify ตรงแล้ว: ฟังก์ชันเดียวกันเป๊ะ compile ผ่านสบายภายใต้ --declaration เฉย ๆ แต่ให้ TS9013 จริงภายใต้ --isolatedDeclarations เพราะ isolatedDeclarations ต้องการ inferability ต่อไฟล์โดยไม่มีการให้เหตุผลข้าม expression ซึ่งเป็นมาตรฐานที่แคบกว่าการรัน checker เต็มอย่างเข้มงวด',
+  },
+  {
+    q: 'จากสี่ emitting path ในตารางของบทนี้ (tsc, tsx, esbuild, node --experimental-strip-types) ตัวไหนปฏิเสธ construct ที่ไม่ erasable ทุกตัว (enum, parameter property, namespace-with-values, export =) ตรง ๆ และทำไม?',
+    options: [
+      'tsc เพราะมันเป็น checker ที่เข้มที่สุด',
+      '`node --experimental-strip-types` -- มันคือ runtime แบบ type-STRIPPING โดยไม่มี transform step เลย ดังนั้น construct ไหนก็ตามที่ต้องการโค้ด generate (ไม่ใช่แค่ลบ annotation) ไม่มีอะไรให้ fallback ได้',
+      'esbuild เพราะมันไม่เข้าใจ decorator ของ TypeScript',
+      'tsx เพราะมันรองรับแค่ ES module เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'tsc, tsx และ esbuild ทั้งหมดพก transform จริงและสำเร็จทุก construct ในตารางที่ verify แล้ว node --experimental-strip-types แค่ลบ type annotation -- มันไม่มี emit logic สำหรับ construct ที่ต้องการ JavaScript ที่ generate ดังนั้นทุกตัวคือการปฏิเสธจริง verify แล้ว',
+  },
+];
+
+<Quiz client:visible id="checker-internals/erasure-and-emit" questions={quizErasure} />
+
+<ProgressTracker client:visible id="checker-internals/erasure-and-emit" />
