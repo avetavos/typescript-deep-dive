@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The compiler is the language
 
@@ -40,8 +42,183 @@ export const jobsDiagram = `flowchart LR
 
 Keep these two jobs distinct and the whole toolchain makes sense. A bundler like esbuild can do job 2 in milliseconds because it just strips the types without understanding them — which means it will happily emit code that does not type-check. That is why the standard advice is: **let the bundler emit, and run `tsc --noEmit` in CI to actually check.** With TypeScript 7 that check is roughly ten times faster than it was, so the pattern costs seconds, not minutes. The rest of this module unpacks the config that controls both jobs.
 
+## Type-checking catches what a bundler can't
+
+`strict` is always on wherever this course asks you to check types — including the interactive checker below, which type-checks with the real TypeScript compiler (loaded from a CDN) rather than a simulation. Click **Check types** without changing anything, and you'll see two real `noImplicitAny` diagnostics: a bundler transpiling this file would emit working-looking JavaScript with zero complaints, because it never looks at the *shape* of `items` at all.
+
+<TSPlayground code={noImplicitAnyCode} id="compiler-tooling-index-noimplicitany" title="A bundler would emit this silently. tsc --noEmit would not." />
+
+export const noImplicitAnyCode = `// @expect-error TS7006
+function double(items) {
+  return items.map((n) => n * 2);
+}
+console.log(double([1, 2, 3]));`;
+
+This is the concrete version of "let the bundler emit, let `tsc` check": `double` has two undeclared parameter types, and under `strict`'s `noImplicitAny` that's an error, not a guess. A bundler-only pipeline would run `double(["a", "b"])` just as happily as `double([1, 2, 3])` — it has no way to know that's wrong until something crashes at runtime.
+
+## Linting types, not just syntax: `typescript-eslint`
+
+Regular ESLint rules see syntax — a missing semicolon, an unused variable — without ever asking the type checker a question. **`typescript-eslint`'s type-aware rules** ask the checker directly, which is how they catch bugs no syntax-only linter can see: a forgotten `await`, an `any` silently leaking through three function calls, a `switch` that looks complete but isn't. Turning them on costs a real, measurable amount of setup and time, which is worth seeing honestly before you decide where to draw the line.
+
+Here is a `eslint.config.mjs` enabling the type-aware rules this course cares about most, using `projectService` — the setting that lets `typescript-eslint` find your `tsconfig.json` automatically instead of listing every file's project by hand:
+
+```js
+// @ts-check
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/switch-exhaustiveness-check": "error",
+      "@typescript-eslint/consistent-type-imports": "error",
+    },
+  },
+);
+```
+
+Run against one small file exercising every rule above (verified in scratch — `typescript-eslint@8.70.1` on `typescript@5.9.3`, since `typescript-eslint` does not yet support TypeScript 7: installing it alongside `typescript@7` fails npm's peer-dependency check with `peer typescript@">=4.8.4 <6.1.0" from typescript-eslint@8.70.1`, so a project on TypeScript 7 keeps a `typescript@6` install for this tool, the same `@typescript/typescript6` pattern [Build & Emit](/typescript/en/compiler-and-tooling/build-and-emit/) covers for the language server):
+
+```text
+  1:1   error  All imports in the declaration are only used as types. Use `import type`   @typescript-eslint/consistent-type-imports
+  3:1   error  Async function 'fetchUser' has no 'await' expression                       @typescript-eslint/require-await
+ 12:3   error  Promises must be awaited, end with a call to .catch, ... or be explicitly
+               marked as ignored with the `void` operator                                 @typescript-eslint/no-floating-promises
+ 14:11  error  Promise returned in function argument where a void return was expected     @typescript-eslint/no-misused-promises
+ 18:9   error  Unsafe assignment of an `any` value                                        @typescript-eslint/no-unsafe-assignment
+ 18:15  error  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+ 19:22  error  Unsafe member access .value on an `any` value                              @typescript-eslint/no-unsafe-member-access
+ 20:15  error  Unsafe call of an `any` typed value                                        @typescript-eslint/no-unsafe-call
+
+✖ 13 problems (13 errors, 0 warnings)
+```
+
+Every one of those is a real bug class from this course's own AI-code catalogue below — `any` at a boundary, a floating promise, an async callback where a `void`-returning one was expected — caught by asking the checker, not by pattern-matching source text. A separate, isolated file with a non-exhaustive `switch` over a three-member union gets its own diagnostic, `@typescript-eslint/switch-exhaustiveness-check`: `Switch is not exhaustive. Cases not matched: "error" | "pending"`.
+
+The cost is real too: the same file linted with `projectService` on (building a full type-checked program) took **0.78s**; the identical file linted with only `tseslint.configs.recommended` (no type information, syntax rules only) took **0.28s** — nearly 3× on a single trivial file, and the gap grows with program size because every lint run now builds a real `ts.Program`. That's the trade to make deliberately, not by accident: type-aware rules catch a strictly larger class of bugs, at a cost that shows up in every `eslint` run, every save, every CI job.
+
+## Type-level testing: proving what a type actually is
+
+Everything you've read in this course about a type "resolving to X" was checked with the same tool this section describes: an assertion that fails to *compile* — not to run — when a type is wrong. `tsd`, `expect-type`, and vitest's `expectTypeOf` are three flavors of the same idea; a project using Vitest already has the third one built in.
+
+```ts
+import { expectTypeOf, test } from "vitest";
+
+type Camel<S extends string> = S extends `${infer H}_${infer T}` ? `${H}${Capitalize<Camel<T>>}` : S;
+
+test("Camel converts snake_case to camelCase at the type level", () => {
+  expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"userId">();
+});
+```
+
+That test passes — but here is the part worth being careful about. Change the expected type to something wrong and re-run with only `vitest run`:
+
+```ts
+// @skip-verify demonstrates a *silently passing* runtime test -- see prose for the tsc check that actually catches it
+test("a wrong assertion, run with only `vitest run`", () => {
+  expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"user_id">(); // wrong: should be "userId"
+});
+```
+
+Run that with `vitest run` and it reports **1 passed** — `expectTypeOf` has no runtime behavior at all, so a test runner that only executes JavaScript never notices the assertion was wrong. What actually catches it is a plain `tsc --noEmit --strict` pass over the test file (verified in scratch): `error TS2344: Type '"user_id"' does not satisfy the constraint '"Expected: literal string: user_id, Actual: literal string: userId"'` — the error message is generated *from* the mismatch, which is why type-level tests need a real compile step in CI, not just `vitest run`, to mean anything.
+
+## Verify AI-written TypeScript: the ladder
+
+A generated diff that "type-checks" has cleared the lowest bar there is. Each rung below catches a different class of bug this course's `SpotTheBug` snippets have shown compiling cleanly:
+
+1. **`tsc --noEmit --strict`** — catches implicit `any`, null/undefined misuse, and any real type mismatch. Misses: `any` used *on purpose*, unsafe casts (`as`), non-null assertions (`!`), and anything that's simply the wrong runtime behavior with a correct-looking type.
+2. **Typed `typescript-eslint` rules** — catches exactly what rung 1 misses on the `any`/cast/promise front: `no-explicit-any`, `no-unsafe-*`, `no-floating-promises`, `consistent-type-imports`. Misses: whether the *logic* is correct.
+3. **Type-level tests (`expectTypeOf` / `@ts-expect-error`)** — catches a utility type or generic silently resolving to the wrong thing, which rungs 1–2 both accept as "well-typed" since the type is internally consistent, just wrong. Misses: runtime behavior entirely.
+4. **Runtime tests** — catches the actual behavior being wrong, including everything a lying type predicate (`x is string { return true }`) or an `as` cast can hide from every rung above. Misses: your published `.d.ts` matching the actual runtime shape.
+5. **`@arethetypeswrong`** (for a published package) — catches the gap between what you shipped and what a consumer's resolver actually sees. Run for real against a published package with a known CJS/ESM split (`npx @arethetypeswrong/cli --from-npm chalk@5.3.0`):
+
+```text
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and some bundlers.
+┌───────────────────┬──────────────────────────────┐
+│                    │ "chalk"                      │
+├───────────────────┼──────────────────────────────┤
+│ node10             │ 🟢                           │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS)  │ ⚠️ ESM (dynamic import only) │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM)  │ 🟢 (ESM)                     │
+├───────────────────┼──────────────────────────────┤
+│ bundler            │ 🟢                           │
+└───────────────────┴──────────────────────────────┘
+```
+
+No single command runs the whole ladder — the closest one command gets you is chaining the CI-relevant rungs: `tsc --noEmit --strict && eslint . && vitest run` covers 1, 2, and (if your suite includes `expectTypeOf`/`@ts-expect-error` tests) 3 and 4 in one line; rung 5 is a separate, occasional check you run before publishing, not on every commit.
+
+<Mermaid title="The verification ladder, and what each rung actually catches" code={ladderDiagram} />
+
+export const ladderDiagram = `flowchart TB
+  a["tsc --noEmit --strict"] -->|misses: any, as, !, wrong logic| b["typed eslint rules"]
+  b -->|misses: is the type itself right?| c["expectTypeOf / @ts-expect-error"]
+  c -->|misses: runtime behavior| d["runtime tests"]
+  d -->|misses: does a consumer's resolver see this?| e["@arethetypeswrong (publish time)"]`;
+
+## Mental Model
+
+`tsc` is one program doing two jobs, and every tool in this module exists to answer one of two questions about a piece of code: **is it checked, and by what?** A bundler answers neither — it deletes types without reading them. `tsc --noEmit --strict` answers "is the *shape* right?" but stops the moment a type says `any` or a cast says `as`. Typed `eslint` rules extend that same question to patterns the checker alone doesn't flag (a floating promise still type-checks as `Promise<void>`; nothing about that is a *type* error). Type-level tests answer a completely different question — not "does this code type-check" but "does this specific type equal the type I claim it equals" — which is the only tool in this list that can catch a utility type quietly returning the wrong thing while still being perfectly well-typed. None of these tools subsumes another; each one is checking something the others structurally cannot see.
+
+## Trade-offs
+
+| Tool | Catches | Misses | Cost |
+|---|---|---|---|
+| `tsc --noEmit --strict` | Implicit `any`, null/undefined misuse, shape mismatches | Deliberate `any`, `as`, `!`, wrong runtime logic | Seconds, in CI or on save |
+| Typed `typescript-eslint` | Floating promises, unsafe `any` flow, non-exhaustive switches, wrong import style | Whether the logic itself is correct | ~3× a syntax-only lint on this course's own timing, and a real setup cost (`projectService`, a working tsconfig) |
+| `expectTypeOf` / `@ts-expect-error` | A type resolving to the wrong thing, even when it's internally consistent | Everything about runtime behavior | Needs its own `tsc --noEmit` pass — a plain `vitest run` does not check it |
+| Runtime tests | Actual behavior, including what a lying `as`/`!`/type-predicate hides | Whether your `.d.ts` matches what a consumer's bundler actually resolves | Standard test-suite cost |
+| `@arethetypeswrong` | The exports-map/`.d.mts`/dual-package gap between what you shipped and what resolves | Everything upstream of publishing | Run occasionally, not per-commit |
+
+## Common Misconceptions
+
+- **"It type-checks" means the code is correct.** It means the *shapes* are consistent with each other. `any`, `as`, `!`, and a type predicate that lies (`function isString(x: unknown): x is string { return true; }`) all compile cleanly while asserting something the checker never verified.
+- **Type-aware ESLint rules and `tsc --noEmit` check the same thing, so you only need one.** They overlap on almost nothing: `tsc` flags shape mismatches; the lint rules flag *patterns* the checker structurally can't (a floating promise, an `any` that flows three calls deep) because those patterns still produce a perfectly valid type.
+- **A passing `expectTypeOf` test proves the type is correct at runtime, too.** It proves the type is correct *as a type* — `expectTypeOf` has zero runtime behavior, so `vitest run` alone will happily report "passed" on a test whose type-level assertion is actually wrong (verified above); only a real `tsc --noEmit` over that file catches it.
+- **If a package ships `.d.ts` files, its types are trustworthy for every consumer.** `@arethetypeswrong`'s real run above shows a widely-used, well-typed package (`chalk`) still has a resolution gap for one specific consumer shape (CJS `require`) — shipping declarations at all is necessary, not sufficient.
+
+## Reading AI-generated code
+
+Before trusting a generated diff because "it compiles," check which rungs of the ladder it actually passed:
+
+- Does the diff introduce `any`, `as`, or `!`? None of those are caught by `tsc --noEmit` alone — that's rung 1's known blind spot, not a bug in the checker.
+- Is there a new `async` function whose result is never awaited, stored, or explicitly discarded with `void`? `tsc` sees a valid `Promise<void>`; only a typed lint rule (`no-floating-promises`) sees the bug.
+- Did a new or changed utility type ship with no `expectTypeOf`/`@ts-expect-error` test? A utility type can be well-typed and simultaneously resolve to the wrong thing — the only way to know is to assert it, not to eyeball it.
+- Is `eslint.config.mjs` missing `parserOptions.projectService` (or an equivalent project list)? Without it, `typescript-eslint`'s type-aware rules silently fall back to syntax-only checking — no error, just quietly weaker linting.
+
+<SpotTheBug code={`function loadConfig(raw: string) {
+  return JSON.parse(raw);
+}
+
+async function readConfigFile(path: string) {
+  const raw = await import(path, { with: { type: "json" } });
+  return loadConfig(JSON.stringify(raw.default));
+}
+
+export function start() {
+  readConfigFile("./config.json");
+  console.log("started");
+}`}>
+This compiles with **zero errors** under `tsc --noEmit --strict` — every one of its blind spots is invisible to the checker alone. `loadConfig`'s return type is `any` (from `JSON.parse`), so it silently disables checking for everything downstream; `readConfigFile` is declared `async` but its result is never awaited, stored, or void-marked in `start()`, a floating promise that only a typed lint rule (`no-floating-promises`) catches; and if `readConfigFile` ever rejects (a missing file, invalid JSON), nothing observes it — the process keeps running past `console.log("started")` as if nothing happened. Running the ladder finds every one of these: `tsc --noEmit --strict` reports 0 problems, `eslint` with `no-floating-promises` and `no-explicit-any` reports 2, and only a runtime test that actually deletes `config.json` first would show the unhandled rejection.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-`tsc` does two separable jobs: **type-checking** and **emitting JavaScript**. Your `tsconfig.json` controls both, plus how modules resolve and how strict the checks are. Bundlers can emit far faster by skipping the check entirely — so the durable pattern is to bundle with one tool and type-check with `tsc` separately.
+`tsc` does two separable jobs: **type-checking** and **emitting JavaScript**. A bundler can emit fast because it never checks; `tsc --noEmit --strict` is the rung that actually catches implicit `any` and shape mismatches — but it structurally cannot see a deliberate `any`, an `as` cast, a floating promise, or a utility type that quietly resolves to the wrong thing. Typed `typescript-eslint` rules, type-level tests (`expectTypeOf`/`@ts-expect-error`), runtime tests, and `@arethetypeswrong` each close one of those gaps, at a real, measurable cost — treat "it compiles" as clearing the first rung of a five-rung ladder, not as proof the code is right.
 </Callout>
 
 export const quizIndex = [
@@ -54,6 +231,7 @@ export const quizIndex = [
       'Testing and deploying',
     ],
     answer: 1,
+    explain: 'tsc checks that your types are consistent (job 1) and, separately, can emit JavaScript (and .d.ts) files (job 2) -- many modern setups split these across two different tools.',
   },
   {
     q: 'Why can a bundler like esbuild emit JavaScript that does not type-check?',
@@ -64,6 +242,7 @@ export const quizIndex = [
       'It caches the last successful check',
     ],
     answer: 1,
+    explain: 'A single-file transpiler deletes type annotations syntactically -- it never builds a whole-program type model, so it has no way to notice a shape mismatch.',
   },
   {
     q: 'What is the recommended way to actually catch type errors when a bundler does the emit?',
@@ -74,6 +253,40 @@ export const quizIndex = [
       'Only check in production',
     ],
     answer: 1,
+    explain: '`tsc --noEmit` runs the real whole-program checker and produces no output -- exactly the "check" half of the two jobs, run independently of whatever tool does the emit.',
+  },
+  {
+    q: '```ts\nfunction double(items) {\n  return items.map((n) => n * 2);\n}\nconsole.log(double([1, 2, 3]));\n```\nUnder `strict`, what does `tsc --noEmit` report here, and why would a bundler stay silent?',
+    options: [
+      'Nothing -- this code is fine',
+      'TS7006 on `items` and `n` (implicit `any`) -- a bundler deletes annotations without ever inspecting a parameter\'s shape, so it has nothing to flag',
+      'A runtime error only, no compile-time diagnostic',
+      'An error only if `--target` is too low',
+    ],
+    answer: 1,
+    explain: 'noImplicitAny (part of strict) flags every parameter that would otherwise silently fall back to any. A bundler like esbuild strips types syntactically and never builds a type model at all, so it emits this file without complaint.',
+  },
+  {
+    q: 'A generated test file has `expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"user_id">()` (the type is actually `"userId"`). Running `vitest run` reports it as passed. Why?',
+    options: [
+      'Vitest secretly type-checks every file before running it',
+      '`expectTypeOf` has no runtime behavior at all -- a test runner that only executes JavaScript never evaluates the type-level assertion, so only a separate `tsc --noEmit` pass over the file catches the mismatch',
+      'The assertion is actually correct',
+      '`toEqualTypeOf` only checks that both are strings',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch: `vitest run` reports 1 passed on the wrong assertion, while `tsc --noEmit --strict` on the same file reports a real TS2344 whose message is generated from the mismatch ("Expected: ... Actual: ...") -- type-level tests only mean something when a compile step actually runs.',
+  },
+  {
+    q: 'Why does `@arethetypeswrong/cli --from-npm chalk@5.3.0` report a real warning even though chalk ships `.d.ts` files and is widely used?',
+    options: [
+      'chalk has no types at all',
+      'A `require()` call from a CommonJS consumer resolves to an ESM JavaScript file -- shipping declarations is necessary but not sufficient for every consumer shape to resolve correctly',
+      'The tool is reporting a false positive',
+      '`@arethetypeswrong` only works on TypeScript\'s own packages',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch against the real published package: the table shows 🟢 for node10, ESM node16, and bundler resolution, but a CJS `require()` under node16 hits a real CJSResolvesToESM warning -- a gap invisible to `tsc` and to typed eslint, since neither one simulates how a consumer\'s package.json actually resolves your exports.',
   },
 ];
 

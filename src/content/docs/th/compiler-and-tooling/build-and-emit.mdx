@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## check กับ emit เป็นงานของเครื่องมือคนละตัว
 
@@ -82,6 +84,33 @@ modifier ไหนก็ตามที่ใส่บน parameter — `public`
 
 จับคู่กับ `rewriteRelativeImportExtensions` แล้วคุณ develop กับไฟล์ `.ts` ตรง ๆ ได้ และยัง emit package `.js` สะอาด ๆ ด้วย `tsc` เพื่อ publish
 
+## ไฟล์เดียว สี่เครื่องมือ: แต่ละตัวทำอะไรกับ syntax ที่ไม่ erasable จริง ๆ
+
+"compile ผ่าน" ซ่อนความต่างจริงระหว่างเครื่องมือ การรันไฟล์เดียวกันเป๊ะ — `enum` กับ class ที่มี parameter property — ผ่าน `tsc`, `tsx`, `node --experimental-strip-types`, และ `esbuild` (ตรวจใน scratch แล้ว) ทำให้ความต่างเห็นชัดเจน:
+
+```ts
+enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point(1, 2);
+console.log(Color.Red, p.x, p.y);
+```
+
+| เครื่องมือ | ทำอะไร | ผลลัพธ์ |
+|---|---|---|
+| `tsc --noEmit --strict` | type-check เท่านั้น | 0 error — `enum` กับ parameter property เป็น TypeScript ที่ถูกต้องสมบูรณ์ |
+| `tsc` (emit จริง) | transpile โดยเข้าใจ syntax เต็มรูปแบบ | emit IIFE จริงสำหรับ enum และ `this.x = x; this.y = y;` จริงสำหรับ parameter property — รันได้ปกติ |
+| `tsx` | transpile ผ่าน esbuild แล้วรันทันที | รันได้ปกติ — พิมพ์ `0 1 2` |
+| `node --experimental-strip-types` | *strip* type annotation อย่างเดียว ไม่ transform อะไรเลย | `SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode` |
+| `esbuild` (transpile แบบ bundler) | transpile โดยเข้าใจ syntax เหมือน `tsc` | emit IIFE ที่เทียบเท่ากัน รันได้ปกติ |
+
+สี่เครื่องมือ สามผลลัพธ์ต่างกันจาก input เดียวกันเป๊ะ และ type checker เพียว ๆ แยกไม่ออกเลยสักตัว — `tsc --noEmit` บอก "ปกติดี" ไม่ว่าอีกสามตัวไหนจะรัน result นี้ได้จริงหรือเปล่า นี่คือสิ่งที่ `erasableSyntaxOnly` ปิดช่องว่าง: มันทำให้ checker เองปฏิเสธอะไรก็ตามที่มีแค่ `tsc`/`tsx`/`esbuild` แบบ *transformation* (ไม่ใช่การ strip เพียว ๆ) เท่านั้นที่จัดการได้ ดังนั้น check ที่ผ่านภายใต้ flag นั้นจึงทำนายได้จริงว่า stripper ของ Node จะยอมรับไฟล์นั้น
+
+decorator แยกสามเครื่องมือที่เหลือออกจากกันอีก class เดียวกันที่มี method decorator `@logged` ถูก transpile โดย `esbuild` ที่ setting **default** (target ประมาณ `esnext`) แล้วรันตรง ๆ ด้วย `node` เฉย ๆ พังด้วย `SyntaxError: Invalid or unexpected token` — decorator syntax ถูกส่งผ่านไปเฉย ๆ โดยไม่แตะ และ V8 ยัง parse มันตามธรรมชาติไม่ได้ `tsx` รัน source เดียวกันเป๊ะได้สำเร็จ เพราะมันตั้ง `--target` ของ esbuild ให้ต่ำพอที่จะบังคับให้ *lower* decorator แทนที่จะปล่อยผ่าน (ตรวจใน scratch แล้ว: `esbuild --target=es2022` บนไฟล์เดียวกันผลิต helper การ lowering จริง แม้จะยาว แล้วรันถูกต้อง) บทเรียนไม่ใช่ "esbuild พัง" — แต่คือ "transpile ด้วย esbuild" ไม่ใช่พฤติกรรมคงที่ตัวเดียว มันขึ้นกับ target ที่ผู้เรียกตั้งไว้ และ default ของ `tsx` กับการเรียก `esbuild` เปล่า ๆ ไม่ใช่เครื่องมือเดียวกันในทางปฏิบัติ
+
 ## isolatedModules: ทำให้ transpile ทีละไฟล์ปลอดภัย
 
 เพราะ bundler และ type-stripper ทำงาน **ทีละไฟล์** จึงมองไม่เห็น type จากไฟล์อื่น มี TypeScript construct ไม่กี่อย่างที่กำกวมภายใต้ single-file transpilation — ที่สำคัญที่สุดคือ การ re-export type ดูเหมือนกับการ re-export value เป๊ะ `isolatedModules: true` ทำให้ `tsc` flag อะไรก็ตามที่ single-file transpiler อาจทำพลาด เพื่อให้ code ของคุณเข้ากันได้กับ esbuild, swc และ stripper ของ Node
@@ -110,10 +139,18 @@ import { type User, save } from "./db"; // User erased, save kept
 `noEmit` คือ "check แต่ไม่ emit" ตั้งแต่ 5.6 มีภาพสะท้อนของมัน: **`noCheck`** คือ "emit แต่ไม่ check" — `tsc` รันเฉพาะ pass ระดับ syntax ที่ต้องใช้ผลิต output ตัวมันเองเป็นแค่ esbuild ที่ช้ากว่า แต่พอรวมกับ **`isolatedDeclarations`** (5.5) มันมีประโยชน์ขึ้นมา: ถ้าทุก export มี type ระบุชัด ไฟล์ `.d.ts` จะถูก generate ทีละไฟล์ได้โดยไม่ต้องใช้ checker ซึ่งแปลว่า declaration emit รันขนานกับ type-checking ได้ หรือให้ bundler plugin ทำทั้งหมดก็ได้
 
 ```ts
-// @skip-verify illustrative before/after pair — not meant to compile as one program
-// with isolatedDeclarations
-export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
-export function parse(input: string): unknown { return JSON.parse(input); } // ✅
+// @skip-verify needs --isolatedDeclarations, which this course's default check flags do not enable -- see prose for the real command and code
+export function parse(input: string) {
+  return JSON.parse(input);
+}
+```
+
+compile ด้วย `--isolatedDeclarations --declaration --noEmit` เพิ่มเข้าไปแล้ว จะได้ `error TS9013: Expression type can't be inferred with --isolatedDeclarations` (ตรวจใน scratch แล้ว — ไม่ใช่ `TS9007` ที่ดูเหมือนจะใช่แต่ผิดสำหรับกรณีนี้เป๊ะ — ตรวจ code จริงเสมอ อย่าเชื่อจากความจำ) การเพิ่ม return type ชัดเจนตามที่บทก่อนหน้าของคอร์สนี้แนะนำสำหรับ public API แก้ได้โดยไม่ต้องเปลี่ยนอะไรอื่นเลย:
+
+```ts
+export function parse(input: string): unknown {
+  return JSON.parse(input);
+}
 ```
 
 ราคาคือต้อง annotate public API ของคุณ — ซึ่งสำหรับ library คุณควรทำอยู่แล้ว
@@ -131,8 +168,86 @@ export function parse(input: string): unknown { return JSON.parse(input); } // �
 
 เมื่อเปิด `composite: true` `tsc --build` จะ check แต่ละโปรเจกต์ที่ reference ครั้งเดียว, cache ผลไว้ใน `.tsbuildinfo` (เขียนเสมอตั้งแต่ 5.6) และ recheck เฉพาะสิ่งที่เปลี่ยน ตั้งแต่ 5.6 การ build **เดินต่อแม้เจอ error** ในโปรเจกต์ upstream เพื่อให้คุณเห็นทุก failure ในการรันเดียว — ใส่ `--stopBuildOnErrors` ถ้าอยากได้พฤติกรรม fail-fast แบบเดิม — และ TypeScript 7 check โปรเจกต์ที่เป็นอิสระต่อกันพร้อมกันด้วย `--builders` วิธีนี้เปลี่ยนการ check แบบ O(ทั้ง repo) ให้เป็นแบบ incremental และขนาน
 
+การ build สองโปรเจกต์จริง (`app` ที่ reference `core` ตรวจใน scratch แล้ว) โชว์ทั้งการ cache และการ propagate error ผ่านสามครั้งของ `tsc -b app --verbose` เดียวกันเป๊ะ:
+
+```text
+$ tsc -b app --verbose          # 1) build สะอาด ยังไม่มี cache
+Project 'core/tsconfig.json' is out of date because output file 'core/tsconfig.tsbuildinfo' does not exist
+Building project 'core/tsconfig.json'...
+Project 'app/tsconfig.json' is out of date because output file 'app/tsconfig.tsbuildinfo' does not exist
+Building project 'app/tsconfig.json'...
+
+$ tsc -b app --verbose          # 2) รันซ้ำทันที ไม่มีอะไรเปลี่ยน
+Project 'core/tsconfig.json' is up to date because newest input 'core/src/index.ts' is older than output 'core/tsconfig.tsbuildinfo'
+Project 'app/tsconfig.json' is up to date because newest input 'app/src/index.ts' is older than output 'app/dist/index.js'
+
+$ tsc -b app --verbose          # 3) หลังใส่ type error จริงใน core/src/index.ts
+Project 'core/tsconfig.json' is out of date because output 'core/tsconfig.tsbuildinfo' is older than input 'core/src/index.ts'
+Building project 'core/tsconfig.json'...
+core/src/index.ts(2,3): error TS2322: Type 'number' is not assignable to type 'string'.
+Project 'app/tsconfig.json' is out of date because output 'app/dist/index.js' is older than input 'core'
+Building project 'app/tsconfig.json'...
+```
+
+การรันที่ 2 ไม่ rebuild อะไรเลย — ทุกโปรเจกต์รายงาน "up to date" จาก timestamp ของ `.tsbuildinfo` เพียว ๆ การรันที่ 3 คือพฤติกรรม default "เดินต่อแม้เจอ error" ตัวจริง: `core` พัง แต่ `tsc -b` ยังพยายาม build `app` ต่อไป (ใช้ output ล่าสุดที่ดีของ `core`) แทนที่จะหยุด — นั่นคือสิ่งที่ทำให้ทุก failure downstream โผล่มาในรอบเดียวบน monorepo จริง แทนที่จะทำทีละโปรเจกต์คนละรอบ การใส่ `--stopBuildOnErrors` เข้าไปใน state ที่พังเดียวกันนั้นเปลี่ยนผลลัพธ์: `core` ยังพังเหมือนเดิมเป๊ะ แต่ `app` ถูกรายงานชัดเจนว่า **ถูกข้าม** ("`app/tsconfig.json` can't be built because its dependency 'core' has errors") แทนที่จะพยายาม build — พฤติกรรม fail-fast แบบเดิม มีประโยชน์เมื่อการพยายาม build downstream กับ output ที่รู้อยู่แล้วว่าพัง จะแค่เป็น noise เฉย ๆ
+
+<TSPlayground code={erasableCleanCode} id="compiler-tooling-build-erasable-clean" title="strict เพียว ๆ: checker ปฏิเสธอันนี้เองไหม?" />
+
+export const erasableCleanCode = `enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point(1, 2);
+console.log(Color.Red, p.x, p.y);`;
+
+กด **Check types** — `strict` (เปิดอยู่เสมอที่นี่) รายงาน **0 error** `enum` กับ parameter property เป็น TypeScript ที่ถูกต้องสมบูรณ์ตามปกติ ไม่มีอะไรใน `strict` สนใจเลยว่า runtime จะรัน result ได้โดยไม่ต้องแก้ไหม นี่คือช่องว่างเป๊ะที่ `erasableSyntaxOnly` ปิด — หลักฐานที่ตรวจด้วย CLI ของคอร์สนี้เองข้างบนแสดงว่าไฟล์เดียวกันเป๊ะถูกปฏิเสธตรง ๆ (`TS1294`) ทันทีที่ flag นั้นเปิด และถูกปฏิเสธอีกครั้งโดย `node --experimental-strip-types` ไม่ว่าจะมี flag อะไรเลย check ที่ผ่านสะอาดใน widget *นี้* พิสูจน์แค่ว่า syntax ถูกต้องตามกฎหมาย มันไม่ได้บอกอะไรเลยว่าไฟล์ที่คุณกำลังจะรันด้วย runtime แบบ type-stripping จะรันได้จริงไหม
+
+## Mental Model
+
+ทุกเครื่องมือในบทนี้อยู่บนแกนเดียวกัน: มันเข้าใจ TypeScript syntax ดีพอที่จะ *transform* มันไหม หรือรู้แค่วิธี *ลบ* type annotation ทิ้ง? `tsc`, `tsx`, และ `esbuild` (ที่ตั้งค่าถูกต้อง) คือ transformer — มันเปลี่ยน `enum` ให้เป็น object จริง, parameter property ให้เป็น assignment จริง, decorator ให้เป็น helper call จริงได้ `--experimental-strip-types` ของ Node คือ deleter — มันลบเฉพาะ token ที่เป็น syntax ของ *type* และปฏิเสธที่จะแตะอะไรอื่นเลย ซึ่งเป็นเหตุผลเป๊ะที่ `enum` กับ parameter property (construct ที่มีอยู่จริงตอน runtime แต่สวม syntax ของ TypeScript) ถูกปฏิเสธแทนที่จะถูก transform `erasableSyntaxOnly` คือ checker ยืมกฎของ deleter มาใช้เอง เพื่อให้ "ผ่าน check" กับ "stripper จะยอมรับไฟล์นี้" กลายเป็นข้อเรียกร้องเดียวกัน แทนที่จะเป็นสองเรื่องที่ไม่เกี่ยวกัน project references ใช้คำถาม checked/not-checked แบบเดียวกันในระดับ build graph ทั้งหมด: "up to date" ของ `tsc -b` คือข้อเรียกร้องจริงว่ายังต้อง check อะไรอีก หนุนหลังด้วย `.tsbuildinfo` ไม่ใช่การเดา
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ข้อดี | ต้นทุน |
+|---|---|---|
+| emit ด้วย `tsc` | transform ทุก construct ถูกต้อง รวมถึง decorator กับ enum | ช้ากว่า single-file transpiler บน codebase ใหญ่ถ้าไม่มี `--checkers`/project references |
+| `tsx` / `esbuild` (ตั้งค่าให้รองรับ) | transpile เร็ว ทีละไฟล์ lower decorator/enum ได้จริงถ้า target ต่ำพอ | target *default* ของ bundler อาจไม่ lower ทุกอย่าง — ตรวจแล้วข้างบน `esbuild` เปล่า ๆ ทิ้ง decorator ที่พังตอน runtime ไว้ จนใส่ `--target=es2022` ชัดเจน |
+| `node --experimental-strip-types` | ไม่มี build step เลยสำหรับ code ที่เข้ากันได้ | ปฏิเสธ TypeScript ที่ถูกต้องและใช้งานได้ทั้ง category (`enum`, parameter property, `namespace` ที่มี code) ตรง ๆ |
+| `erasableSyntaxOnly` | ทำให้ "type-check ผ่าน" กับ "stripper จะรันได้" เป็นการันตีเดียวกัน | บังคับให้เขียน construct ใหม่ที่จริง ๆ เป็น TypeScript ที่ดีอยู่แล้ว เพียงเพื่อความเข้ากันได้กับ stripper |
+| `tsc --build` + project references | check แบบ incremental และขนานจริงข้าม monorepo error โผล่ในรอบเดียวโดย default | ต้องใส่ `--stopBuildOnErrors` ชัดเจนเพื่อคืน fail-fast; ถ้าไม่ใส่ error ของ upstream ที่พังกับโปรเจกต์ downstream ที่ถูกข้ามจะโผล่มาด้วยกัน ต้องอ่านให้ละเอียด |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"type-check ผ่าน" แปลว่าเครื่องมือไหนก็รัน JavaScript ที่ได้** ตารางที่ตรวจแล้วข้างบนแสดงสี่เครื่องมือที่ไม่เห็นตรงกันบน input เดียวกันเป๊ะ: `tsc --noEmit` บอก "ปกติดี" สำหรับ `enum` กับ parameter property แต่ `node --experimental-strip-types` ปฏิเสธไม่รันไฟล์เดียวกันเป๊ะ type-checking กับ runtime-runnability เป็นคำถามคนละเรื่อง เว้นแต่ `erasableSyntaxOnly` จะผูกมันเข้าด้วยกัน
+- **`esbuild` transpile TypeScript decorator ถูกต้อง เพราะมัน "รองรับ TypeScript"** แค่ที่ `--target` ต่ำพอเท่านั้น ที่ default ของ esbuild เอง scratch test ของคอร์สนี้ทิ้ง decorator syntax ไว้โดยไม่แตะเลย ทำให้เกิด runtime `SyntaxError` — "esbuild รองรับ X" มักแปลว่า "esbuild รองรับ X *ที่ target ที่คุณตั้งไว้*" ไม่ใช่แบบไม่มีเงื่อนไข
+- **`tsc -b` ที่รายงาน error ในโปรเจกต์ upstream จะหยุดตรงนั้น** โดย default ไม่หยุด — มันเดินต่อเข้าไปในโปรเจกต์ที่ depend อยู่ ใช้ build ล่าสุดที่ดีของมัน ทำให้ทุก failure ข้ามทั้ง graph โผล่มาในรอบเดียว `--stopBuildOnErrors` คืนพฤติกรรม fail-fast แบบเดิม; ถ้าไม่ใส่ "app" ยังถูกพยายาม build แม้ "core" (dependency ของมัน) เพิ่งพังไป
+- **error ของ `isolatedDeclarations` เป็นเรื่อง type ที่หายไปทั่วไป** จริง ๆ มันเจาะจงเรื่อง return/property type ที่ *infer* มา ที่ checker สร้างใหม่ไม่ได้โดยไม่รัน inference เต็มรูปแบบ — ตรวจแล้วข้างบน code จริงคือ `TS9013` ("Expression type can't be inferred") ไม่ใช่ code ที่ดูเหมือนจะทั่วไปกว่าที่เดาง่าย
+
+## อ่านโค้ดที่ AI เขียน
+
+- code ที่ generate มาเพิ่ม `enum`, `namespace` ที่มี logic จริง, หรือ parameter property ใน codebase ที่ตั้งใจให้รันภายใต้ `--experimental-strip-types` ของ Node หรือเครื่องมือแบบ strip-only ไหม? `tsc --noEmit` เพียว ๆ จะไม่เตือนเรื่องนี้เลย — มีแค่ `erasableSyntaxOnly` (หรือลองรันไฟล์จริงกับ stripper เป้าหมาย) เท่านั้นที่จับได้
+- มีการเพิ่ม decorator ในไฟล์ พร้อมสมมติว่า build step ที่เปลี่ยนจะ "ทำงานได้เลย" เพราะ "bundler จัดการ TypeScript ให้"? ตรวจว่า target ที่ตั้งไว้ของ bundler จริง ๆ lower decorator หรือเปล่า — target แบบ `esnext`-ish default มักไม่ทำ และความพังจะโผล่แค่ตอน runtime ไม่ใช่ตอน build
+- CI step ของ `tsc -b` ที่ generate มา ถือว่า exit code ที่ไม่ใช่ศูนย์คือ "ทุกอย่างพัง" ทั้งที่ log จริงแสดง error จริงของโปรเจกต์เดียว กับโปรเจกต์อื่นที่แค่ถูกข้ามหรือ rebuild จาก output upstream ที่เก่าไหม? อ่านให้เห็นว่าโปรเจกต์ไหนรายงาน `error TSxxxx` จริง ก่อนจะสรุปว่าทั้ง graph พังเท่ากัน
+- ฟังก์ชันที่ตั้งใจ ship เป็น public API ของ library ถูกปล่อยไว้ไม่มี return type ชัดเจน ในโปรเจกต์ที่เปิด `isolatedDeclarations` เพื่อ emit `.d.ts` แบบขนานเร็ว ๆ ไหม? ช่องว่างนั้นเจาะจงคือสิ่งที่ `TS9013` มีไว้จับ — ตรวจ code จริงก่อนจะอธิบายวิธีแก้ใน review comment
+
+<SpotTheBug code={`export function createLogger(prefix: string) {
+  return {
+    info: (msg: string) => console.log(\`[\${prefix}] \${msg}\`),
+    error: (msg: string) => console.error(\`[\${prefix}] ERROR: \${msg}\`),
+  };
+}
+
+export const enum Level {
+  Info,
+  Error,
+}`}>
+สองปัญหาแยกกัน และ `tsc --noEmit --strict` รายงาน **0 error** ทั้งคู่ อย่างแรก `createLogger` ไม่มี return type ชัดเจน — ภายใต้ `strict` เพียว ๆ ไม่มีปัญหา (checker infer ให้) แต่ทันทีที่ library นี้เปิด `isolatedDeclarations` เพื่อ emit `.d.ts` แบบขนานเร็ว ๆ shape นี้เป๊ะจะพังด้วย `TS9013` เพราะ return type ที่ infer มาเป็น object literal ที่ checker ต้อง evaluate เต็มรูปแบบ ไม่ใช่แค่อ่านจาก syntax อย่างที่สอง `const enum` เข้มงวดกว่า `enum` ธรรมดาอีก: มันถูก inline เต็มที่ทุกจุดที่ใช้ภายใน program เดียวกัน ซึ่งแปลว่า `const enum` ที่ export ข้าม package boundary อาจ stale เงียบ ๆ ได้ถ้า consumer กับ library ถูก compile แยกกัน (การ generate `.d.ts` แบบแยก, incremental build) — และมันถูกปฏิเสธตรง ๆ ภายใต้ `erasableSyntaxOnly` เหมือน `enum` ธรรมดาเป๊ะ เพราะจากมุมมองของ runtime มันยังเป็น syntax ที่ไม่ erasable อยู่ดี การ review library code ที่ generate มาต้องตรวจทั้งสองอย่าง: ทุก export มี type ชัดเจนสำหรับ `isolatedDeclarations` ไหม และ `enum`/`const enum` ตัวไหนต้องกลายเป็น object แบบ `as const` แทน สำหรับโปรเจกต์ที่รันภายใต้ stripper
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-ให้ bundler emit และให้ `tsc` check — และด้วย native compiler แบบขนานของ TypeScript 7 (`--checkers`, `--builders`, native watcher) การ check เร็วกว่าปีที่แล้ว 8–12 เท่า รัน `.ts` ตรง ๆ ใน Node ได้โดยยึด syntax ที่ erase ได้ (`erasableSyntaxOnly`), รักษาความปลอดภัยแบบ single-file ด้วย `isolatedModules` และ `verbatimModuleSyntax`, ใช้ `noCheck` + `isolatedDeclarations` เมื่ออยากได้ declaration โดยไม่ผ่าน checker และใช้ project references ให้ `tsc --build` เป็น incremental ใน monorepo 7.0 ไม่มี programmatic API — เครื่องมือที่ต้องใช้ให้ใช้ `@typescript/typescript6` จนกว่า 7.1 จะมา
+ให้ bundler emit และให้ `tsc` check — และด้วย native compiler แบบขนานของ TypeScript 7 (`--checkers`, `--builders`, native watcher) การ check เร็วกว่าปีที่แล้ว 8–12 เท่า "type-check ผ่าน" กับ "runtime ตัวหนึ่งรันได้" เป็นข้อเรียกร้องคนละเรื่อง: ไฟล์ `enum` + parameter property เดียวกันที่ตรวจในบทนี้ type-check ผ่านสะอาดทุกที่ แต่ถูก `node --experimental-strip-types` ปฏิเสธตรง ๆ และแม้แต่ "transpile ด้วย esbuild" ก็ขึ้นกับ target ที่คุณตั้งไว้ ไม่ใช่การันตีคงที่ `erasableSyntaxOnly` คือสิ่งที่ทำให้สองข้อเรียกร้องนั้นกลับมาเป็นเรื่องเดียวกัน รักษาความปลอดภัยแบบ single-file ด้วย `isolatedModules` และ `verbatimModuleSyntax`, ใช้ `noCheck` + `isolatedDeclarations` (code จริง: `TS9013` สำหรับ export ที่ infer ไม่ได้) เมื่ออยากได้ declaration โดยไม่ผ่าน checker และใช้ project references ให้ `tsc --build` เป็น incremental และขนาน — จำไว้ว่ามันเดินต่อแม้เจอ error ของ upstream โดย default ทำให้ทุก failure โผล่มาในรอบเดียว เว้นแต่ `--stopBuildOnErrors` จะคืนพฤติกรรม fail-fast แบบเดิม 7.0 ไม่มี programmatic API — เครื่องมือที่ต้องใช้ให้ใช้ `@typescript/typescript6` จนกว่า 7.1 จะมา
 </Callout>
 
 export const quizBuild = [
@@ -145,6 +260,7 @@ export const quizBuild = [
       'runtime',
     ],
     answer: 1,
+    explain: 'single-file transpiler ลบ type ทิ้งโดยไม่ check เลย มีแค่ tsc เท่านั้นที่สร้าง type model ของทั้งโปรแกรมที่จำเป็นในการจับ mismatch จริง',
   },
   {
     q: 'สิ่งหลักที่ TypeScript 7 เปลี่ยนเกี่ยวกับ `tsc` คืออะไร?',
@@ -155,6 +271,7 @@ export const quizBuild = [
       'ไม่ต้องใช้ tsconfig.json อีกต่อไป',
     ],
     answer: 1,
+    explain: 'diagnostic เดิม, tsconfig.json เดิม, ชื่อ binary tsc เดิม -- ความต่างคือ implementation แบบ native และขนานข้างใต้',
   },
   {
     q: 'lint plugin ตัวหนึ่งทำ `import ts from "typescript"` แล้วพังหลัง upgrade เป็น TypeScript 7 เพราะอะไร?',
@@ -165,6 +282,7 @@ export const quizBuild = [
       'lint plugin ไม่ได้รับอนุญาตอีกต่อไป',
     ],
     answer: 1,
+    explain: 'เครื่องมือที่ต้องการ programmatic compiler API (typescript-eslint, Volar) ติดตั้ง typescript@6 คู่กับ typescript@7 จนกว่า API ของ 7.1 จะ ship',
   },
   {
     q: 'ทำไม `erasableSyntaxOnly` ถึงปฏิเสธ `enum` และ parameter property ใน constructor?',
@@ -175,6 +293,7 @@ export const quizBuild = [
       'ทำให้ `isolatedModules` พัง',
     ],
     answer: 1,
+    explain: 'ทั้งคู่ compile ผ่านศูนย์ error ภายใต้ strict เพียว ๆ -- erasableSyntaxOnly เจาะจงปฏิเสธ syntax ที่ต้อง transform จริง ไม่ใช่แค่ลบทิ้ง',
   },
   {
     q: '`import type { User }` การันตีอะไร?',
@@ -185,6 +304,29 @@ export const quizBuild = [
       'ว่า User ถูก validate ตอน runtime',
     ],
     answer: 1,
+    explain: 'type-only import การันตี erasure แน่นอน -- มันไม่มีทางแอบสร้าง runtime module dependency จริงจากสิ่งที่ตั้งใจให้เป็นแค่ความสัมพันธ์ระดับ type ตอน compile-time',
+  },
+  {
+    q: '```ts\nenum Color { Red, Green }\n\nclass Point {\n  constructor(public x: number, public y: number) {}\n}\n```\nตรวจข้ามสี่เครื่องมือแล้ว ตัวไหนปฏิเสธไฟล์นี้ตรง ๆ และทำไมตัวอื่นถึงจับปัญหาเดียวกันไม่ได้?',
+    options: [
+      'tsc --noEmit -- มันไม่เคยอนุญาต enum เลย',
+      '`node --experimental-strip-types` -- มันแค่ลบ type annotation ทิ้ง transform enum ให้เป็น object จริงหรือ parameter property ให้เป็น assignment จริงไม่ได้ ต่างจาก tsc/tsx/esbuild ที่เข้าใจ syntax พอจะ transform ได้',
+      'esbuild -- ไม่รองรับ TypeScript เลย',
+      'tsx -- ต้องมี tsconfig.json ถึงจะรันได้',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch แล้ว: tsc --noEmit รายงาน 0 error, tsc/tsx/esbuild transform และรันไฟล์ได้สำเร็จทั้งหมด แต่ node --experimental-strip-types พังด้วย ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX -- มันคือ deleter เพียว ๆ ไม่ใช่ transformer เลยปฏิเสธอะไรก็ตามที่ต้องการ code ที่ emit จริง',
+  },
+  {
+    q: 'build สองโปรเจกต์ `tsc -b app` มี type error จริงใน `core` (dependency ของ `app`) โดย default `app` จะเกิดอะไรขึ้นในการรันเดียวกันนั้น?',
+    options: [
+      'ทั้ง build หยุดทันทีที่ core',
+      '`tsc -b` ยังพยายาม build `app` ต่อไป (ใช้ output ล่าสุดที่ดีของ core) ทำให้ทุก failure ทั่ว graph โผล่มาในรอบเดียว -- ต้องใส่ `--stopBuildOnErrors` เพื่อคืนพฤติกรรม fail-fast แบบเดิม',
+      '`app` สำเร็จเงียบ ๆ โดยไม่มี warning',
+      'project references ปิดการรายงาน error ไปเลยทั้งหมด',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch ด้วย build สองโปรเจกต์จริงแล้ว: core รายงาน TS2322 ของมัน และ app ยังถูก build ต่อโดย default; การใส่ --stopBuildOnErrors แทนที่จะรายงาน app ว่าถูกข้ามชัดเจนเพราะ dependency ของมันมี error',
   },
 ];
 

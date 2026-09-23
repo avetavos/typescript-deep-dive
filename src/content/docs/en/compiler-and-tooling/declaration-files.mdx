@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Types without implementation
 
@@ -45,6 +47,8 @@ declare module "legacy-lib" {
 
 Now `import { parse } from "legacy-lib"` is fully typed, even though the library ships plain JavaScript. You have supplied the missing contract by hand.
 
+A real gotcha worth knowing before you hit it: `declare module "x" { ... }` only introduces a *fresh* ambient module when it appears in a script-scope file (no top-level `import`/`export` anywhere in that file) or a dedicated `.d.ts`. The moment the same file also has a real `import`/`export`, it becomes a *module*, and TypeScript reinterprets `declare module "legacy-lib" { ... }` as **augmenting** an existing module named `"legacy-lib"` rather than declaring a new one — which fails with `TS2664: Invalid module name in augmentation, module 'legacy-lib' cannot be found` (verified in scratch) if no real `"legacy-lib"` module exists to augment. This is exactly why library shims like the one above conventionally live in their own `.d.ts` file: putting one in the same file as your application's regular imports silently changes what the same syntax means.
+
 ## DefinitelyTyped and `@types`
 
 Most of the time, someone has already written those declarations for you. **DefinitelyTyped** is a huge community repository of `.d.ts` files for thousands of JavaScript libraries, published under the `@types/*` scope:
@@ -63,11 +67,76 @@ Packages that contribute **globals** rather than modules — `@types/node` for `
 
 (`"types": ["*"]` restores the old load-everything behaviour.) The change stops a project from silently pulling in hundreds of unrelated `@types/*` packages from transitive dependencies, which was both slow and a source of "duplicate global" errors.
 
+### Reading a real `.d.ts`, and where it came from with no `"types"` field at all
+
+`escape-string-regexp` (a small, real, widely-used package sitting in this course repo's own `node_modules`) is a good one to read end to end, because its whole public surface is 16 lines:
+
+```ts
+// @skip-verify a real node_modules/escape-string-regexp/index.d.ts, quoted for reading, not for compiling standalone
+// (its JSDoc @example is normally its own fenced code block; shown here unfenced to avoid nesting ``` inside ```)
+/**
+Escape RegExp special characters.
+
+You can also use this to escape a string that is inserted into the middle of a regex, for example, into a character class.
+
+@example
+  import escapeStringRegexp from 'escape-string-regexp';
+
+  const escapedString = escapeStringRegexp('How much $ for a 🦄?');
+  //=> 'How much \\$ for a 🦄\\?'
+
+  new RegExp(escapedString);
+*/
+export default function escapeStringRegexp(string: string): string;
+```
+
+Ten things worth noticing: (1) a `/** */` JSDoc block above a declaration shows up as editor hover documentation, exactly like a doc comment on your own code; (2) `@example` renders as a runnable-looking snippet in hover tooltips in most editors; (3) `export default` here declares the shape of a *value* the runtime provides, not a real function body — there is no `{ ... }` after the signature; (4) the parameter `string: string` — a parameter *named* `string` shadowing the type `string` in its own annotation is legal, since parameter names and type names live in separate namespaces; (5) the return type `string` is written explicitly, exactly the discipline `isolatedDeclarations` requires; (6) this file has no imports and no other declarations — a `.d.ts` with a single default export is the minimal, complete shape for a single-function package; (7) this package's `package.json` has **no `"types"` field at all** — no `"types": "./index.d.ts"` anywhere; (8) it does have `"exports": "./index.js"`, pointing at the JS entry; (9) because there's no explicit `"types"` field or `exports` `"types"` condition, `tsc` falls back to its implicit rule — look for a `.d.ts` file with the same base name next to the resolved JS file, and `index.d.ts` sitting beside `index.js` satisfies that automatically; (10) the package's own `"scripts": { "test": "xo && ava && tsd" }` runs `tsd` — the exact type-testing tool this module's index lesson describes — against this very file, which is why the types can be trusted without a human re-verifying them by hand.
+
 ## lib files, and replacing them
 
 The built-in `.d.ts` files for the platform — `lib.es2025.d.ts`, `lib.dom.d.ts` — are selected by `target` and `lib`. Two recent changes: `lib.dom.d.ts` now contains everything that used to be split into `dom.iterable` and `dom.asynciterable` (those entries are empty stubs kept for old configs), and the DOM declarations carry MDN summaries so hover shows a one-line description of each API.
 
 If the bundled `lib.dom` is wrong for you — too old, or you want the `@types/web` types — `libReplacement: true` (5.8) makes `tsc` look for an `@typescript/lib-dom` package in `node_modules` and use it instead. It is off by default since 6.0 because most projects never need it and the lookup costs time.
+
+## `/// <reference types>` is a per-file escape hatch around `types: []`
+
+The `types` compiler option controls what's auto-loaded for the **whole program**. A single triple-slash directive at the top of one file is a separate, per-file mechanism that works even when `types` is `[]` for everything else:
+
+```ts
+// @skip-verify multi-file example -- this course's own repo has @types/node installed; a bare scratch dir does not, so this is shown as prose-verified rather than run through the standard harness
+/// <reference types="node" />
+console.log(process.platform); // pulled in by the directive above, even with "types": [] project-wide
+```
+
+Verified in scratch: with `"types": []` set explicitly (so nothing loads automatically) and `@types/node` installed, a file with no `/// <reference types="node" />` directive fails on `process` with `TS2591` ("Cannot find name 'process'... Do you need to install type definitions for node?"); the identical file *with* that one directive compiles cleanly, in the same program, with the same tsconfig. `types` is the blunt, whole-project switch; `/// <reference types="...">` is the scalpel for the one file that genuinely needs a global the rest of the program doesn't.
+
+## `skipLibCheck`: a real trade-off, not just a speed switch
+
+`skipLibCheck` skips type-checking inside `.d.ts` files — including ones your own dependencies ship, not just the built-in `lib.*.d.ts` files. That's a real trade-off, not a free lunch, and it's easy to prove: a dependency with a genuine bug in its own `.d.ts` — two conflicting declarations of the same property — compiles as an error without `skipLibCheck`, and silently merges to one arbitrary type with it on (verified in scratch, a real two-property-declaration conflict in a `node_modules` package):
+
+```text
+$ tsc --noEmit --strict                          # skipLibCheck off (default false)
+node_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must
+have the same type. Property 'retries' must be of type 'number', but here has type 'string'.
+
+$ tsc --noEmit --strict --skipLibCheck           # skipLibCheck on
+                                                  # (zero output -- the conflict is silently accepted)
+```
+
+`skipLibCheck` is on by default in every config this course has shown so far (`tsc --init`'s own output includes it), and for good reason — checking every dependency's declaration files on every build is real, wasted work when you trust the ecosystem's types are basically sound. But "basically sound" is doing real work in that sentence: the flag doesn't just skip *slow* checking, it skips checking that can catch a genuine bug shipped in a library's own types, exactly like the one reproduced above.
+
+<TSPlayground code={ambientDeclareCode} id="compiler-tooling-declaration-ambient" title="declare is a type-only promise -- reassigning a declare const is still a real error" />
+
+export const ambientDeclareCode = `declare const APP_VERSION: string;
+declare function gtag(...args: unknown[]): void;
+
+console.log(APP_VERSION.toUpperCase());
+gtag("event", "page_view");
+
+// @ts-expect-error -- declare is a type-only promise; assigning to it is still a real error
+APP_VERSION = "2.0";`;
+
+Click **Check types**: zero errors, which is the interesting result here, not a bug. `declare const` promises the checker that `APP_VERSION` exists at runtime as a `string` — it says nothing about *how*, which is exactly the point of an ambient declaration (a bundler define, an injected global, whatever supplies it in practice). The `@ts-expect-error` line consumes the one real error this file does have (reassigning a `const`), so a clean run here means both things are true at once: the ambient promise is honored everywhere it's used, and the compiler still enforces the ordinary rules (`const` can't be reassigned) on top of it.
 
 ## Emitting your own declarations
 
@@ -103,8 +172,44 @@ export const config2 = {
 
 so consumers see the real shape instead of a bare index signature.
 
+## Mental Model
+
+Every mechanism in this lesson answers the same question at a different scope: **where does the compiler get types for code it did not itself compile, and how wide is that promise?** `declare` makes a promise about one name. `declare module "x" { ... }` makes one about a whole module — but only when the file it's in isn't already a module itself, otherwise the exact same syntax means something else entirely (augmentation). `types` makes a promise about every file in the program at once; `/// <reference types="...">` narrows that same promise back down to one file. `skipLibCheck` is a promise in the other direction — not "trust this shape exists" but "trust this shape is *correct* without re-verifying it" — which is why, unlike the others, it can let a real bug through instead of just filling a gap.
+
+## Trade-offs
+
+| Mechanism | Scope | Benefit | Cost |
+|---|---|---|---|
+| `declare const`/`declare function` | One name | Types a global with zero runtime code | No enforcement that the real value matches — purely a promise |
+| `declare module "x" { ... }` in a dedicated `.d.ts` | One module | Types an untyped dependency fully | Only works as a fresh declaration outside module-scope files — the same syntax means "augment" inside one |
+| `types: [...]` | Whole program | One place to control every auto-loaded global package | All-or-nothing per package; can't opt one file out |
+| `/// <reference types="...">` | One file | Precise, file-scoped opt-in, works even with `types: []` | Easy to forget, and invisible to anyone not reading that file's top |
+| `skipLibCheck` | Every `.d.ts` in the program | Real, meaningful speed-up; the default for good reason | Can hide a genuine bug shipped in a dependency's own types, not just save time |
+
+## Common Misconceptions
+
+- **`declare module "x" { ... }` always creates a fresh ambient module.** Only in a script-scope file (no top-level `import`/`export`) or a real `.d.ts`. The identical syntax in a file that already has real imports/exports is treated as *augmenting* an existing module named `"x"` — and fails with `TS2664` if no such module exists to augment.
+- **`types` and `/// <reference types="...">` do the same job at different syntax.** `types` is a whole-program setting; the triple-slash directive is scoped to the one file it's written in, and works precisely because it's independent of the project-wide setting — it still pulls in a package's types even when `types: []` would otherwise load nothing.
+- **`skipLibCheck` only skips checking slow, irrelevant `.d.ts` files (the built-in `lib` files).** It skips checking **every** `.d.ts` file, including ones a real dependency ships with a real bug in them — proven above with a genuine `TS2717` that only appears with the flag off.
+- **A `.d.ts` with no `"types"` field in its `package.json` has no types at all.** `escape-string-regexp` (read end to end above) ships real types with no `"types"` field whatsoever — `tsc` finds `index.d.ts` next to `index.js` through an implicit sibling-file rule, no explicit field required.
+
+## Reading AI-generated code
+
+- Does a generated shim put `declare module "some-lib" { ... }` in the same file as the application code that imports it (which already has other `import`/`export` statements)? That's the `TS2664` trap from this lesson — the shim belongs in its own `.d.ts`.
+- Does a generated `tsconfig.json` add `"skipLibCheck": true` without anyone checking whether a real dependency's declaration files have a real problem it's now hiding? It's the right default for most projects, but "add it because a `.d.ts` error appeared" without reading *what* the error was can hide the exact kind of bug this lesson reproduced.
+- Does generated code add a `/// <reference types="...">` directive to "fix" a missing global, when the real fix is adding the package to the project-wide `types` array because every file needs it? A one-off directive for a genuinely one-off file is fine; scattering the same directive across many files is a sign `types` should just include it.
+- Is a described "the library has no types" claim actually checked against the real `package.json` — a missing `@types/*` package doesn't mean untyped if the library ships its own via an implicit sibling `.d.ts`, exactly like the real example read in this lesson?
+
+<SpotTheBug lang="json" code={`{
+  "name": "internal-metrics-client",
+  "type": "module",
+  "main": "./dist/index.js"
+}`}>
+This `package.json` has no `"types"` field, no `"exports"` field, and no sibling `.d.ts` next to `dist/index.js` (assume the build only emits `.js`). A consumer importing this package gets `TS7016: Could not find a declaration file for module 'internal-metrics-client'` — and the tempting "fix," reached for reflexively, is `skipLibCheck` or a blanket `// @ts-ignore` on the import, neither of which addresses the real problem: this package genuinely ships no types anywhere. The real fixes are one of (a) the library turning on `"declaration": true` and pointing `"types"` at the emitted `.d.ts`, (b) a consumer-side `declare module "internal-metrics-client"` shim in its own `.d.ts` file (not mixed into a file with real imports, per this lesson's `TS2664` gotcha), or (c) checking DefinitelyTyped for a community `@types/internal-metrics-client` package, which won't exist for an internal package. Reviewing this means recognizing `TS7016` as "no types were found," not "the types are wrong," and picking the fix that matches which side of the boundary — publisher or consumer — actually owns the problem.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package). Most libraries are covered either by types shipped in the package or by community `@types/*` packages from DefinitelyTyped — found automatically for imports, but since TypeScript 6.0 global packages like `@types/node` must be listed in `types`. When you publish a library, set `declaration: true` (and consider `isolatedDeclarations`) so your consumers get types too.
+A `.d.ts` is types with no runtime code; `declare` introduces such ambient declarations (globals, or a `declare module` for an untyped package) — but the same `declare module "x" { ... }` syntax means something different (augmentation, `TS2664` if nothing to augment) the moment its file already has real imports/exports, so a shim belongs in its own `.d.ts`. Most libraries are covered either by types shipped in the package — sometimes via nothing more than an implicit sibling `.d.ts` file, no `"types"` field required, as this lesson read end to end — or by community `@types/*` packages from DefinitelyTyped, found automatically for imports; global packages like `@types/node` need `types` set project-wide, or `/// <reference types="...">` for just one file. `skipLibCheck` is on by default for real speed, but it's a real trade-off: it skips checking every `.d.ts` in the program, including a genuine bug shipped in a dependency's own types, not just the slow built-in ones. When you publish a library, set `declaration: true` (and consider `isolatedDeclarations`) so your consumers get types too.
 </Callout>
 
 export const quizDecl = [
@@ -117,6 +222,7 @@ export const quizDecl = [
       'Compiler configuration',
     ],
     answer: 0,
+    explain: 'A .d.ts describes the shape of something that exists elsewhere -- a library, a global, a module -- with zero runtime code of its own.',
   },
   {
     q: 'What does the `declare` keyword do?',
@@ -127,6 +233,7 @@ export const quizDecl = [
       'Marks a class as abstract',
     ],
     answer: 1,
+    explain: 'declare says "trust me, this exists at runtime through some other means" -- it emits nothing itself.',
   },
   {
     q: 'Where do `@types/lodash` and similar packages come from?',
@@ -137,6 +244,7 @@ export const quizDecl = [
       'They ship inside the TypeScript compiler',
     ],
     answer: 1,
+    explain: 'DefinitelyTyped is a huge community-maintained repository; tsc finds an installed @types/* companion automatically for a matching import.',
   },
   {
     q: 'You installed `@types/node`, but `process` is still "not defined" in TypeScript 7. What is missing?',
@@ -147,6 +255,7 @@ export const quizDecl = [
       '`declaration: true`',
     ],
     answer: 1,
+    explain: 'Since 6.0, types defaults to [] -- global-contributing packages need explicit opt-in, project-wide via types or per-file via /// <reference types="...">.',
   },
   {
     q: 'How do you ship types when publishing your own TypeScript library?',
@@ -157,6 +266,29 @@ export const quizDecl = [
       'You cannot — consumers must retype it',
     ],
     answer: 1,
+    explain: 'declaration: true emits a .d.ts next to each .js; pointing types at the entry declaration is the same mechanism the whole ecosystem runs on.',
+  },
+  {
+    q: '```text\n$ tsc --noEmit --strict\nnode_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must\nhave the same type. Property \'retries\' must be of type \'number\', but here has type \'string\'.\n\n$ tsc --noEmit --strict --skipLibCheck\n                                       # zero output\n```\nWhat does this pair of real runs prove about `skipLibCheck`?',
+    options: [
+      'skipLibCheck only affects the built-in lib.*.d.ts files, never a dependency\'s own types',
+      'skipLibCheck skips checking every .d.ts in the program, including a genuine conflicting-declaration bug shipped inside a real dependency -- a real trade-off, not just a speed switch',
+      'skipLibCheck is required for any project to compile at all',
+      'This error only appears without strict mode',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch with a real node_modules package containing two conflicting declarations of the same property: off, tsc reports the real TS2717; on, the conflict is silently accepted -- proof the flag hides real problems, not only slow ones.',
+  },
+  {
+    q: '```ts\ndeclare module "legacy-lib" {\n  export function parse(input: string): { ok: boolean };\n}\n\nimport { parse } from "legacy-lib";\n```\nThis fails with `TS2664: Invalid module name in augmentation, module \'legacy-lib\' cannot be found`. Why, when the same `declare module` block works fine in a dedicated `.d.ts` file?',
+    options: [
+      'declare module is always invalid syntax inside a .ts file',
+      'The file already has a real `import`, which makes it a module rather than a script -- inside a module, `declare module "x" { ... }` means "augment an existing module x," not "declare a fresh one," and there is no real "legacy-lib" module to augment',
+      'legacy-lib must be installed via npm first',
+      'TS2664 means the function signature is wrong',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch: the identical declare module block compiles fine in a script-scope file or a real .d.ts, but is reinterpreted as module augmentation the moment the file also has a top-level import/export -- which is why library shims conventionally live in their own .d.ts file.',
   },
 ];
 

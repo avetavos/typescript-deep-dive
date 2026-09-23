@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Checking and emitting are different tools' jobs
 
@@ -82,6 +84,33 @@ Every modifier on a parameter — `public`, `private`, `readonly` — makes it a
 
 Pair it with `rewriteRelativeImportExtensions` and you can develop against `.ts` files in place and still emit a clean `.js` package with `tsc` for publishing.
 
+## One file, four tools: what each one actually does with non-erasable syntax
+
+"Compiles" hides a real difference between tools. Running the exact same file — an `enum` and a class with a parameter property — through `tsc`, `tsx`, `node --experimental-strip-types`, and `esbuild` (verified in scratch) makes the difference concrete:
+
+```ts
+enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point(1, 2);
+console.log(Color.Red, p.x, p.y);
+```
+
+| Tool | What it does | Result |
+|---|---|---|
+| `tsc --noEmit --strict` | Type-checks only | 0 errors — `enum` and parameter properties are completely legal TypeScript |
+| `tsc` (real emit) | Transpiles with a full understanding of the syntax | Emits a real IIFE for the enum and a real `this.x = x; this.y = y;` for the parameter property — runs fine |
+| `tsx` | Transpiles via esbuild, run immediately | Runs fine — prints `0 1 2` |
+| `node --experimental-strip-types` | *Strips* type annotations only, transforms nothing | `SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode` |
+| `esbuild` (bundler-style transpile) | Transpiles with understanding, like `tsc` | Emits an equivalent IIFE, runs fine |
+
+Four tools, three different outcomes for identical input, and the type checker alone can't distinguish any of them — `tsc --noEmit` says "fine" regardless of which of the other three will actually run the result. This is what `erasableSyntaxOnly` closes: it makes the checker itself refuse anything that only `tsc`/`tsx`/`esbuild`-style *transformation* (not pure stripping) can handle, so a clean check under that flag really does predict Node's stripper will accept the file.
+
+Decorators split the remaining three tools further still. The same class with a `@logged` method decorator, transpiled by `esbuild` at its **default** settings (an `esnext`-ish target) and then run directly with plain `node`, fails with `SyntaxError: Invalid or unexpected token` — decorator syntax passed through untouched, and V8 doesn't parse it natively. `tsx` runs the identical source successfully, because it configures esbuild's `--target` low enough to force decorator *lowering* rather than pass-through (verified in scratch: `esbuild --target=es2022` on the same file produces real, if verbose, lowering helpers and runs correctly). The lesson isn't "esbuild is broken" — it's that "transpiles with esbuild" is not one fixed behavior; it depends on the target the caller configured, and `tsx`'s defaults and a bare `esbuild` invocation are not the same tool in practice.
+
 ## isolatedModules: making single-file transpilation safe
 
 Because bundlers and type-strippers work **one file at a time**, they cannot see types from other files. A few TypeScript constructs are ambiguous under single-file transpilation — most importantly, re-exporting a type looks identical to re-exporting a value. `isolatedModules: true` makes `tsc` flag anything a single-file transpiler could get wrong, so your code stays compatible with esbuild, swc, and Node's stripper.
@@ -110,10 +139,18 @@ import { type User, save } from "./db"; // User erased, save kept
 `noEmit` is "check, don't emit". Since 5.6 there is the mirror image: **`noCheck`** is "emit, don't check" — `tsc` runs only the syntactic passes it needs to produce output. On its own it is a slower esbuild, but combined with **`isolatedDeclarations`** (5.5) it becomes useful: if every export carries an explicit type, `.d.ts` files can be generated per file without the checker, which means declaration emit can run in parallel with type-checking, or be done by a bundler plugin entirely.
 
 ```ts
-// @skip-verify illustrative before/after pair — not meant to compile as one program
-// with isolatedDeclarations
-export function parse(input: string) { return JSON.parse(input); } // ❌ needs an explicit return type
-export function parse(input: string): unknown { return JSON.parse(input); } // ✅
+// @skip-verify needs --isolatedDeclarations, which this course's default check flags do not enable -- see prose for the real command and code
+export function parse(input: string) {
+  return JSON.parse(input);
+}
+```
+
+Compiled with `--isolatedDeclarations --declaration --noEmit` added, that's `error TS9013: Expression type can't be inferred with --isolatedDeclarations` (verified in scratch — not `TS9007`, a plausible-looking code that turns out to be wrong for this exact case; always check the real code rather than trust a remembered one). Adding the explicit return type this course's earlier lessons already recommend for public APIs fixes it with zero other changes:
+
+```ts
+export function parse(input: string): unknown {
+  return JSON.parse(input);
+}
 ```
 
 The cost is annotating your public API — which, for a library, you should be doing anyway.
@@ -131,8 +168,86 @@ In a large repo with several packages, type-checking everything from scratch on 
 
 With `composite: true`, `tsc --build` checks each referenced project once, caches the result in `.tsbuildinfo` (always written since 5.6), and only rechecks what changed. Since 5.6 a build **continues past errors** in an upstream project so you see every failure in one run — pass `--stopBuildOnErrors` for the old fail-fast behaviour — and TypeScript 7 checks independent projects concurrently with `--builders`. It turns an O(whole-repo) check into an incremental, parallel one.
 
+A real two-project build (`app` referencing `core`, verified in scratch) shows the caching and the error-propagation both, across three runs of the identical `tsc -b app --verbose`:
+
+```text
+$ tsc -b app --verbose          # 1) clean build, nothing cached yet
+Project 'core/tsconfig.json' is out of date because output file 'core/tsconfig.tsbuildinfo' does not exist
+Building project 'core/tsconfig.json'...
+Project 'app/tsconfig.json' is out of date because output file 'app/tsconfig.tsbuildinfo' does not exist
+Building project 'app/tsconfig.json'...
+
+$ tsc -b app --verbose          # 2) rerun immediately, nothing changed
+Project 'core/tsconfig.json' is up to date because newest input 'core/src/index.ts' is older than output 'core/tsconfig.tsbuildinfo'
+Project 'app/tsconfig.json' is up to date because newest input 'app/src/index.ts' is older than output 'app/dist/index.js'
+
+$ tsc -b app --verbose          # 3) after introducing a real type error in core/src/index.ts
+Project 'core/tsconfig.json' is out of date because output 'core/tsconfig.tsbuildinfo' is older than input 'core/src/index.ts'
+Building project 'core/tsconfig.json'...
+core/src/index.ts(2,3): error TS2322: Type 'number' is not assignable to type 'string'.
+Project 'app/tsconfig.json' is out of date because output 'app/dist/index.js' is older than input 'core'
+Building project 'app/tsconfig.json'...
+```
+
+Run 2 rebuilds nothing at all — every project reports "up to date" from `.tsbuildinfo` timestamps alone. Run 3 is the "continues past errors" default in action: `core` fails, but `tsc -b` still attempts `app` afterward (using `core`'s last good output) instead of stopping — that's what surfaces every downstream failure in one pass on a real monorepo, rather than one project at a time across repeated invocations. Adding `--stopBuildOnErrors` to that same broken state changes the outcome: `core` still fails identically, but `app` is explicitly reported as **skipped** ("`app/tsconfig.json` can't be built because its dependency 'core' has errors") rather than attempted — the old fail-fast behavior, useful when a downstream build attempt against known-broken output would just be noise.
+
+<TSPlayground code={erasableCleanCode} id="compiler-tooling-build-erasable-clean" title="strict alone: does the checker reject this on its own?" />
+
+export const erasableCleanCode = `enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point(1, 2);
+console.log(Color.Red, p.x, p.y);`;
+
+Click **Check types** — `strict` (always on here) reports **zero errors**. `enum` and a parameter property are completely ordinary, legal TypeScript on their own; nothing about `strict` cares whether a runtime can run the result unmodified. That's exactly the gap `erasableSyntaxOnly` closes — this course's own CLI-verified proof above shows the identical file rejected outright (`TS1294`) the moment that flag is on, and rejected again by `node --experimental-strip-types` regardless of any flag at all. A clean check in *this* widget proves the syntax is legal; it says nothing about whether the file you're about to run with a type-stripping runtime will actually run.
+
+## Mental Model
+
+Every tool in this lesson sits somewhere on one axis: does it understand TypeScript syntax well enough to *transform* it, or does it only know how to *delete* type annotations? `tsc`, `tsx`, and `esbuild` (properly configured) are transformers — they can turn an `enum` into a real object, a parameter property into a real assignment, a decorator into real helper calls. Node's `--experimental-strip-types` is a deleter — it removes exactly the tokens that are *type* syntax and refuses to touch anything else, which is precisely why `enum` and parameter properties (real runtime constructs wearing TypeScript syntax) are rejected rather than transformed. `erasableSyntaxOnly` is the checker borrowing the deleter's rule for itself, so "passes the check" and "the stripper will accept this file" become the same claim instead of two unrelated ones. Project references apply the identical checked/not-checked question at the scale of a whole build graph: `tsc -b`'s "up to date" is a real claim about what still needs checking, backed by `.tsbuildinfo`, not a guess.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| `tsc` emit | Correct transformation of every construct, including decorators and enums | Slower than a single-file transpiler for large codebases without `--checkers`/project references |
+| `tsx` / `esbuild` (configured for it) | Fast, single-file transpilation, real decorator/enum lowering when the target is set low enough | A bundler's *default* target may not lower everything — verified above, a bare `esbuild` call left decorators broken at runtime until `--target=es2022` was added explicitly |
+| `node --experimental-strip-types` | Zero build step at all for compatible code | Rejects an entire category of legitimate, working TypeScript (`enum`, parameter properties, `namespace` with code) outright |
+| `erasableSyntaxOnly` | Makes "type-checks" and "the stripper will run it" the same guarantee | Forces rewriting constructs that are otherwise perfectly good TypeScript, purely for stripper compatibility |
+| `tsc --build` + project references | Real incremental, parallel checking across a monorepo, with errors surfacing in one pass by default | `--stopBuildOnErrors` needed explicitly to restore fail-fast; without it a broken upstream project's errors and a skipped downstream project both show up together, which needs reading carefully |
+
+## Common Misconceptions
+
+- **"It type-checks" means any tool can run the resulting JavaScript.** The verified table above shows four tools disagreeing on identical input: `tsc --noEmit` says "fine" for `enum` and parameter properties, but `node --experimental-strip-types` refuses to run the exact same file. Type-checking and runtime-runnability are different questions unless `erasableSyntaxOnly` ties them together.
+- **`esbuild` transpiles TypeScript decorators correctly, since it "supports TypeScript."** Only at a low enough `--target`. At esbuild's own default, this course's scratch test left decorator syntax completely untouched, producing a runtime `SyntaxError` — "esbuild supports X" often means "esbuild supports X *at the target you configured*," not unconditionally.
+- **A `tsc -b` run that reports an error in an upstream project stops there.** By default it doesn't — it continues into dependent projects using their last good build, surfacing every failure across the whole graph in one pass. `--stopBuildOnErrors` restores the old fail-fast behavior; without it, "app" is still attempted even when "core" (its dependency) just failed.
+- **`isolatedDeclarations`'s errors are about missing types in general.** They're specifically about *inferred* return/property types the checker can't reconstruct without running full inference — verified above, the real code is `TS9013` ("Expression type can't be inferred"), not the more generic-sounding code it's easy to assume.
+
+## Reading AI-generated code
+
+- Does generated code add `enum`, a `namespace` with real logic, or a parameter property to a codebase that's meant to run under Node's `--experimental-strip-types` or a strip-only tool? `tsc --noEmit` alone will not warn about this — only `erasableSyntaxOnly` (or actually trying to run the file with the target stripper) catches it.
+- Was a decorator added to a file, with a build step change assumed to "just work" because "the bundler handles TypeScript"? Verify the bundler's configured target actually lowers decorators — a default `esnext`-ish target frequently does not, and the failure only shows up at runtime, not at build time.
+- Does a generated `tsc -b` CI step treat any non-zero exit code as "everything failed," when the real log shows one project's real error and other projects merely skipped or rebuilt from stale upstream output? Read which project actually reported the `error TSxxxx` line before assuming the whole graph is equally broken.
+- Is a function meant to ship in a library's public API left without an explicit return type, in a project that turns on `isolatedDeclarations` for fast parallel `.d.ts` emit? That specific gap is exactly what `TS9013` exists to catch — verify the real code before describing the fix in a review comment.
+
+<SpotTheBug code={`export function createLogger(prefix: string) {
+  return {
+    info: (msg: string) => console.log(\`[\${prefix}] \${msg}\`),
+    error: (msg: string) => console.error(\`[\${prefix}] ERROR: \${msg}\`),
+  };
+}
+
+export const enum Level {
+  Info,
+  Error,
+}`}>
+Two separate problems, and `tsc --noEmit --strict` reports **zero errors** for both. First, `createLogger` has no explicit return type — under plain `strict` that's fine (the checker infers it), but the moment this library turns on `isolatedDeclarations` for fast, parallel `.d.ts` emit, this exact shape fails with `TS9013`, because the inferred return type is an object literal the checker would have to fully evaluate, not read off the syntax. Second, `const enum` is even more restrictive than a regular `enum`: it's fully inlined at every use site within the same program, which means a `const enum` exported across a package boundary can silently go stale if the consumer and the library are compiled separately (isolated `.d.ts` generation, incremental builds) — and it's rejected outright under `erasableSyntaxOnly`, exactly like a regular `enum`, since it's still non-erasable syntax from the runtime's point of view. Reviewing generated library code means checking both: does every export have an explicit type for `isolatedDeclarations`, and does any `enum`/`const enum` need to become an `as const` object instead for a project that runs under a stripper?
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Let a bundler emit and let `tsc` check — and with TypeScript 7's native, parallel compiler (`--checkers`, `--builders`, a native watcher) the check is 8–12× faster than a year ago. Run `.ts` directly in Node by keeping to erasable syntax (`erasableSyntaxOnly`), stay single-file-safe with `isolatedModules` and `verbatimModuleSyntax`, use `noCheck` + `isolatedDeclarations` when you want declarations without the checker, and use project references so `tsc --build` is incremental in a monorepo. No programmatic API ships in 7.0 — tools that need one use `@typescript/typescript6` until 7.1.
+Let a bundler emit and let `tsc` check — and with TypeScript 7's native, parallel compiler (`--checkers`, `--builders`, a native watcher) the check is 8–12× faster than a year ago. "Type-checks" and "a given runtime can run it" are different claims: the same `enum` + parameter property file verified in this lesson type-checks cleanly everywhere but is flatly rejected by `node --experimental-strip-types`, and even "transpiles with esbuild" depends on the target you configured, not a fixed guarantee. `erasableSyntaxOnly` is what makes those two claims the same again. Stay single-file-safe with `isolatedModules` and `verbatimModuleSyntax`, use `noCheck` + `isolatedDeclarations` (real code: `TS9013` for an uninferrable export) when you want declarations without the checker, and use project references so `tsc --build` is incremental and parallel — remembering that it continues past an upstream error by default, surfacing every failure in one pass, unless `--stopBuildOnErrors` restores the old fail-fast behavior. No programmatic API ships in 7.0 — tools that need one use `@typescript/typescript6` until 7.1.
 </Callout>
 
 export const quizBuild = [
@@ -145,6 +260,7 @@ export const quizBuild = [
       'The runtime',
     ],
     answer: 1,
+    explain: 'A single-file transpiler deletes types without checking them; only tsc builds the whole-program type model needed to catch a real mismatch.',
   },
   {
     q: 'What is the main thing TypeScript 7 changed about `tsc`?',
@@ -155,6 +271,7 @@ export const quizBuild = [
       'It no longer needs a tsconfig.json',
     ],
     answer: 1,
+    explain: 'Same diagnostics, same tsconfig.json, same tsc binary name -- the difference is the native, parallel implementation underneath.',
   },
   {
     q: 'A lint plugin does `import ts from "typescript"` and breaks after upgrading to TypeScript 7. Why?',
@@ -165,6 +282,7 @@ export const quizBuild = [
       'Lint plugins are no longer allowed',
     ],
     answer: 1,
+    explain: 'Tools that need the programmatic compiler API (typescript-eslint, Volar) install typescript@6 alongside typescript@7 until the 7.1 API ships.',
   },
   {
     q: 'Why does `erasableSyntaxOnly` reject `enum` and constructor parameter properties?',
@@ -175,6 +293,7 @@ export const quizBuild = [
       'They break `isolatedModules`',
     ],
     answer: 1,
+    explain: 'Both compile to zero errors under plain strict -- erasableSyntaxOnly specifically rejects syntax that needs a real transform rather than a pure deletion.',
   },
   {
     q: 'What does `import type { User }` guarantee?',
@@ -185,6 +304,29 @@ export const quizBuild = [
       'That User is validated at runtime',
     ],
     answer: 1,
+    explain: 'A type-only import is guaranteed erasure -- it can never accidentally create a real runtime module dependency out of what was only ever a compile-time type relationship.',
+  },
+  {
+    q: '```ts\nenum Color { Red, Green }\n\nclass Point {\n  constructor(public x: number, public y: number) {}\n}\n```\nVerified across four tools, which one rejects this file outright, and why don\'t the others catch the same problem?',
+    options: [
+      'tsc --noEmit -- it never allows enum',
+      '`node --experimental-strip-types` -- it only deletes type annotations and cannot transform an enum into a real object or a parameter property into a real assignment, unlike tsc/tsx/esbuild, which understand the syntax well enough to transform it',
+      'esbuild -- it does not support TypeScript at all',
+      'tsx -- it requires a tsconfig.json to run',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch: tsc --noEmit reports 0 errors, tsc/tsx/esbuild all transform and run the file successfully, but node --experimental-strip-types fails with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX -- it is a pure deleter, not a transformer, so anything needing real emitted code is rejected.',
+  },
+  {
+    q: 'A two-project `tsc -b app` build has a real type error in `core` (a dependency of `app`). By default, what happens to the `app` project in that same run?',
+    options: [
+      'The whole build stops immediately at core',
+      '`tsc -b` still attempts to build `app` afterward (using core\'s last good output) so every failure across the graph surfaces in one pass -- `--stopBuildOnErrors` is required to restore the old fail-fast behavior',
+      '`app` silently succeeds with no warning',
+      'Project references disable error reporting entirely',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch with a real two-project build: core reports its TS2322 and app is still built afterward by default; adding --stopBuildOnErrors instead reports app as explicitly skipped because its dependency has errors.',
   },
 ];
 

@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## default เปลี่ยนไปใน TypeScript 6
 
@@ -83,6 +85,127 @@ be explicitly set to this or another path to adjust your output's file layout.
 
 สังเกตว่า `rootDir` กับ `outDir` ถูก generate มาแบบ **comment ทิ้งไว้** — `tsc --init` ให้เห็น shape แต่ไม่เดา layout ให้ ซึ่งก็คือ gotcha ของ `rootDir` ที่คุยไว้ข้างบนพอดี `verbatimModuleSyntax` กับ `isolatedModules` อธิบายอยู่ใน [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/); หลายบรรทัดในนี้ซ้ำกับ default อยู่แล้ว (`strict`, `noUncheckedSideEffectImports`) — generator ตั้งใจเขียนให้ชัดเพื่อให้ไฟล์อธิบายตัวเองได้
 
+## ไฟล์ไหนอยู่ใน program บ้าง: `include`, `exclude`, `files`, `extends`
+
+ก่อนที่ option ไหนจะเปลี่ยนพฤติกรรมการ check `tsc` ต้องตัดสินใจก่อนว่า *กำลัง check ไฟล์ไหนอยู่บ้าง* — เป็นคำถามแยกต่างหากที่มาก่อน ควบคุมด้วยสี่ key นี้:
+
+- **`include`** — glob pattern ที่อธิบายไฟล์ของ program `"src/**/*"` แปลว่าทุกไฟล์ใต้ `src`
+- **`exclude`** — glob pattern ที่ตัดออกจากสิ่งที่ `include` match ไว้ (ไม่ได้เพิ่มไฟล์กลับมาที่ `include` ไม่เคยเจอ) `node_modules`, `.git`, และ `outDir` ถูก exclude เป็น default อยู่แล้วแม้ไม่มี key `exclude`
+- **`files`** — list ไฟล์แต่ละไฟล์แบบเจาะจง ถูก include เสมอไม่ว่า `include`/`exclude` จะว่าไง — วิธีเดียวที่บังคับไฟล์หนึ่งเข้า program ได้
+- **`extends`** — สืบทอด `compilerOptions` ของ config อื่น (และตั้งแต่ 3.9 สืบทอด `include`/`exclude`/`files` ด้วย เว้นแต่ไฟล์ที่ extend จะ override เอง) ทำให้ monorepo share นโยบายเดียวข้ามหลาย package ได้
+
+นี่คือโปรเจกต์เล็ก ๆ จริง — base config บวกกับตัวที่ extend มัน มี `include`, `exclude`, `files`, และ `paths` ครบ พร้อม output จริงของ `tsc --showConfig` (ตรวจใน scratch แล้ว):
+
+```json
+// tsconfig.base.json
+{
+  "compilerOptions": {
+    "target": "es2025",
+    "module": "nodenext",
+    "strict": true
+  }
+}
+```
+
+```json
+// tsconfig.json
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "paths": { "@utils/*": ["./src/utils/*"] }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.spec.ts"],
+  "files": ["src/extra-entry.ts"]
+}
+```
+
+`tsc --showConfig` resolve chain ของ `extends`, merge ทุก option เข้าเป็น object เดียว และแสดง list ไฟล์จริงที่ program จะได้:
+
+```json
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "outDir": "./dist",
+    "paths": { "@utils/*": ["./src/utils/*"] },
+    "rootDir": "./src",
+    "strict": true,
+    "target": "es2025",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force"
+  },
+  "files": [
+    "./src/extra-entry.ts",
+    "./src/extra-entry.ts",
+    "./src/index.ts",
+    "./src/utils/math.ts"
+  ],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.spec.ts"]
+}
+```
+
+สองรายละเอียดที่ควรสังเกตใน output จริงนั้น: `moduleResolution` กับ `moduleDetection` โผล่มาทั้งที่ไม่มี config ไหนเขียนไว้เลย — `tsc` เติมค่าที่ `module: nodenext` implied ให้เอง และ `src/extra-entry.ts` ถูก list ไว้ **สองครั้ง** — ครั้งหนึ่งเพราะ `files` ระบุตรง ๆ อีกครั้งเพราะ glob ของ `include` ก็ match มันด้วย `tsc` ไม่ dedupe สองแหล่งนี้เข้าหากัน — ไฟล์ที่ถูกระบุทั้งสองที่จะโผล่สองครั้งใน list ที่ resolve แล้วเฉย ๆ ไม่มีอันตราย (ยัง check แค่ครั้งเดียว) แต่เป็นสัญญาณว่า entry ใน `files` นั้นซ้ำซ้อนกับ `include` ไปแล้ว
+
+### `paths` คือการ remap เฉพาะระดับ type — ไม่มีผลตอน runtime
+
+`paths` (ที่ใช้ข้างบน: `"@utils/*": ["./src/utils/*"]`) บอก *checker* ว่าจะหา module specifier ที่ไหน แค่นั้น มันไม่มีผลกับวิธีที่ code ของคุณถูกโหลดจริง ๆ เลย และการรัน compiled output ก็พิสูจน์เรื่องนี้ compile โปรเจกต์ข้างบน (`tsc`, emit จริง) แล้วรัน output ตรง ๆ ด้วย Node:
+
+```text
+$ node dist/index.js
+node:internal/modules/cjs/loader:1421
+  throw err;
+Error: Cannot find module '@utils/math'
+Require stack:
+- .../dist/index.js
+  code: 'MODULE_NOT_FOUND'
+```
+
+`tsc` type-check `import { add } from "@utils/math"` ผ่านสำเร็จ — `paths` บอกมันตรง ๆ ว่า `@utils/math` อยู่ที่ไหนสำหรับการ *check* — แต่มัน emit specifier นั้น **เหมือนเดิมทุกตัวอักษร** และ Node ไม่เคยรู้จัก `@utils/*` เลย bundler ที่อ่าน `paths` entry เดียวกัน (Vite, webpack) จะเขียน specifier ใหม่ตอน bundle ซึ่งเป็นเหตุผลที่ `paths` "ใช้ได้เลย" ในโปรเจกต์ที่ใช้ bundler แต่พังเงียบ ๆ ในโปรเจกต์ที่มีแค่ `tsc` ถ้า `tsc` เป็น build step เดียวของคุณ ให้เลี่ยง `paths` สำหรับอะไรที่ ship จริง หรือไม่ก็ทำ runtime alias เอง — field `imports` ของ Node เองใน `package.json` (การ map `#/*` จาก [Modules & Resolution](/typescript/th/compiler-and-tooling/modules-and-resolution/)) คือกลไก alias ตัวเดียวที่ทั้ง `tsc` *และ* Node เข้าใจร่วมกัน
+
+## `tsc --showConfig`: compiler คิดว่า config ของคุณหมายความว่าอะไร
+
+`--showConfig` (ที่ใช้ข้างบน) คือทางที่เร็วที่สุดในการตอบ "เดี๋ยว `extends` resolve เป็นอะไรกันแน่" โดยไม่ต้องไล่อ่าน chain ของไฟล์เองทีละไฟล์ — มันไม่ compile อะไรเลย แค่ print config ที่ merge เสร็จแล้วซึ่ง `tsc` จะใช้จริง หยิบมาใช้เมื่อไหร่ก็ตามที่โปรเจกต์สืบทอดจาก base config ที่ share กัน แล้ว flag ตัวหนึ่งไม่ทำงานแบบที่คุณคาดไว้: JSON ที่ merge แล้วบอกคุณทันทีว่าค่าที่คุณคิดว่าตั้งไว้รอดจาก inheritance chain มาจริงไหม
+
+## อ่านตัวเลข performance ของ compiler เอง
+
+สอง flag ทำให้ `tsc` รายงานตัวเองแทน (หรือเพิ่มเติมจาก) code ของคุณ `--extendedDiagnostics` print สรุปหลัง check เสร็จ — output จริงสำหรับโปรแกรมเล็ก ๆ ที่มี conditional type กับ mapped type อยู่บ้าง (ตรวจใน scratch แล้ว):
+
+```text
+Files:              83
+Lines:           58450
+Identifiers:     49750
+Symbols:         59787
+Types:           35364
+Instantiations:  34403
+Memory used:    64885K
+Parse time:     0.013s
+Bind time:      0.005s
+Check time:     0.107s
+Emit time:      0.000s
+Total time:     0.125s
+```
+
+**Instantiations** คือตัวเลขที่คอร์สนี้สนใจที่สุด: ทุกครั้งที่ generic type หรือ function ถูกแทน type argument จริงเข้าไป นับเป็นหนึ่ง instantiation และเป็นตัวเลขที่ระเบิดก่อนบน recursive conditional type ที่วิ่งเถลไถลนานก่อนที่ "Types" หรือ "Symbols" จะดูผิดปกติ — โปรแกรมที่อัตราส่วน `Files`/`Types` ดูปกติดี แต่ `Instantiations` สูงมาก คือสัญญาณจริงให้ไปหา type-level computation ที่กำลังคำนวณซ้ำสิ่งเดิมวนไปวนมา **Check time** แยกเฉพาะ phase การ type-check ออกจาก parse กับ emit จึงเป็นตัวเลขที่ควรเทียบก่อน/หลัง เปลี่ยน tsconfig (flag เข้มขึ้น, `lib` ใหม่) เพื่อดูว่ามันเสียต้นทุนจริงเท่าไหร่
+
+`--generateTrace <dir>` ไปไกลกว่านั้น เขียน `trace.json` แบบเข้ากันได้กับ Chrome DevTools (เปิดใน `chrome://tracing` หรือ Perfetto UI) บวกกับไฟล์ `types_N.json` หนึ่งไฟล์ขึ้นไปที่ map type ID ทุกตัวที่พูดถึงใน trace กลับไปเป็น structure ของมัน trace คือ timeline ของ event — หลายร้อย entry แบบ `{"ph":"X","name":"checkSourceFile","dur":...}` — ที่ให้คุณเห็นว่า *ไฟล์ไหน* หรือ *type ไหน* ที่ checker ใช้เวลาไปกับมัน ไม่ใช่แค่ total ของทั้งโปรแกรมแบบที่ `--extendedDiagnostics` ให้ มันคือเครื่องมือที่ควรใช้ต่อเมื่อ `--extendedDiagnostics` บอกแล้วว่า check time สูง และคุณต้องหาว่า *ตรงไหน* ไม่ใช่แค่ *ว่ามันสูง*
+
+<TSPlayground code={catchUnknownCode} id="compiler-tooling-tsconfig-catch-unknown" title="useUnknownInCatchVariables ส่วนหนึ่งของ strict ตรวจสดจริง" />
+
+export const catchUnknownCode = `// @expect-error TS18046
+function parseNumber(input: string): number {
+  try {
+    return JSON.parse(input);
+  } catch (e) {
+    console.log(e.message);
+    return 0;
+  }
+}`;
+
+นี่คือ `useUnknownInCatchVariables` จากตาราง `strict` ข้างล่างแบบสด: `strict` เปิดอยู่เสมอใน checker นี้ ดังนั้น `e` เป็น type `unknown` การอ่าน `.message` จากมันโดยไม่ narrow ก่อนคือ error จริง — `catch (e) {}` ธรรมดาใน JavaScript ไม่การันตีเลยว่า `e` เป็น `Error` ด้วยซ้ำ และ type ก็สะท้อนความจริงนั้นตรง ๆ แทนที่จะเดา
+
 ## `strict` เปิดอะไรให้จริง ๆ
 
 `strict` เป็น default แล้ว แต่ก็ยังควรรู้ว่ามันรวมอะไรไว้ เพราะคุณจะเจอ codebase ที่ปิดบางส่วนของมันไป:
@@ -154,8 +277,49 @@ TypeScript 6.0 deprecate option ชุดหนึ่ง และ 7.0 ถอด
 - **`libReplacement`** (5.8) — opt in ให้แทน `lib.dom` ด้วย npm package เช่น `@typescript/lib-dom`; ปิดเป็น default ตั้งแต่ 6.0
 - **`skipLibCheck`** — ข้ามการ check ไฟล์ `.d.ts` ใน `node_modules` ยังเป็นการเร่งความเร็วที่ถูกที่สุดตัวเดียว แม้บน native compiler
 
+## Mental Model
+
+`tsconfig.json` ตอบสองคำถามที่เอาไปปนกันง่ายแต่จริง ๆ อิสระต่อกันโดยสิ้นเชิง: **ไฟล์ไหนอยู่ใน program** (`include`/`exclude`/`files`/`extends`) กับ **มัน check เข้มแค่ไหน** (`strict` และครอบครัวของมัน) `--showConfig` มีไว้เพราะทั้งสองคำถามตอบยากขึ้นเมื่อ `extends` เข้ามาเกี่ยวข้อง — มันคือ compiler บอกความจริงเกี่ยวกับ state ที่ merge แล้วของตัวเอง แทนที่คุณจะต้องไล่ inheritance chain ด้วยตา และ `paths` เป็นลูกพี่ลูกน้องของคำถามแรกในเรื่อง module *resolution* ซึ่งเป็นเรื่องของ checker เท่านั้น: มันเปลี่ยนสิ่งที่ `tsc` เชื่อว่า specifier ชี้ไปที่ไหน ไม่เคยเปลี่ยนสิ่งที่ runtime loader ทำกับ specifier ตัวเดียวกันนั้นเลย — การพิสูจน์ช่องว่างนี้ (`Cannot find module` จริงหลัง compile สะอาด) คือทางที่เร็วที่สุดที่จะทำให้เข้าใจว่า tsconfig คือคำสั่งให้ checker ไม่ใช่ให้ JavaScript ที่รันจริงในที่สุด
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| glob `include`/`exclude` | ขยายเองอัตโนมัติตามไฟล์ที่เพิ่มเข้ามา | ง่ายที่จะ include สิ่งที่ไม่ได้ตั้งใจ (`.spec.ts` ที่ไม่มี `exclude` entry) |
+| `files` (list ตรง ๆ) | เจาะจง ไม่มีการ include เกินคาด | ไม่ scale — ไฟล์ใหม่ทุกไฟล์ต้องแก้เองด้วยมือ |
+| `extends` จาก base config ที่ share กัน | นโยบาย strictness/target เดียวทั้ง monorepo | flag ที่คุณไม่คาดคิดอาจถูกสืบทอดมาเงียบ ๆ — ควร sanity-check ด้วย `--showConfig` เสมอ |
+| `paths` สำหรับ alias ภายใน | import สะอาดขึ้น (`@utils/x` แทน `../../../utils/x`) | เฉพาะระดับ type — build ที่มีแค่ `tsc` จะ ship import ที่พังเงียบ ๆ เว้นแต่มีอะไรอื่น (bundler, field `imports` ของ Node เอง) เขียน specifier ใหม่ด้วย |
+| `--extendedDiagnostics` / `--generateTrace` | ตัวเลขจริงแทนความรู้สึก "build ช้าเหมือนจะ" | output ของ `--generateTrace` ใหญ่และต้องมี trace viewer ถึงอ่านได้; `--extendedDiagnostics` เฉย ๆ ไม่บอกว่าไฟล์หรือ type ไหนแพง |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`paths` คือ module alias จริง เหมือนของ bundler** มันบอกแค่ checker ของ `tsc` ว่า specifier resolve ไปที่ไหนสำหรับ type-checking — พิสูจน์แล้วข้างบน: `tsc` build ที่สะอาดพร้อม `paths` ยัง emit specifier ที่ไม่ resolve ออกมาเหมือนเดิม และ Node throw `Cannot find module` ตอน runtime เว้นแต่ bundler หรือ runtime alias mechanism จริง ๆ จะเข้าใจมันด้วย
+- **`extends` สืบทอดแค่ `compilerOptions`** ตั้งแต่ 3.9 มันสืบทอด `include`/`exclude`/`files` จาก base config ด้วย เว้นแต่ไฟล์ที่ extend จะตั้งของตัวเอง — config ที่ดูเหมือนตั้งแค่ compiler flag ไม่กี่ตัวอาจแอบพา file list ของ base มาด้วย
+- **ไฟล์ที่ถูก list ทั้งใน `files` และถูก `include` match ด้วย คือ error หรือถูก dedupe** ไม่ทั้งคู่ — output จริงของ `tsc --showConfig` ข้างบน list มันสองครั้ง ไม่มีอันตราย แค่เป็นสัญญาณว่า entry ใน `files` ซ้ำซ้อน
+- **ตัวเลข `Types` ของ `--extendedDiagnostics` คือตัวที่ควรจับตาสำหรับ build ที่ช้า** `Instantiations` มักเป็นตัวเลขที่ actionable กว่า — มันระเบิดเมื่อ generic หรือ recursive conditional type คำนวณสิ่งเดิมซ้ำ ๆ ในขณะที่ `Types` ยังดูปกติอยู่
+
+## อ่านโค้ดที่ AI เขียน
+
+- `tsconfig.json` ที่ generate มาตั้ง `paths` แล้วสมมติว่าแค่นั้นพอให้ import ทำงานตอน runtime กับ `tsc` build ธรรมดาไหม? ตรวจแบบที่บทนี้ทำ: compile จริง รัน output ตรง ๆ แล้วดูว่า `Cannot find module` โผล่มาไหม
+- config `extends` จาก base ที่ share กันโดยไม่ตรวจว่า base นั้นตั้งอะไรไว้จริง ๆ ไหม? รัน `tsc --showConfig` กับผลที่ merge แล้วก่อนเชื่อว่า flag หนึ่งเปิด (หรือปิด) อยู่ — คำตอบอยู่แค่คำสั่งเดียว ไม่ต้องเดาจากการอ่านสองไฟล์ด้วยตา
+- `exclude` ถูกใช้ในที่ที่ scope ด้วย `files`/`include` แม่นกว่าไหม — เช่น exclude `**/*.spec.ts` แทนที่จะไม่ include ไฟล์ test เข้า config หลักตั้งแต่แรก? ทั้งสองแบบใช้ได้ แต่ `exclude` ที่กว้างเกินไปเสี่ยงถูกขยายโดยไม่ตั้งใจทีหลังเมื่อมีไฟล์ใหม่ที่ match pattern ที่ exclude ไว้แค่ชื่อ
+- tsconfig ที่ generate มาก็อปจาก tutorial ที่ยังตั้ง `"moduleResolution": "node"` หรือ `"baseUrl"` — ทั้งคู่ถูกถอดใน TypeScript 7 (hard error ไม่ใช่ no-op เงียบ ๆ) — เป็นสัญญาณว่าการ generate ไม่ได้ตรวจกับ TypeScript version จริงของโปรเจกต์นี้
+
+<SpotTheBug lang="json" code={`{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "paths": {
+      "@shared/*": ["../shared/src/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}`}>
+มีปัญหาสองจุด ทั้งคู่มองไม่เห็นถ้าอ่านไฟล์นี้เดี่ยว ๆ อย่างแรกไม่มี `"rootDir"` เลย — พอตั้ง `outDir` ไว้แต่ปล่อย `rootDir` เป็น default นี่คือ gotcha เป๊ะจากก่อนหน้านี้ในบทนี้: `tsc` หยุดด้วย hard error `TS5011` จริง ๆ และยังเขียนไฟล์ไปที่ path ที่ซ้อนอยู่ดี ไม่ใช่ความสำเร็จเงียบ ๆ อย่างที่สอง `paths` map `@shared/*` เข้าไปใน `src` ของ package *ข้าง ๆ* — compile ผ่านสบาย (checker เห็นไฟล์ได้) แต่ไม่มีอะไรเขียน `@shared/*` ใหม่ตอน emit ดังนั้นเว้นแต่มี bundler อยู่ใน build นี้ด้วย (และอ่าน `paths` entry เดียวกัน) compiled output จะ throw `Cannot find module '@shared/utils'` ทันทีที่รัน ตรงตามที่บทนี้พิสูจน์ด้วยการรัน `node dist/index.js` จริง การ review tsconfig ที่ generate มาต้องตรวจทั้งสองอย่าง: `rootDir` ต้องตั้งชัดไหมเมื่อมี `outDir` แบบนี้ และมีอะไรนอกจาก `tsc` เองที่ resolve ทุก `paths` entry ตอน runtime จริงไหม
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-TypeScript 6/7 default เป็น `strict`, `module: esnext`, `target` ของปีปัจจุบัน, `types: []` และ `rootDir: "."` — ดังนั้นตั้ง `types` กับ `rootDir` ให้ชัด และใช้ config สั้น ๆ จาก `tsc --init` เป็น template `strictNullChecks` ยังเป็น check ที่สำคัญที่สุด เพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` ทับลงไป และแทน option ที่ถูกถอด (`baseUrl`, `moduleResolution: node`, `outFile`, `es5`) ด้วย `paths`, `nodenext`/`bundler`, bundler และ target สมัยใหม่
+TypeScript 6/7 default เป็น `strict`, `module: esnext`, `target` ของปีปัจจุบัน, `types: []` และ `rootDir: "."` — ดังนั้นตั้ง `types` กับ `rootDir` ให้ชัด และใช้ config สั้น ๆ จาก `tsc --init` เป็น template `include`/`exclude`/`files`/`extends` ตัดสินว่าไฟล์ไหนอยู่ใน program เลย เป็นอิสระจากว่ามัน check เข้มแค่ไหน และ `tsc --showConfig` print ความจริงที่ merge เสร็จแล้ว แทนที่จะให้คุณไล่ inheritance chain ด้วยตา `paths` เป็นเรื่องของ checker เท่านั้น — ไม่เคยเขียน runtime import ใหม่ ดังนั้น build ที่มีแค่ `tsc` ต้องมี alias mechanism จริง (bundler หรือ field `imports` ของ Node เอง) ให้ตรงกับสิ่งที่ checker เชื่ออยู่แล้ว `strictNullChecks` ยังเป็น check ที่สำคัญที่สุด เพิ่ม `noUncheckedIndexedAccess` กับ `exactOptionalPropertyTypes` ทับลงไป และใช้ `--extendedDiagnostics`/`--generateTrace` — จับตา `Instantiations` กับ `Check time` โดยเฉพาะ — ก่อนจะเดาว่าทำไม build ถึงรู้สึกช้า
 </Callout>
 
 export const quizTsconfig = [
@@ -168,6 +332,7 @@ export const quizTsconfig = [
       'ไม่มี default ต้องตั้งเอง',
     ],
     answer: 1,
+    explain: 'TypeScript 6.0 พลิก default จาก false เป็น true และ 7.0 ทำให้มันถาวร — tutorial ที่สอน "เปิด strict เองนะ" มาสิบปีตอนนี้กำลังอธิบายพฤติกรรม out-of-the-box',
   },
   {
     q: '`strictNullChecks` เปลี่ยนอะไร?',
@@ -178,6 +343,7 @@ export const quizTsconfig = [
       'มีผลกับ array เท่านั้น',
     ],
     answer: 1,
+    explain: 'ถ้าไม่เปิด ทุก type จะแอบรวม null กับ undefined ไว้ด้วย compiler จึงเตือน runtime crash ที่พบบ่อยที่สุดใน JavaScript ไม่ได้เลย',
   },
   {
     q: 'เมื่อเปิด `noUncheckedIndexedAccess` แล้ว type ของ `arr[i]` สำหรับ `const arr: number[]` คืออะไร?',
@@ -188,6 +354,7 @@ export const quizTsconfig = [
       '`never`',
     ],
     answer: 1,
+    explain: 'การ index อาจ out of bounds ตอน runtime ได้เสมอ (return undefined) flag นี้เลยทำให้ type ซื่อสัตย์เกี่ยวกับเรื่องนั้น แทนที่จะแกล้งทำเป็นว่าทุก index ปลอดภัย',
   },
   {
     q: 'หลัง upgrade เป็น TypeScript 6/7 มี `@types/node` install อยู่แต่หา global ของ Node ไม่เจอ เพราะอะไร?',
@@ -198,6 +365,7 @@ export const quizTsconfig = [
       '`strict` ซ่อน global type ไว้',
     ],
     answer: 1,
+    explain: 'package @types ที่ contribute global ไม่ถูกโหลดอัตโนมัติแค่เพราะ install ไว้อีกต่อไป — ต้อง opt in เองผ่าน compiler option types',
   },
   {
     q: 'tsconfig ของคุณมี `"baseUrl": "./src"` ของแทนใน TypeScript 7 คืออะไร?',
@@ -208,6 +376,29 @@ export const quizTsconfig = [
       'ไม่ต้องทำอะไร — `baseUrl` ยังใช้ได้',
     ],
     answer: 1,
+    explain: '`baseUrl` ถูกถอดใน TypeScript 7 (hard error ไม่ใช่ no-op เงียบ ๆ) — ของแทนตรง ๆ คือยุบ prefix เดียวกันเข้าไปในแต่ละ entry ของ paths',
+  },
+  {
+    q: '```json\n{\n  "extends": "./tsconfig.base.json",\n  "compilerOptions": {\n    "rootDir": "./src",\n    "outDir": "./dist",\n    "paths": { "@utils/*": ["./src/utils/*"] }\n  },\n  "include": ["src/**/*"],\n  "files": ["src/extra-entry.ts"]\n}\n```\nหลัง build `tsc` แบบสะอาด รัน `node dist/index.js` (ที่ import จาก `@utils/math`) throw `Cannot find module \'@utils/math\'` ทำไม ทั้งที่ `tsc` compile ผ่านไม่มี error เลย?',
+    options: [
+      'build จริง ๆ พังเงียบ ๆ',
+      '`paths` บอกแค่ checker ว่า specifier resolve ไปที่ไหนสำหรับ type-checking — มันไม่เคยเขียน import ที่ emit ใหม่เลย ดังนั้น runtime ที่ไม่รู้จัก `@utils/*` จึงหา module ไม่เจอ',
+      '`files` กับ `include` ชนกันจน build เสีย',
+      '`extends` ทำให้ module resolution พัง',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch แล้ว: tsc emit `import { add } from "@utils/math"` เหมือนเดิมทุกตัวอักษร bundler ที่อ่าน paths ด้วยจะเขียนมันใหม่ แต่ pipeline ที่มีแค่ tsc + node ไม่มีอะไรทำแบบนั้น Node จึง throw MODULE_NOT_FOUND บน alias ที่ไม่ถูกแตะเลย',
+  },
+  {
+    q: '```text\nFiles:              83\nInstantiations:  34403\nCheck time:      0.107s\n```\nตัวเลขไหนของ `--extendedDiagnostics` มีประโยชน์ที่สุดในการจับ generic หรือ recursive conditional type ที่วิ่งเถลไถล?',
+    options: [
+      '`Files`',
+      '`Instantiations` — มันนับทุกครั้งที่มีการแทนค่าจริงเข้า generic และระเบิดเมื่อคำนวณซ้ำ แม้ `Types`/`Files` จะยังดูปกติ',
+      '`Check time` เฉย ๆ โดยไม่มี context อื่น',
+      'ไม่มีทางรู้ได้จาก `--extendedDiagnostics`',
+    ],
+    answer: 1,
+    explain: 'Instantiations นับทุกครั้งที่ generic type หรือ function ถูกแทน type argument จริงเข้าไป — โปรแกรมที่คำนวณ type-level computation เดิมซ้ำ ๆ จะโผล่ตรงนี้ก่อนที่ Files หรือ Types จะดูผิดปกติ',
   },
 ];
 

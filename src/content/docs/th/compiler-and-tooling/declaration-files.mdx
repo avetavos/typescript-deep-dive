@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## type ที่ไม่มี implementation
 
@@ -45,6 +47,8 @@ declare module "legacy-lib" {
 
 ตอนนี้ `import { parse } from "legacy-lib"` มี type ครบ แม้ library จะ ship JavaScript ธรรมดามา คุณได้เติม contract ที่ขาดไปด้วยมือ
 
+gotcha จริงที่ควรรู้ก่อนจะไปเจอเอง: `declare module "x" { ... }` แนะนำ ambient module *ใหม่* ก็ต่อเมื่อมันอยู่ในไฟล์แบบ script-scope (ไม่มี top-level `import`/`export` เลยในไฟล์นั้น) หรือ `.d.ts` เฉพาะทาง ทันทีที่ไฟล์เดียวกันมี `import`/`export` จริงด้วย มันจะกลายเป็น *module* และ TypeScript จะตีความ `declare module "legacy-lib" { ... }` ใหม่เป็นการ **augment** module ที่มีอยู่แล้วชื่อ `"legacy-lib"` แทนที่จะประกาศตัวใหม่ — ซึ่ง fail ด้วย `TS2664: Invalid module name in augmentation, module 'legacy-lib' cannot be found` (ตรวจใน scratch แล้ว) ถ้าไม่มี module `"legacy-lib"` จริงให้ augment นี่คือเหตุผลเป๊ะที่ shim ของ library แบบข้างบนอยู่ในไฟล์ `.d.ts` ของตัวเองตามธรรมเนียม — การใส่มันในไฟล์เดียวกับ import ปกติของ application เปลี่ยนความหมายของ syntax เดียวกันนี้เงียบ ๆ
+
 ## DefinitelyTyped และ `@types`
 
 ส่วนใหญ่มีคนเขียน declaration พวกนั้นให้คุณแล้ว **DefinitelyTyped** คือ repository ชุมชนขนาดใหญ่ของไฟล์ `.d.ts` สำหรับ JavaScript library หลายพันตัว publish ภายใต้ scope `@types/*`:
@@ -63,11 +67,76 @@ package ที่ให้ **global** แทนที่จะเป็น modul
 
 (`"types": ["*"]` คืนพฤติกรรมโหลดทุกอย่างแบบเดิม) การเปลี่ยนนี้หยุดโปรเจกต์จากการแอบดึง package `@types/*` ที่ไม่เกี่ยวข้องเป็นร้อยจาก transitive dependency ซึ่งทั้งช้าและเป็นต้นตอของ error "duplicate global"
 
+### อ่าน `.d.ts` จริง ๆ และมันมาจากไหนโดยไม่มี field `"types"` เลย
+
+`escape-string-regexp` (package เล็ก ๆ จริง ที่ใช้กันแพร่หลาย นั่งอยู่ใน `node_modules` ของ repo คอร์สนี้เอง) เป็นตัวที่ดีที่จะอ่านทั้งไฟล์ เพราะ public surface ทั้งหมดของมันมีแค่ 16 บรรทัด:
+
+```ts
+// @skip-verify a real node_modules/escape-string-regexp/index.d.ts, quoted for reading, not for compiling standalone
+// (its JSDoc @example is normally its own fenced code block; shown here unfenced to avoid nesting ``` inside ```)
+/**
+Escape RegExp special characters.
+
+You can also use this to escape a string that is inserted into the middle of a regex, for example, into a character class.
+
+@example
+  import escapeStringRegexp from 'escape-string-regexp';
+
+  const escapedString = escapeStringRegexp('How much $ for a 🦄?');
+  //=> 'How much \\$ for a 🦄\\?'
+
+  new RegExp(escapedString);
+*/
+export default function escapeStringRegexp(string: string): string;
+```
+
+สิบเรื่องที่ควรสังเกต: (1) `/** */` JSDoc block เหนือ declaration โผล่เป็น hover documentation ใน editor เหมือน doc comment บน code ของคุณเอง; (2) `@example` render เป็น snippet ที่ดูรันได้ใน hover tooltip ของ editor ส่วนใหญ่; (3) `export default` ตรงนี้ประกาศ shape ของ *value* ที่ runtime จัดหาให้ ไม่ใช่ function body จริง — ไม่มี `{ ... }` ตามหลัง signature; (4) parameter `string: string` — parameter ที่*ชื่อ* `string` บัง type `string` ใน annotation ของตัวเองถูกกฎหมาย เพราะชื่อ parameter กับชื่อ type อยู่คนละ namespace; (5) return type `string` เขียนชัดเจน ตรงตามวินัยที่ `isolatedDeclarations` ต้องการเป๊ะ; (6) ไฟล์นี้ไม่มี import และไม่มี declaration อื่นเลย — `.d.ts` ที่มี default export ตัวเดียวคือ shape ที่ครบและน้อยที่สุดสำหรับ package ฟังก์ชันเดียว; (7) `package.json` ของ package นี้**ไม่มี field `"types"` เลย** — ไม่มี `"types": "./index.d.ts"` ที่ไหนเลย; (8) มี `"exports": "./index.js"` ชี้ไปที่ JS entry; (9) เพราะไม่มี field `"types"` ชัดเจนหรือ condition `"types"` ใน exports `tsc` fallback ไปใช้กฎ implicit ของมันเอง — หา `.d.ts` ที่ชื่อฐานตรงกันข้าง ๆ ไฟล์ JS ที่ resolve แล้ว และ `index.d.ts` ที่อยู่ข้าง ๆ `index.js` ก็ตรงตามกฎนั้นเองอัตโนมัติ; (10) `"scripts": { "test": "xo && ava && tsd" }` ของ package เองรัน `tsd` — เครื่องมือ type-testing ตัวเดียวกับที่บท index ของโมดูลนี้อธิบายไว้เป๊ะ — กับไฟล์นี้จริง ๆ ซึ่งเป็นเหตุผลที่เชื่อ type ได้โดยไม่ต้องมีคนมา re-verify ด้วยมือ
+
 ## ไฟล์ lib และการแทนที่มัน
 
 ไฟล์ `.d.ts` built-in ของ platform — `lib.es2025.d.ts`, `lib.dom.d.ts` — ถูกเลือกด้วย `target` และ `lib` มีการเปลี่ยนสองเรื่องล่าสุด: `lib.dom.d.ts` ตอนนี้รวมทุกอย่างที่เคยแยกอยู่ใน `dom.iterable` และ `dom.asynciterable` (entry พวกนั้นเป็น stub ว่างที่เก็บไว้ให้ config เก่า) และ declaration ของ DOM มี summary จาก MDN ติดมาด้วย hover จึงแสดงคำอธิบายบรรทัดเดียวของแต่ละ API
 
 ถ้า `lib.dom` ที่มากับ compiler ไม่ตรงกับคุณ — เก่าเกินไป หรืออยากใช้ type ของ `@types/web` — `libReplacement: true` (5.8) ทำให้ `tsc` หา package `@typescript/lib-dom` ใน `node_modules` แล้วใช้แทน ปิดเป็น default ตั้งแต่ 6.0 เพราะโปรเจกต์ส่วนใหญ่ไม่เคยต้องใช้ และการค้นหาเสียเวลา
+
+## `/// <reference types>` คือ escape hatch ต่อไฟล์รอบ `types: []`
+
+compiler option `types` ควบคุมสิ่งที่ auto-load สำหรับ**ทั้งโปรแกรม** triple-slash directive ตัวเดียวที่หัวไฟล์หนึ่งเป็นกลไกแยกต่างหาก ต่อไฟล์ ที่ทำงานได้แม้ `types` เป็น `[]` สำหรับที่เหลือทั้งหมด:
+
+```ts
+// @skip-verify multi-file example -- this course's own repo has @types/node installed; a bare scratch dir does not, so this is shown as prose-verified rather than run through the standard harness
+/// <reference types="node" />
+console.log(process.platform); // pulled in by the directive above, even with "types": [] project-wide
+```
+
+ตรวจใน scratch แล้ว: ตั้ง `"types": []` ชัดเจน (ไม่โหลดอะไรอัตโนมัติเลย) พร้อม `@types/node` ติดตั้งไว้ ไฟล์ที่ไม่มี directive `/// <reference types="node" />` จะพังที่ `process` ด้วย `TS2591` ("Cannot find name 'process'... Do you need to install type definitions for node?"); ไฟล์เดียวกันเป๊ะ*ที่มี*directive นั้น compile ผ่านสะอาด ใน program เดียวกัน ด้วย tsconfig เดียวกัน `types` คือสวิตช์ทื่อ ๆ ระดับทั้งโปรเจกต์; `/// <reference types="...">` คือมีดผ่าตัดสำหรับไฟล์เดียวที่ต้องการ global ที่ส่วนที่เหลือของโปรแกรมไม่ต้องการจริง ๆ
+
+## `skipLibCheck`: ข้อแลกเปลี่ยนจริง ไม่ใช่แค่สวิตช์ความเร็ว
+
+`skipLibCheck` ข้ามการ type-check ข้างในไฟล์ `.d.ts` — รวมถึงตัวที่ dependency ของคุณเองก็ ship มา ไม่ใช่แค่ไฟล์ `lib.*.d.ts` built-in นี่คือข้อแลกเปลี่ยนจริง ไม่ใช่ของฟรี และพิสูจน์ได้ง่าย: dependency ที่มี bug จริงใน `.d.ts` ของตัวเอง — สอง declaration ของ property เดียวกันที่ขัดแย้งกัน — compile เป็น error โดยไม่มี `skipLibCheck` และ merge เป็น type เดียวแบบสุ่มเงียบ ๆ เมื่อเปิด (ตรวจใน scratch แล้ว conflict จริงของสอง property declaration ใน package `node_modules` จริง):
+
+```text
+$ tsc --noEmit --strict                          # skipLibCheck off (default false)
+node_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must
+have the same type. Property 'retries' must be of type 'number', but here has type 'string'.
+
+$ tsc --noEmit --strict --skipLibCheck           # skipLibCheck on
+                                                  # (zero output -- the conflict is silently accepted)
+```
+
+`skipLibCheck` เปิดเป็น default ในทุก config ที่คอร์สนี้แสดงมาจนถึงตอนนี้ (`tsc --init` เองก็มีมันอยู่) และมีเหตุผลดี — การ check declaration file ของทุก dependency ในทุก build เป็นงานที่เสียเปล่าจริง ๆ เมื่อคุณเชื่อว่า type ของ ecosystem โดยรวมมั่นคงพอ แต่คำว่า "มั่นคงพอ" ทำงานหนักอยู่ในประโยคนั้น: flag นี้ไม่ได้แค่ข้ามการ check ที่*ช้า* มันข้ามการ check ที่จับ bug จริงที่ ship มาใน type ของ library ได้ ตรงเป๊ะแบบที่พิสูจน์ข้างบน
+
+<TSPlayground code={ambientDeclareCode} id="compiler-tooling-declaration-ambient" title="declare คือคำสัญญาระดับ type — reassign declare const ยังเป็น error จริง" />
+
+export const ambientDeclareCode = `declare const APP_VERSION: string;
+declare function gtag(...args: unknown[]): void;
+
+console.log(APP_VERSION.toUpperCase());
+gtag("event", "page_view");
+
+// @ts-expect-error -- declare is a type-only promise; assigning to it is still a real error
+APP_VERSION = "2.0";`;
+
+กด **Check types**: ไม่มี error เลย ซึ่งเป็นผลที่น่าสนใจตรงนี้ ไม่ใช่ bug `declare const` สัญญากับ checker ว่า `APP_VERSION` มีอยู่จริงตอน runtime เป็น `string` — มันไม่บอกอะไรเลยว่า*ยังไง* ซึ่งเป็นประเด็นของ ambient declaration พอดี (bundler define, global ที่ inject เข้ามา อะไรก็ตามที่จัดหามันจริง ๆ) บรรทัด `@ts-expect-error` กิน error จริงตัวเดียวที่ไฟล์นี้มี (การ reassign `const`) ดังนั้นการรันที่สะอาดตรงนี้แปลว่าสองอย่างเป็นจริงพร้อมกัน: คำสัญญาแบบ ambient ถูกรักษาทุกที่ที่ใช้ และ compiler ยังบังคับกฎปกติ (`const` reassign ไม่ได้) ทับลงไปด้วย
 
 ## การ emit declaration ของตัวเอง
 
@@ -103,8 +172,44 @@ export const config2 = {
 
 ผู้ใช้จึงเห็น shape จริงแทนที่จะเป็น index signature เปล่า ๆ
 
+## Mental Model
+
+ทุกกลไกในบทนี้ตอบคำถามเดียวกันคนละ scope: **compiler เอา type มาจากไหนสำหรับ code ที่ตัวเองไม่ได้ compile และคำสัญญานั้นกว้างแค่ไหน?** `declare` สัญญาเกี่ยวกับชื่อเดียว `declare module "x" { ... }` สัญญาเกี่ยวกับทั้ง module — แต่เฉพาะเมื่อไฟล์ที่มันอยู่ไม่ได้เป็น module อยู่แล้ว ไม่งั้น syntax เดียวกันเป๊ะจะหมายถึงคนละเรื่องเลย (augmentation) `types` สัญญาเกี่ยวกับทุกไฟล์ในโปรแกรมพร้อมกัน; `/// <reference types="...">` แคบคำสัญญาเดียวกันนั้นกลับมาที่ไฟล์เดียว `skipLibCheck` เป็นคำสัญญาไปอีกทาง — ไม่ใช่ "เชื่อว่า shape นี้มีอยู่" แต่เป็น "เชื่อว่า shape นี้*ถูกต้อง*โดยไม่ต้อง re-verify" — ซึ่งเป็นเหตุผลที่มันต่างจากตัวอื่น มันปล่อยให้ bug จริงผ่านไปได้ ไม่ใช่แค่เติมช่องว่าง
+
+## ข้อแลกเปลี่ยน
+
+| กลไก | Scope | ข้อดี | ต้นทุน |
+|---|---|---|---|
+| `declare const`/`declare function` | ชื่อเดียว | type global โดยไม่มี runtime code เลย | ไม่มีการบังคับว่า value จริงตรงกัน — เป็นแค่คำสัญญาล้วน ๆ |
+| `declare module "x" { ... }` ใน `.d.ts` เฉพาะทาง | module เดียว | type dependency ที่ไม่มี type ได้ครบ | ทำงานเป็น declaration ใหม่ได้แค่นอกไฟล์ที่เป็น module-scope — syntax เดียวกันแปลว่า "augment" ข้างในไฟล์แบบนั้น |
+| `types: [...]` | ทั้งโปรแกรม | ที่เดียวควบคุมทุก global package ที่ auto-load | all-or-nothing ต่อ package; opt-out ทีละไฟล์ไม่ได้ |
+| `/// <reference types="...">` | ไฟล์เดียว | opt-in ที่แม่นยำ scope เฉพาะไฟล์ ทำงานได้แม้ `types: []` | ลืมง่าย และมองไม่เห็นสำหรับใครที่ไม่ได้อ่านหัวไฟล์นั้น |
+| `skipLibCheck` | ทุก `.d.ts` ในโปรแกรม | เร่งความเร็วจริงมีความหมาย เป็น default ด้วยเหตุผลดี | ซ่อน bug จริงที่ ship มาใน type ของ dependency ได้ ไม่ใช่แค่ประหยัดเวลา |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`declare module "x" { ... }` สร้าง ambient module ใหม่เสมอ** ทำแบบนั้นได้แค่ในไฟล์แบบ script-scope (ไม่มี top-level `import`/`export`) หรือ `.d.ts` จริง syntax เดียวกันเป๊ะในไฟล์ที่มี import/export จริงอยู่แล้ว ถูกมองว่าเป็นการ *augment* module ที่มีอยู่แล้วชื่อ `"x"` — และ fail ด้วย `TS2664` ถ้าไม่มี module แบบนั้นให้ augment
+- **`types` กับ `/// <reference types="...">` ทำงานเดียวกันแค่ syntax ต่างกัน** `types` เป็น setting ระดับทั้งโปรแกรม; triple-slash directive scope เฉพาะไฟล์ที่มันอยู่ และทำงานได้เป๊ะเพราะมันเป็นอิสระจาก setting ระดับโปรเจกต์ — มันยังดึง type ของ package เข้ามาได้แม้ `types: []` จะไม่โหลดอะไรเลย
+- **`skipLibCheck` ข้ามแค่การ check ไฟล์ `.d.ts` ที่ช้าและไม่เกี่ยวข้อง (ไฟล์ `lib` built-in)** มันข้ามการ check **ทุก** ไฟล์ `.d.ts` รวมถึงไฟล์ที่ dependency จริง ship มาพร้อม bug จริง — พิสูจน์แล้วข้างบนด้วย `TS2717` จริงที่โผล่เฉพาะตอนปิด flag
+- **`.d.ts` ที่ไม่มี field `"types"` ใน `package.json` แปลว่าไม่มี type เลย** `escape-string-regexp` (อ่านทั้งไฟล์ข้างบน) ship type จริงมาโดยไม่มี field `"types"` เลย — `tsc` หา `index.d.ts` ข้าง ๆ `index.js` ผ่านกฎ implicit sibling-file ไม่ต้องมี field ชัดเจนเลย
+
+## อ่านโค้ดที่ AI เขียน
+
+- shim ที่ generate มาใส่ `declare module "some-lib" { ... }` ในไฟล์เดียวกับ application code ที่ import มัน (ที่มี `import`/`export` อื่นอยู่แล้ว) ไหม? นั่นคือกับดัก `TS2664` จากบทนี้ — shim ควรอยู่ใน `.d.ts` ของตัวเอง
+- `tsconfig.json` ที่ generate มาเพิ่ม `"skipLibCheck": true` โดยไม่มีใครตรวจว่า declaration file ของ dependency จริงมีปัญหาจริงที่กำลังถูกซ่อนอยู่หรือเปล่า? มันเป็น default ที่ถูกต้องสำหรับโปรเจกต์ส่วนใหญ่ แต่ "เพิ่มมันเพราะ `.d.ts` error โผล่ขึ้นมา" โดยไม่อ่านว่า error*คืออะไร*จริง ๆ อาจซ่อน bug แบบเดียวกับที่บทนี้พิสูจน์ไว้
+- code ที่ generate มาเพิ่ม directive `/// <reference types="...">` เพื่อ "แก้" global ที่หายไป ทั้งที่ fix จริงคือเพิ่ม package เข้า array `types` ระดับโปรเจกต์เพราะทุกไฟล์ต้องการมัน? directive แบบครั้งเดียวสำหรับไฟล์ที่เป็นกรณีเดียวจริง ๆ นั้นโอเค แต่การกระจาย directive เดียวกันไปหลายไฟล์เป็นสัญญาณว่า `types` ควรมีมันอยู่แล้ว
+- claim ที่บอกว่า "library นี้ไม่มี type" ถูกตรวจกับ `package.json` จริงหรือยัง — การไม่มี package `@types/*` ไม่ได้แปลว่าไม่มี type ถ้า library ship type ของตัวเองผ่าน implicit sibling `.d.ts` ตรงเป๊ะแบบตัวอย่างจริงที่อ่านในบทนี้?
+
+<SpotTheBug lang="json" code={`{
+  "name": "internal-metrics-client",
+  "type": "module",
+  "main": "./dist/index.js"
+}`}>
+`package.json` นี้ไม่มี field `"types"`, ไม่มี field `"exports"`, และไม่มี `.d.ts` ข้าง ๆ `dist/index.js` เลย (สมมติว่า build emit แค่ `.js`) consumer ที่ import package นี้จะได้ `TS7016: Could not find a declaration file for module 'internal-metrics-client'` — และ "ทางแก้" ที่ล่อใจให้หยิบมาใช้แบบอัตโนมัติคือ `skipLibCheck` หรือ `// @ts-ignore` เหมาแบบกว้าง ๆ บน import ซึ่งทั้งคู่ไม่ได้แก้ปัญหาจริง: package นี้ไม่มี type ship มาที่ไหนเลยจริง ๆ ทางแก้จริงคือหนึ่งใน (a) library เปิด `"declaration": true` แล้วชี้ `"types"` ไปที่ `.d.ts` ที่ emit ออกมา, (b) consumer ทำ shim `declare module "internal-metrics-client"` ใน `.d.ts` ของตัวเอง (ไม่ปนกับไฟล์ที่มี import จริง ตาม gotcha `TS2664` ของบทนี้), หรือ (c) เช็ค DefinitelyTyped หา package `@types/internal-metrics-client` ของชุมชน ซึ่งจะไม่มีสำหรับ package ภายในองค์กร การ review เรื่องนี้คือการรู้จำว่า `TS7016` แปลว่า "ไม่พบ type เลย" ไม่ใช่ "type ผิด" แล้วเลือก fix ที่ตรงกับฝั่งไหน — publisher หรือ consumer — ที่เป็นเจ้าของปัญหาจริง
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`.d.ts` คือ type ที่ไม่มี runtime code `declare` แนะนำ ambient declaration แบบนั้น (global หรือ `declare module` สำหรับ package ที่ไม่มี type) library ส่วนใหญ่ถูกครอบคลุมทั้งจาก type ที่ ship มาใน package หรือจาก package `@types/*` จาก DefinitelyTyped — ถูกหาให้อัตโนมัติสำหรับ import แต่ตั้งแต่ TypeScript 6.0 package แบบ global อย่าง `@types/node` ต้องระบุใน `types` เมื่อคุณ publish library ตั้ง `declaration: true` (และพิจารณา `isolatedDeclarations`) เพื่อให้ผู้ใช้ได้ type ด้วย
+`.d.ts` คือ type ที่ไม่มี runtime code `declare` แนะนำ ambient declaration แบบนั้น (global หรือ `declare module` สำหรับ package ที่ไม่มี type) — แต่ syntax `declare module "x" { ... }` เดียวกันหมายถึงคนละเรื่อง (augmentation, `TS2664` ถ้าไม่มีอะไรให้ augment) ทันทีที่ไฟล์ของมันมี import/export จริงอยู่แล้ว shim จึงควรอยู่ใน `.d.ts` ของตัวเอง library ส่วนใหญ่ถูกครอบคลุมทั้งจาก type ที่ ship มาใน package — บางทีแค่ผ่าน implicit sibling `.d.ts` ไม่ต้องมี field `"types"` เลย ตามที่บทนี้อ่านทั้งไฟล์ — หรือจาก package `@types/*` จาก DefinitelyTyped ที่ถูกหาให้อัตโนมัติสำหรับ import; package แบบ global อย่าง `@types/node` ต้องตั้ง `types` ระดับโปรเจกต์ หรือ `/// <reference types="...">` สำหรับไฟล์เดียว `skipLibCheck` เปิดเป็น default เพื่อความเร็วจริง แต่เป็นข้อแลกเปลี่ยนจริง: มันข้ามการ check ทุก `.d.ts` ในโปรแกรม รวมถึง bug จริงที่ ship มาใน type ของ dependency ไม่ใช่แค่ตัวที่ช้า เมื่อคุณ publish library ตั้ง `declaration: true` (และพิจารณา `isolatedDeclarations`) เพื่อให้ผู้ใช้ได้ type ด้วย
 </Callout>
 
 export const quizDecl = [
@@ -117,6 +222,7 @@ export const quizDecl = [
       'compiler configuration',
     ],
     answer: 0,
+    explain: '.d.ts อธิบาย shape ของบางอย่างที่อยู่ที่อื่น -- library, global, module -- โดยไม่มี runtime code ของตัวเองเลย',
   },
   {
     q: 'keyword `declare` ทำอะไร?',
@@ -127,6 +233,7 @@ export const quizDecl = [
       'mark class เป็น abstract',
     ],
     answer: 1,
+    explain: 'declare บอกว่า "เชื่อผมสิ ตัวนี้มีอยู่จริงตอน runtime ผ่านทางอื่น" -- มันไม่ emit อะไรเลยด้วยตัวเอง',
   },
   {
     q: '`@types/lodash` และ package คล้าย ๆ กันมาจากไหน?',
@@ -137,6 +244,7 @@ export const quizDecl = [
       'ship มาข้างใน TypeScript compiler',
     ],
     answer: 1,
+    explain: 'DefinitelyTyped คือ repository ขนาดใหญ่ที่ชุมชนดูแล; tsc หา package @types/* คู่ที่ install ไว้ให้อัตโนมัติเมื่อ import ตรงกัน',
   },
   {
     q: 'คุณ install `@types/node` แล้ว แต่ `process` ยัง "not defined" ใน TypeScript 7 ขาดอะไรไป?',
@@ -147,6 +255,7 @@ export const quizDecl = [
       '`declaration: true`',
     ],
     answer: 1,
+    explain: 'ตั้งแต่ 6.0 types default เป็น [] -- package ที่ contribute global ต้อง opt in ชัดเจน ระดับโปรเจกต์ผ่าน types หรือต่อไฟล์ผ่าน /// <reference types="...">',
   },
   {
     q: 'จะ ship type อย่างไรเมื่อ publish TypeScript library ของตัวเอง?',
@@ -157,6 +266,29 @@ export const quizDecl = [
       'ทำไม่ได้ — ผู้ใช้ต้อง retype เอง',
     ],
     answer: 1,
+    explain: 'declaration: true emit .d.ts ไว้ข้าง ๆ .js แต่ละไฟล์; การชี้ types ไปที่ entry declaration คือกลไกเดียวกับที่ทั้ง ecosystem ใช้',
+  },
+  {
+    q: '```text\n$ tsc --noEmit --strict\nnode_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must\nhave the same type. Property \'retries\' must be of type \'number\', but here has type \'string\'.\n\n$ tsc --noEmit --strict --skipLibCheck\n                                       # zero output\n```\nการรันคู่นี้จริง ๆ พิสูจน์อะไรเกี่ยวกับ `skipLibCheck`?',
+    options: [
+      'skipLibCheck มีผลแค่กับไฟล์ lib.*.d.ts built-in ไม่เคยแตะ type ของ dependency เอง',
+      'skipLibCheck ข้ามการ check ทุก .d.ts ในโปรแกรม รวมถึง bug จริงของ declaration ที่ขัดแย้งกันที่ ship มาข้างใน dependency จริง -- เป็นข้อแลกเปลี่ยนจริง ไม่ใช่แค่สวิตช์ความเร็ว',
+      'skipLibCheck จำเป็นเพื่อให้โปรเจกต์ compile ผ่านได้เลย',
+      'error นี้โผล่แค่ตอนไม่มี strict mode',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch แล้วด้วย package node_modules จริงที่มี declaration ของ property เดียวกันขัดแย้งกันสองที่: ปิด tsc รายงาน TS2717 จริง; เปิด conflict ถูกยอมรับเงียบ ๆ -- พิสูจน์ว่า flag นี้ซ่อนปัญหาจริง ไม่ใช่แค่ปัญหาที่ช้า',
+  },
+  {
+    q: '```ts\ndeclare module "legacy-lib" {\n  export function parse(input: string): { ok: boolean };\n}\n\nimport { parse } from "legacy-lib";\n```\nอันนี้ fail ด้วย `TS2664: Invalid module name in augmentation, module \'legacy-lib\' cannot be found` ทำไม ทั้งที่ `declare module` block เดียวกันทำงานได้ปกติใน `.d.ts` เฉพาะทาง?',
+    options: [
+      'declare module เป็น syntax ที่ผิดเสมอในไฟล์ .ts',
+      'ไฟล์นี้มี import จริงอยู่แล้ว ทำให้มันเป็น module แทนที่จะเป็น script -- ข้างในโมดูล `declare module "x" { ... }` แปลว่า "augment module x ที่มีอยู่แล้ว" ไม่ใช่ "ประกาศตัวใหม่" และไม่มี module "legacy-lib" จริงให้ augment',
+      'ต้อง install legacy-lib ผ่าน npm ก่อน',
+      'TS2664 แปลว่า function signature ผิด',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch แล้ว: declare module block เดียวกันเป๊ะ compile ผ่านในไฟล์แบบ script-scope หรือ .d.ts จริง แต่ถูกตีความใหม่เป็น module augmentation ทันทีที่ไฟล์นั้นมี top-level import/export ด้วย -- เป็นเหตุผลที่ shim ของ library อยู่ใน .d.ts ของตัวเองตามธรรมเนียม',
   },
 ];
 

@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## compiler คือตัวภาษาเอง
 
@@ -40,8 +42,183 @@ export const jobsDiagram = `flowchart LR
 
 แยกสองงานนี้ให้ชัดแล้วทั้ง toolchain จะเข้าใจง่ายขึ้น bundler อย่าง esbuild ทำงานที่ 2 ได้ในเสี้ยววินาที เพราะแค่ strip type ออกโดยไม่เข้าใจ type เลย — ซึ่งแปลว่าจะ emit code ที่ type-check ไม่ผ่านออกมาได้อย่างสบายใจ นั่นคือเหตุผลที่คำแนะนำมาตรฐานคือ: **ให้ bundler emit แล้วรัน `tsc --noEmit` ใน CI เพื่อ check จริง ๆ** ด้วย TypeScript 7 การ check นั้นเร็วกว่าเดิมราวสิบเท่า pattern นี้จึงเสียเวลาแค่หลักวินาที ไม่ใช่นาที ที่เหลือของโมดูลนี้จะแกะ config ที่ควบคุมทั้งสองงานนี้
 
+## Type-checking จับสิ่งที่ bundler จับไม่ได้
+
+`strict` เปิดเสมอทุกที่ที่คอร์สนี้ให้คุณ check type — รวมถึง checker แบบ interactive ด้านล่างนี้ ซึ่ง type-check ด้วย TypeScript compiler จริง (โหลดจาก CDN) ไม่ใช่การจำลอง กด **Check types** โดยไม่แก้อะไรเลย แล้วคุณจะเห็น `noImplicitAny` diagnostic จริงสองตัว — bundler ที่ transpile ไฟล์นี้จะ emit JavaScript ที่ดูทำงานได้ออกมาโดยไม่บ่นอะไรเลย เพราะมันไม่เคยดู *shape* ของ `items` เลยด้วยซ้ำ
+
+<TSPlayground code={noImplicitAnyCode} id="compiler-tooling-index-noimplicitany" title="bundler จะ emit อันนี้แบบเงียบ ๆ แต่ tsc --noEmit จะไม่เงียบ" />
+
+export const noImplicitAnyCode = `// @expect-error TS7006
+function double(items) {
+  return items.map((n) => n * 2);
+}
+console.log(double([1, 2, 3]));`;
+
+นี่คือเวอร์ชันรูปธรรมของ "ให้ bundler emit ให้ `tsc` check": `double` มี parameter สองตัวที่ไม่ได้ประกาศ type และภายใต้ `noImplicitAny` ของ `strict` นั่นคือ error ไม่ใช่การเดา bundler-only pipeline จะรัน `double(["a", "b"])` ได้สบายพอ ๆ กับ `double([1, 2, 3])` — มันไม่มีทางรู้ว่าผิดจนกว่าจะพังตอน runtime
+
+## Lint type ไม่ใช่แค่ syntax: `typescript-eslint`
+
+rule ของ ESLint ธรรมดาเห็นแค่ syntax — semicolon หาย, ตัวแปรไม่ได้ใช้ — โดยไม่เคยถาม type checker เลย **typed rule ของ `typescript-eslint`** ถาม checker ตรง ๆ ซึ่งเป็นเหตุผลที่มันจับ bug ที่ linter แบบ syntax-only จับไม่ได้: `await` ที่ลืมใส่, `any` ที่ leak ผ่านฟังก์ชันสามชั้นเงียบ ๆ, `switch` ที่ดูครบแต่ไม่ครบจริง การเปิดมันมีต้นทุนจริง ๆ ทั้งเรื่อง setup และเวลา ซึ่งควรเห็นตรง ๆ ก่อนตัดสินใจว่าจะวางเส้นตรงไหน
+
+นี่คือ `eslint.config.mjs` ที่เปิด typed rule ที่คอร์สนี้สนใจที่สุด โดยใช้ `projectService` — ตัวตั้งค่าที่ให้ `typescript-eslint` หา `tsconfig.json` ของคุณเองอัตโนมัติ แทนที่จะต้องแจกแจง project ของทุกไฟล์เอง:
+
+```js
+// @ts-check
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/switch-exhaustiveness-check": "error",
+      "@typescript-eslint/consistent-type-imports": "error",
+    },
+  },
+);
+```
+
+รันกับไฟล์เล็ก ๆ ไฟล์เดียวที่ trigger ทุก rule ข้างบน (ตรวจใน scratch จริง — `typescript-eslint@8.70.1` บน `typescript@5.9.3` เพราะ `typescript-eslint` ยังไม่รองรับ TypeScript 7: ติดตั้งคู่กับ `typescript@7` แล้ว npm peer-dependency check พังด้วย `peer typescript@">=4.8.4 <6.1.0" from typescript-eslint@8.70.1` โปรเจกต์ที่ใช้ TypeScript 7 จึงต้องเก็บ `typescript@6` ไว้สำหรับเครื่องมือนี้ pattern เดียวกับ `@typescript/typescript6` ที่ [Build & Emit](/typescript/th/compiler-and-tooling/build-and-emit/) พูดถึงสำหรับ language server):
+
+```text
+  1:1   error  All imports in the declaration are only used as types. Use `import type`   @typescript-eslint/consistent-type-imports
+  3:1   error  Async function 'fetchUser' has no 'await' expression                       @typescript-eslint/require-await
+ 12:3   error  Promises must be awaited, end with a call to .catch, ... or be explicitly
+               marked as ignored with the `void` operator                                 @typescript-eslint/no-floating-promises
+ 14:11  error  Promise returned in function argument where a void return was expected     @typescript-eslint/no-misused-promises
+ 18:9   error  Unsafe assignment of an `any` value                                        @typescript-eslint/no-unsafe-assignment
+ 18:15  error  Unexpected any. Specify a different type                                   @typescript-eslint/no-explicit-any
+ 19:22  error  Unsafe member access .value on an `any` value                              @typescript-eslint/no-unsafe-member-access
+ 20:15  error  Unsafe call of an `any` typed value                                        @typescript-eslint/no-unsafe-call
+
+✖ 13 problems (13 errors, 0 warnings)
+```
+
+ทุกตัวในนั้นคือ bug class จริงจาก catalogue โค้ด AI ของคอร์สนี้เอง — `any` ที่ boundary, floating promise, callback แบบ async ที่ตำแหน่งต้องการ callback คืน `void` — จับได้เพราะถาม checker ตรง ๆ ไม่ใช่ pattern-match text ไฟล์แยกที่มี `switch` ไม่ครบ (non-exhaustive) บน union สามสมาชิกได้ diagnostic ของตัวเอง `@typescript-eslint/switch-exhaustiveness-check`: `Switch is not exhaustive. Cases not matched: "error" | "pending"`
+
+ต้นทุนก็จริงเหมือนกัน: ไฟล์เดียวกัน lint ด้วย `projectService` เปิด (สร้าง program ที่ type-check เต็มรูปแบบ) ใช้เวลา **0.78s**; ไฟล์เดียวกันเป๊ะ lint ด้วย `tseslint.configs.recommended` เฉยๆ (ไม่มี type information, rule แบบ syntax เท่านั้น) ใช้เวลา **0.28s** — เกือบ 3 เท่าบนไฟล์เล็ก ๆ ไฟล์เดียว และช่องว่างนี้จะกว้างขึ้นตามขนาดโปรแกรม เพราะทุกครั้งที่ lint ตอนนี้ต้องสร้าง `ts.Program` จริง นี่คือ trade ที่ต้องตัดสินใจเอง ไม่ใช่เกิดโดยบังเอิญ: typed rule จับ bug ได้กว้างกว่าจริง ๆ แต่มีต้นทุนที่โผล่มาทุกครั้งที่รัน `eslint`, ทุกครั้งที่ save, ทุก CI job
+
+## Type-level testing: พิสูจน์ว่า type จริง ๆ คืออะไร
+
+ทุกอย่างที่คุณอ่านมาในคอร์สนี้เกี่ยวกับ type ที่ "resolve เป็น X" ถูกตรวจด้วยเครื่องมือแบบเดียวกับที่ section นี้อธิบาย: assertion ที่ *compile ไม่ผ่าน* — ไม่ใช่ *รันไม่ผ่าน* — เมื่อ type ผิด `tsd`, `expect-type`, และ `expectTypeOf` ของ vitest คือไอเดียเดียวกันสามแบบ; โปรเจกต์ที่ใช้ Vitest อยู่แล้วมีตัวที่สามติดมาในตัวเลย
+
+```ts
+import { expectTypeOf, test } from "vitest";
+
+type Camel<S extends string> = S extends `${infer H}_${infer T}` ? `${H}${Capitalize<Camel<T>>}` : S;
+
+test("Camel converts snake_case to camelCase at the type level", () => {
+  expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"userId">();
+});
+```
+
+test นั้นผ่าน — แต่นี่คือส่วนที่ต้องระวัง: เปลี่ยน type ที่คาดหวังให้ผิด แล้วรันใหม่ด้วย `vitest run` เฉย ๆ:
+
+```ts
+// @skip-verify demonstrates a *silently passing* runtime test -- see prose for the tsc check that actually catches it
+test("a wrong assertion, run with only `vitest run`", () => {
+  expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"user_id">(); // wrong: should be "userId"
+});
+```
+
+รันด้วย `vitest run` แล้วมันรายงาน **1 passed** — `expectTypeOf` ไม่มี runtime behavior เลย ดังนั้น test runner ที่รันแค่ JavaScript จะไม่มีทางสังเกตว่า assertion ผิด สิ่งที่จับได้จริงคือการรัน `tsc --noEmit --strict` เฉย ๆ บนไฟล์ test นั้น (ตรวจใน scratch แล้ว): `error TS2344: Type '"user_id"' does not satisfy the constraint '"Expected: literal string: user_id, Actual: literal string: userId"'` — error message ถูกสร้างขึ้น *จาก* ความไม่ตรงกันนั้นเอง ซึ่งเป็นเหตุผลที่ type-level test ต้องมี compile step จริงใน CI ไม่ใช่แค่ `vitest run` ถึงจะมีความหมาย
+
+## Verify โค้ด TypeScript ที่ AI เขียน: บันไดตรวจสอบ
+
+diff ที่ generate มาแล้ว "type-check ผ่าน" แค่ผ่านบันไดขั้นต่ำสุดเท่านั้น แต่ละขั้นด้านล่างจับ bug คนละ class ที่ `SpotTheBug` ของคอร์สนี้เคยโชว์ว่า compile ผ่านเฉย ๆ:
+
+1. **`tsc --noEmit --strict`** — จับ implicit `any`, การใช้ null/undefined ผิด และ type mismatch จริง ๆ พลาด: `any` ที่ใช้ *ตั้งใจ*, unsafe cast (`as`), non-null assertion (`!`), และอะไรก็ตามที่แค่ runtime behavior ผิดแต่ type ดูถูกต้อง
+2. **typed rule ของ `typescript-eslint`** — จับสิ่งที่ขั้น 1 พลาดตรง ๆ ในฝั่ง `any`/cast/promise: `no-explicit-any`, `no-unsafe-*`, `no-floating-promises`, `consistent-type-imports` พลาด: logic ถูกหรือเปล่า
+3. **type-level test (`expectTypeOf` / `@ts-expect-error`)** — จับ utility type หรือ generic ที่ resolve เป็นของผิดเงียบ ๆ ซึ่งขั้น 1–2 ยอมรับว่า "typed ถูก" เพราะ type สอดคล้องกันเองแค่ผิด พลาด: runtime behavior ทั้งหมด
+4. **runtime test** — จับ behavior จริงที่ผิด รวมถึงทุกอย่างที่ type predicate โกหก (`x is string { return true }`) หรือ `as` cast ซ่อนไว้จากทุกขั้นข้างบน พลาด: `.d.ts` ที่ publish ตรงกับ shape จริงตอน runtime หรือเปล่า
+5. **`@arethetypeswrong`** (สำหรับ package ที่ publish แล้ว) — จับช่องว่างระหว่างสิ่งที่ ship กับสิ่งที่ resolver ของผู้ใช้เห็นจริง ๆ รันจริงกับ package ที่ publish แล้วและมีปัญหา CJS/ESM แบบรู้กันอยู่แล้ว (`npx @arethetypeswrong/cli --from-npm chalk@5.3.0`):
+
+```text
+⚠️ A require call resolved to an ESM JavaScript file, which is an error in Node and some bundlers.
+┌───────────────────┬──────────────────────────────┐
+│                    │ "chalk"                      │
+├───────────────────┼──────────────────────────────┤
+│ node10             │ 🟢                           │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from CJS)  │ ⚠️ ESM (dynamic import only) │
+├───────────────────┼──────────────────────────────┤
+│ node16 (from ESM)  │ 🟢 (ESM)                     │
+├───────────────────┼──────────────────────────────┤
+│ bundler            │ 🟢                           │
+└───────────────────┴──────────────────────────────┘
+```
+
+ไม่มีคำสั่งเดียวที่รันทั้งบันได — ที่ใกล้เคียงที่สุดคือการต่อขั้นที่เกี่ยวกับ CI: `tsc --noEmit --strict && eslint . && vitest run` ครอบคลุมขั้น 1, 2 และ (ถ้า suite มี test `expectTypeOf`/`@ts-expect-error`) 3 กับ 4 ในบรรทัดเดียว; ขั้น 5 เป็น check แยกที่ทำเป็นครั้งคราว ไม่ใช่ทุก commit
+
+<Mermaid title="บันไดตรวจสอบ และสิ่งที่แต่ละขั้นจับได้จริง" code={ladderDiagram} />
+
+export const ladderDiagram = `flowchart TB
+  a["tsc --noEmit --strict"] -->|misses: any, as, !, wrong logic| b["typed eslint rules"]
+  b -->|misses: is the type itself right?| c["expectTypeOf / @ts-expect-error"]
+  c -->|misses: runtime behavior| d["runtime tests"]
+  d -->|misses: does a consumer's resolver see this?| e["@arethetypeswrong (publish time)"]`;
+
+## Mental Model
+
+`tsc` คือโปรแกรมเดียวที่ทำสองงาน และทุกเครื่องมือในโมดูลนี้มีไว้เพื่อตอบคำถามเดียวกันเกี่ยวกับ code ชิ้นหนึ่ง: **มันถูก check อยู่หรือเปล่า และ check ด้วยอะไร?** bundler ไม่ตอบทั้งสองอย่าง — มันลบ type ทิ้งโดยไม่อ่านเลย `tsc --noEmit --strict` ตอบว่า "*shape* ถูกไหม" แต่หยุดทันทีที่ type บอกว่า `any` หรือ cast บอกว่า `as` typed `eslint` rule ขยายคำถามเดียวกันไปยัง pattern ที่ checker เองไม่ flag (floating promise ก็ยัง type-check เป็น `Promise<void>` ได้ปกติ ไม่มีอะไรในนั้นเป็น *type* error) type-level test ตอบคำถามที่ต่างไปเลย — ไม่ใช่ "code นี้ type-check ผ่านไหม" แต่ "type ตัวนี้เท่ากับ type ที่ฉันอ้างจริงไหม" ซึ่งเป็นเครื่องมือเดียวในลิสต์นี้ที่จับ utility type ที่คืนของผิดเงียบ ๆ ได้ ทั้งที่ typed ถูกสมบูรณ์แบบ ไม่มีเครื่องมือไหนแทนที่อีกตัวได้ — แต่ละตัวกำลัง check สิ่งที่ตัวอื่นมองไม่เห็นโดยโครงสร้าง
+
+## ข้อแลกเปลี่ยน
+
+| เครื่องมือ | จับอะไร | พลาดอะไร | ต้นทุน |
+|---|---|---|---|
+| `tsc --noEmit --strict` | implicit `any`, การใช้ null/undefined ผิด, shape mismatch | `any` ที่ตั้งใจ, `as`, `!`, logic ที่ผิดตอน runtime | หลักวินาที ใน CI หรือตอน save |
+| typed `typescript-eslint` | floating promise, `any` ที่ leak ไม่ปลอดภัย, switch ไม่ครบ, import style ผิด | logic เองถูกหรือเปล่า | ~3 เท่าของ lint แบบ syntax-only จาก timing ของคอร์สนี้เอง และต้นทุน setup จริง (`projectService`, tsconfig ที่ใช้งานได้) |
+| `expectTypeOf` / `@ts-expect-error` | type ที่ resolve เป็นของผิด แม้จะสอดคล้องกันเอง | ทุกอย่างเกี่ยวกับ runtime behavior | ต้องมี `tsc --noEmit` แยกของตัวเอง — `vitest run` เฉย ๆ ไม่ check ให้ |
+| runtime test | behavior จริง รวมถึงสิ่งที่ `as`/`!`/type-predicate ที่โกหกซ่อนไว้ | `.d.ts` ที่ publish ตรงกับสิ่งที่ bundler ของผู้ใช้ resolve จริงไหม | ต้นทุน test suite ปกติ |
+| `@arethetypeswrong` | ช่องว่างของ exports-map/`.d.mts`/dual-package ระหว่างสิ่งที่ ship กับสิ่งที่ resolve จริง | ทุกอย่างก่อนหน้าการ publish | รันเป็นครั้งคราว ไม่ใช่ทุก commit |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"type-check ผ่าน" แปลว่า code ถูกต้อง** มันแปลว่า *shape* สอดคล้องกันเองเท่านั้น `any`, `as`, `!`, และ type predicate ที่โกหก (`function isString(x: unknown): x is string { return true; }`) ทั้งหมด compile ผ่านเรียบร้อยพร้อม assert สิ่งที่ checker ไม่เคยตรวจสอบเลย
+- **typed ESLint rule กับ `tsc --noEmit` check สิ่งเดียวกัน เลยมีแค่ตัวเดียวก็พอ** มันซ้อนกันแทบไม่มีเลย: `tsc` flag shape mismatch; typed rule flag *pattern* ที่ checker จับไม่ได้โดยโครงสร้าง (floating promise, `any` ที่ leak ผ่านสามชั้น) เพราะ pattern พวกนั้นยังให้ type ที่ valid สมบูรณ์
+- **`expectTypeOf` test ที่ผ่าน พิสูจน์ว่า type ถูกตอน runtime ด้วย** มันพิสูจน์แค่ว่า type ถูก *ในฐานะ type* — `expectTypeOf` ไม่มี runtime behavior เลย ดังนั้น `vitest run` เฉย ๆ จะรายงาน "passed" อย่างสบายใจบน test ที่ type-level assertion ผิดจริง (พิสูจน์แล้วข้างบน); มีแค่ `tsc --noEmit` จริงบนไฟล์นั้นเท่านั้นที่จับได้
+- **ถ้า package ship `.d.ts` มา type ของมันเชื่อถือได้กับผู้ใช้ทุกคน** ผลรันจริงของ `@arethetypeswrong` ข้างบนแสดงว่า package ที่ใช้กันแพร่หลายและ typed ดี (`chalk`) ยังมีช่องว่างการ resolve สำหรับ consumer shape หนึ่ง (CJS `require`) — การ ship declaration เป็นเงื่อนไขจำเป็น ไม่ใช่เงื่อนไขพอ
+
+## อ่านโค้ดที่ AI เขียน
+
+ก่อนเชื่อ diff ที่ generate มาเพราะ "มัน compile ผ่าน" ให้ตรวจว่ามันผ่านบันไดขั้นไหนจริง ๆ:
+
+- diff เพิ่ม `any`, `as`, หรือ `!` เข้ามาไหม? ไม่มีตัวไหนถูกจับโดย `tsc --noEmit` เฉย ๆ — นั่นคือจุดบอดที่รู้อยู่แล้วของขั้น 1 ไม่ใช่ bug ของ checker
+- มีฟังก์ชัน `async` ใหม่ที่ผลลัพธ์ไม่เคยถูก await, เก็บ, หรือทิ้งด้วย `void` อย่างชัดเจนไหม? `tsc` เห็น `Promise<void>` ที่ valid; มีแค่ typed lint rule (`no-floating-promises`) เท่านั้นที่เห็น bug
+- utility type ใหม่หรือที่แก้ไข ship มาโดยไม่มี test `expectTypeOf`/`@ts-expect-error` ไหม? utility type อาจ typed ถูกและ resolve เป็นของผิดพร้อมกันได้ — ทางเดียวที่จะรู้คือ assert มัน ไม่ใช่มองด้วยตา
+- `eslint.config.mjs` ขาด `parserOptions.projectService` (หรือ project list ที่เทียบเท่า) ไหม? ถ้าไม่มี typed rule ของ `typescript-eslint` จะตกกลับไปเป็น syntax-only check เงียบ ๆ — ไม่มี error แค่ lint อ่อนลงเงียบ ๆ
+
+<SpotTheBug code={`function loadConfig(raw: string) {
+  return JSON.parse(raw);
+}
+
+async function readConfigFile(path: string) {
+  const raw = await import(path, { with: { type: "json" } });
+  return loadConfig(JSON.stringify(raw.default));
+}
+
+export function start() {
+  readConfigFile("./config.json");
+  console.log("started");
+}`}>
+ไฟล์นี้ compile ผ่าน**ไม่มี error เลย** ภายใต้ `tsc --noEmit --strict` — จุดบอดทุกจุดของมันมองไม่เห็นโดย checker เพียวๆ return type ของ `loadConfig` คือ `any` (จาก `JSON.parse`) เลยปิดการ check ให้ทุกอย่างที่ตามมาเงียบ ๆ; `readConfigFile` ประกาศเป็น `async` แต่ผลลัพธ์ไม่เคยถูก await, เก็บ, หรือ void-mark ใน `start()` เป็น floating promise ที่มีแค่ typed lint rule (`no-floating-promises`) เท่านั้นที่จับได้; และถ้า `readConfigFile` reject เมื่อไหร่ (ไฟล์หาย, JSON ผิด) ไม่มีอะไรสังเกตเห็นเลย — process ทำงานต่อผ่าน `console.log("started")` เหมือนไม่มีอะไรเกิดขึ้น รันบันไดแล้วจะเจอทุกจุด: `tsc --noEmit --strict` รายงาน 0 problem, `eslint` ที่มี `no-floating-promises` กับ `no-explicit-any` รายงาน 2 จุด และมีแค่ runtime test ที่ลบ `config.json` จริง ๆ ก่อนเท่านั้นที่จะโชว์ unhandled rejection
+</SpotTheBug>
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`tsc` ทำสองงานที่แยกกันได้: **type-checking** และ **emit JavaScript** `tsconfig.json` ของคุณควบคุมทั้งสองอย่าง รวมถึงวิธี resolve module และความเข้มของการ check bundler emit ได้เร็วกว่ามากเพราะข้ามการ check ไปเลย — pattern ที่ยั่งยืนจึงเป็นการ bundle ด้วยเครื่องมือหนึ่ง แล้ว type-check ด้วย `tsc` แยกต่างหาก
+`tsc` ทำสองงานที่แยกกันได้: **type-checking** และ **emit JavaScript** bundler emit ได้เร็วเพราะไม่เคย check เลย; `tsc --noEmit --strict` คือขั้นที่จับ implicit `any` และ shape mismatch ได้จริง — แต่มันมองไม่เห็น `any` ที่ตั้งใจ, `as` cast, floating promise, หรือ utility type ที่ resolve ผิดเงียบ ๆ โดยโครงสร้าง typed `typescript-eslint` rule, type-level test (`expectTypeOf`/`@ts-expect-error`), runtime test, และ `@arethetypeswrong` แต่ละตัวปิดช่องว่างหนึ่งจุดจากนั้น ด้วยต้นทุนจริงที่วัดได้ — มอง "compile ผ่าน" เป็นการผ่านขั้นแรกของบันได 5 ขั้น ไม่ใช่หลักฐานว่า code ถูกต้อง
 </Callout>
 
 export const quizIndex = [
@@ -54,6 +231,7 @@ export const quizIndex = [
       'test กับ deploy',
     ],
     answer: 1,
+    explain: 'tsc check ว่า type ของคุณสอดคล้องกัน (งาน 1) และแยกกัน สามารถ emit ไฟล์ JavaScript (กับ .d.ts) ได้ (งาน 2) — setup สมัยใหม่หลายที่แยกสองงานนี้ไปคนละเครื่องมือ',
   },
   {
     q: 'ทำไม bundler อย่าง esbuild ถึง emit JavaScript ที่ type-check ไม่ผ่านออกมาได้?',
@@ -64,6 +242,7 @@ export const quizIndex = [
       'cache ผล check ล่าสุดไว้',
     ],
     answer: 1,
+    explain: 'transpiler แบบ single-file ลบ type annotation ออกทาง syntax เท่านั้น — มันไม่เคยสร้าง type model ของทั้งโปรแกรมเลย จึงไม่มีทางสังเกตเห็น shape mismatch',
   },
   {
     q: 'วิธีที่แนะนำในการจับ type error จริง ๆ เมื่อ bundler เป็นคน emit คืออะไร?',
@@ -74,6 +253,40 @@ export const quizIndex = [
       'check เฉพาะตอน production',
     ],
     answer: 1,
+    explain: '`tsc --noEmit` รัน whole-program checker จริงและไม่ output อะไรออกมา — คือครึ่ง "check" ของสองงานพอดี รันแยกจากเครื่องมือไหนก็ตามที่ทำ emit',
+  },
+  {
+    q: '```ts\nfunction double(items) {\n  return items.map((n) => n * 2);\n}\nconsole.log(double([1, 2, 3]));\n```\nภายใต้ `strict`, `tsc --noEmit` รายงานอะไรตรงนี้ และทำไม bundler ถึงเงียบ?',
+    options: [
+      'ไม่มีอะไร -- code นี้ปกติดี',
+      'TS7006 บน `items` กับ `n` (implicit `any`) -- bundler ลบ annotation โดยไม่เคยดู shape ของ parameter เลย จึงไม่มีอะไรให้ flag',
+      'error ตอน runtime เท่านั้น ไม่มี diagnostic ตอน compile',
+      'error เฉพาะตอน `--target` ต่ำเกินไป',
+    ],
+    answer: 1,
+    explain: 'noImplicitAny (ส่วนหนึ่งของ strict) flag ทุก parameter ที่ไม่งั้นจะตกไปเป็น any เงียบ ๆ bundler อย่าง esbuild strip type ทาง syntax และไม่เคยสร้าง type model เลย จึง emit ไฟล์นี้โดยไม่บ่นอะไร',
+  },
+  {
+    q: 'ไฟล์ test ที่ generate มามี `expectTypeOf<Camel<"user_id">>().toEqualTypeOf<"user_id">()` (type จริงคือ `"userId"`) รัน `vitest run` แล้วรายงานว่า passed ทำไม?',
+    options: [
+      'Vitest แอบ type-check ทุกไฟล์ก่อนรันเสมอ',
+      '`expectTypeOf` ไม่มี runtime behavior เลย -- test runner ที่รันแค่ JavaScript ไม่เคย evaluate type-level assertion เลย มีแค่การรัน `tsc --noEmit` แยกบนไฟล์นั้นเท่านั้นที่จับความไม่ตรงกันได้',
+      'assertion นั้นจริง ๆ ถูกต้อง',
+      '`toEqualTypeOf` check แค่ว่าทั้งคู่เป็น string',
+    ],
+    answer: 1,
+    explain: 'ตรวจใน scratch แล้ว: `vitest run` รายงาน 1 passed บน assertion ที่ผิด ในขณะที่ `tsc --noEmit --strict` บนไฟล์เดียวกันรายงาน TS2344 จริงที่ message ถูกสร้างจากความไม่ตรงกัน ("Expected: ... Actual: ...") -- type-level test มีความหมายก็ต่อเมื่อมี compile step จริงรันเท่านั้น',
+  },
+  {
+    q: 'ทำไม `@arethetypeswrong/cli --from-npm chalk@5.3.0` ถึงรายงาน warning จริง ทั้งที่ chalk ship `.d.ts` มาและใช้กันแพร่หลาย?',
+    options: [
+      'chalk ไม่มี type เลย',
+      '`require()` จาก consumer แบบ CommonJS resolve ไปเจอไฟล์ JavaScript แบบ ESM -- การ ship declaration เป็นเงื่อนไขจำเป็น แต่ไม่ใช่เงื่อนไขพอสำหรับทุก consumer shape ที่จะ resolve ถูกต้อง',
+      'เครื่องมือรายงาน false positive',
+      '`@arethetypeswrong` ใช้ได้แค่กับ package ของ TypeScript เอง',
+    ],
+    answer: 1,
+    explain: 'ตรวจกับ package ที่ publish จริงแล้ว: ตารางแสดง 🟢 สำหรับ node10, ESM node16, และ bundler resolution แต่ `require()` แบบ CJS ภายใต้ node16 เจอ warning CJSResolvesToESM จริง -- ช่องว่างที่มองไม่เห็นทั้งจาก `tsc` และ typed eslint เพราะทั้งคู่ไม่ได้จำลองว่า package.json ของ consumer resolve exports ของคุณจริง ๆ อย่างไร',
   },
 ];
 

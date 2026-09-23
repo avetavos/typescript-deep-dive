@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Two module systems, still
 
@@ -101,8 +103,102 @@ CJS and ESM disagree about default exports, which historically made `import expr
 
 You will still see that line in old configs, but it no longer does anything: **`esModuleInterop` and `allowSyntheticDefaultImports` are always on in TypeScript 6/7 and cannot be disabled.** `import express from "express"` just works. The only migration step is the reverse one — if a codebase has `import * as express from "express"` from the pre-interop era, switch it to a default import.
 
+## How a file's module format gets decided
+
+`nodenext`/`node18`/`node20` don't check a flag on the compiler — they ask three things, in order: does the file end in `.mts`/`.cts` (always ESM/CJS respectively, no matter what)? Otherwise, does the nearest `package.json` say `"type": "module"`? Otherwise, plain `.ts` defaults to CommonJS. Two similar-looking cross-format mistakes then get caught in genuinely different ways, worth telling apart:
+
+`import.meta` used inside a file `nodenext` has decided is CommonJS is a real **syntax** error, independent of anything installed:
+
+```ts
+// @skip-verify only reproduces on a real .cts file under --module nodenext -- see prose for the exact command and output
+console.log(import.meta.url);
+```
+
+`error TS1470: The 'import.meta' meta-property is not allowed in files which will build into CommonJS output` (verified in scratch on a real `.cts` file, under `--module nodenext`, with `@types/node` installed and without — same result either way). This is the checker enforcing that a file committed to CommonJS can't use ESM-only syntax, full stop.
+
+`require()` used inside an ESM file looks like the mirror image, but it isn't: it's an ordinary **undeclared-name** lookup, not a syntax restriction, and whether it errors depends entirely on whether anything in scope declares a global `require` — which most real projects do, via `@types/node`.
+
+<TSPlayground code={requireInEsmCode} id="compiler-tooling-modules-require-in-esm" title="No @types/node is loaded in this checker — click Check types" />
+
+export const requireInEsmCode = `// this checker loads no @types/node -- that absence is exactly the point, see prose
+const data = require("node:fs");
+console.log(data);`;
+
+Click **Check types**: `TS2591: Cannot find name 'require'. Do you need to install type definitions for node?` — in *this* checker (no Node types loaded at all, on purpose — that's why this snippet is skipped by this course's own `tsc`-based CLI check, which always loads `--types node`) that's genuinely the fix. But run the identical code through `tsc --strict` in a real project with `"types": ["node"]` set, and it compiles with **zero errors** (verified in scratch): `@types/node`'s global declarations add `require` as an ambient global unconditionally, with no awareness of which module format the *current file* is in. The type checker is satisfied; Node is not — running that file directly throws `ReferenceError: require is not defined in ES module scope, you can use import instead` (verified in scratch). This is a real, if narrow, gap in what `strict` can catch: a project with `@types/node` installed gets zero warning for a mistake that fails every time it runs, and only a typed lint rule looking for "the wrong global in the wrong file" — or a runtime test — closes it.
+
+## The `exports` field: condition order, `.d.mts`/`.d.cts`, and the dual-package hazard
+
+A package's `package.json` `"exports"` field can point ESM and CJS consumers at *different* files, each with its own type declaration, using **conditions**:
+
+```json
+{
+  "name": "mylib",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.mts", "default": "./dist/index.mjs" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  }
+}
+```
+
+`.d.mts` and `.d.cts` are declaration files for `.mjs`/`.cjs` outputs specifically — they let a package's ESM entry and CJS entry carry genuinely different types (rare, but possible when the two builds' shapes actually differ), matching a `nodenext`/`node16` resolver that also chooses between `.mjs`/`.cjs` based on the same conditions.
+
+The convention every guide repeats is "put `"types"` **first** in each condition object." Tested against TypeScript 7.0.2 directly, that convention turned out to be more defensive than load-bearing for `tsc` itself: moving `"types"` to the *end* of the `import` condition and pointing it at a file with a deliberately wrong export name still resolved correctly — `tsc` looks up the `"types"` key by name, not by position, and only fails when there's no matching declaration file to fall back on at all (verified in scratch: with the sibling `.d.mts` still present next to the `.mjs`, `tsc` found it either way). The advice to lead with `"types"` earns its keep for less careful consumers of the same `exports` field — a bundler or older tool that iterates conditions by position rather than looking `"types"` up by name — so it's still the right default to write, just not because `tsc` 7.0.2 requires it.
+
+**The dual-package hazard** is a real, runtime consequence of splitting `import`/`require` into separate files: the two entries are two independent modules to the JavaScript engine, so anything with identity — a class, a `Symbol`, a `Map` used as a registry — is not the *same* thing when reached through the two paths. A real Node process proves it (verified in scratch — an ESM entry point importing a package both ways):
+
+```text
+EsmCounter === CjsCounter: false
+esmInstance instanceof CjsCounter: false
+esmInstance instanceof EsmCounter: true
+```
+
+`EsmCounter` and `CjsCounter` come from what looks like "one package" but are two separately-evaluated files, each with its own class identity — an instance created through one entry fails `instanceof` against the other. This is exactly why `tsc`'s own resolution, and tools like `@arethetypeswrong`, treat a package's dual CJS/ESM split as something to verify, not assume: **`node16`/`nodenext`** resolve the same specifier to the `.d.mts` or `.d.cts` declaration depending on which condition the importing file's own module format selects, while **`bundler`** mode (used by Vite/webpack/esbuild) ignores `require`/`import` conditions entirely and resolves through `default`/`types` alone — a package relying on the CJS/ESM split behaving differently is invisible to a `bundler`-mode project, since it never evaluates both files at once the way a real dual-consumption Node process can.
+
+## Mental Model
+
+Every resolution rule in this lesson answers one question that `tsc` has to settle *before* it can check a single import: **is this file ESM or CJS, and does the target it's importing agree?** `.mts`/`.cts` settle it by filename regardless of anything else; plain `.ts`/`.js` fall back to the nearest `package.json`'s `"type"`. Once that's settled, `exports` conditions let a *package* answer the same question differently per consumer — which is exactly the hazard: two consumers asking "is this ESM or CJS" can get two different files back, and if that package's identity (a class, a shared registry) matters, those two files are not interchangeable, no matter how identical their public API looks on paper.
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| `nodenext`/`node18`/`node20` | Matches what Node actually does — `package.json` `type`, `exports`, extension rules all enforced | Requires explicit `.js` extensions in relative imports (or `rewriteRelativeImportExtensions`) |
+| `bundler` | No extension requirement; matches how Vite/webpack/esbuild resolve | Doesn't enforce `require`/`import` conditions the way a real dual-consumption Node process would — a dual-package identity bug can be invisible in dev and only appear for a Node-direct consumer |
+| Splitting a package into separate ESM (`.mjs`) and CJS (`.cjs`) builds | Serves both kinds of consumers natively, no interop shim | Real dual-package hazard: each build is a separately-evaluated module, so identity (`instanceof`, a shared `Map`/`Set` registry) breaks across the two |
+| `"types"` listed first in an `exports` condition | Defends against less careful consumers/bundlers that iterate conditions by position | Verified unnecessary for `tsc` 7.0.2's own resolution, which finds `"types"` by name regardless of position — still worth writing as the safer default for the wider ecosystem |
+
+## Common Misconceptions
+
+- **Putting `"types"` first in an `exports` condition is required for TypeScript to find your declaration file.** Verified against TypeScript 7.0.2 directly: it is not — `tsc` looks the `"types"` key up by name, not by position. The convention protects against other, less careful tools, not against `tsc` itself.
+- **`require` in an ESM file and `import.meta` in a CJS file are caught the same way.** They aren't. `import.meta` in CJS is a real syntax restriction (`TS1470`) that fires no matter what's installed. `require` in ESM is an ordinary undeclared-name lookup — it only errors when nothing in scope declares a global `require`, and most real projects have `@types/node` doing exactly that, so the same mistake silently compiles clean right up until Node refuses to run it.
+- **If a package ships both an ESM and a CJS build, they're just "the same code in two formats."** Only if nothing in the package has identity. A class, a `Symbol.for` registry, or a module-level cache is a *separate instance* per build — proven above with a real Node process where the same class fails `instanceof` against itself across the two entry points.
+- **`bundler` resolution mode is a strictly more permissive version of `nodenext`.** It's different, not just looser: it never distinguishes `require`/`import` conditions, so it can't reveal a dual-package hazard that only shows up when a Node process actually loads both entries — a project developed and tested only under a bundler can ship that bug straight to a Node-direct consumer.
+
+## Reading AI-generated code
+
+- Does a generated `exports` map put `"default"` before `"types"` in a condition object? It likely still works with `tsc` 7.0.2 (verified above), but flag it for the wider-ecosystem convention anyway — other tools are not as forgiving.
+- Does a `package.json` split `import`/`require` into separately-built files without checking whether the package exports anything with identity (a class meant for `instanceof`, a shared cache)? That's exactly the dual-package hazard shape — worth a real two-entry-point test, not just "both builds pass their own unit tests."
+- Is a `require("./esm-module.js")` call added to "fix" a CJS/ESM interop error, without checking that the target has no top-level `await`? That specific combination — CJS `require` of an ESM file with top-level `await` — still fails even on Node 22+.
+- Does generated code call `require()` inside a file that `nodenext` will treat as ESM? `tsc --strict` will not reliably catch this — with `@types/node` installed (as it usually is), `require` type-checks as a valid global with zero errors, and the mistake only surfaces as a runtime `ReferenceError` the first time that exact code path runs. A typed lint rule or a runtime test is what actually catches it here, not the type checker.
+
+<SpotTheBug lang="json" code={`{
+  "name": "@acme/widgets",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    }
+  }
+}`}>
+This looks like a clean, modern dual-package setup, and the resolution itself is fine — the bug is what it doesn't say. Neither condition has a `"types"` key at all, so both consumers fall back to TypeScript's *implicit* lookup: a `.d.mts`/`.d.cts` file sitting next to each JS file with a matching name. If a build step ever emits only `index.d.ts` (a single shared declaration, the more common single-build habit) instead of both `index.d.mts` and `index.d.cts`, ESM consumers silently get **no types at all** for this package (`TS7016`, "implicitly has an 'any' type") while CJS consumers might still find the shared `.d.ts` by an older, more forgiving resolution path — two different type-safety outcomes from the same install, with nothing in this file to explain why. Reviewing a dual-package `exports` map means checking that a matching declaration file actually exists for *each* condition, not just that the JS resolves.
+</SpotTheBug>
+
 <Callout title="The one-line takeaway">
-Set `module`/`moduleResolution` to match how your code is actually loaded — `nodenext` (or the stable `node18`/`node20`) when Node runs it, respecting `package.json` `type` and `exports` and requiring `.js` extensions (or `rewriteRelativeImportExtensions`), and `bundler` when a bundler resolves for you. The legacy `node`/`classic` modes are gone, JSON imports need `with { type: "json" }`, `import defer` lazily evaluates a module, and `esModuleInterop` is simply always on.
+Set `module`/`moduleResolution` to match how your code is actually loaded — `nodenext` (or the stable `node18`/`node20`) when Node runs it, respecting `package.json` `type` and `exports` and requiring `.js` extensions (or `rewriteRelativeImportExtensions`), and `bundler` when a bundler resolves for you. A file's ESM/CJS format is decided by extension first, then `package.json` `type` — `import.meta` in a file `nodenext` treats as CJS is a real syntax error no matter what's installed, but `require` in an ESM file is only an ordinary undeclared-name lookup that `@types/node` silently satisfies, so `strict` alone won't catch it. An `exports` map can point ESM and CJS consumers at genuinely separate files with separate `.d.mts`/`.d.cts` types — `tsc` finds `"types"` by name regardless of position, but list it first anyway for less careful tools, and remember that two separately-built entries mean two separate module identities, a real dual-package hazard for anything with `instanceof` or shared state. The legacy `node`/`classic` modes are gone, JSON imports need `with { type: "json" }`, `import defer` lazily evaluates a module, and `esModuleInterop` is simply always on.
 </Callout>
 
 export const quizModules = [
@@ -115,6 +211,7 @@ export const quizModules = [
       'The number of files in the project',
     ],
     answer: 1,
+    explain: 'moduleResolution should mirror the runtime\'s own algorithm -- nodenext models Node directly, bundler models what Vite/webpack/esbuild actually do.',
   },
   {
     q: 'Under `nodenext` ESM, what extension do you write when importing `./util.ts`?',
@@ -125,6 +222,7 @@ export const quizModules = [
       '`./util.mjs` always',
     ],
     answer: 1,
+    explain: 'tsc does not rewrite import specifiers, so under real ESM rules you write the extension the runtime file will actually have -- .js, even though the source is .ts.',
   },
   {
     q: 'What is the status of `esModuleInterop` in TypeScript 7?',
@@ -135,6 +233,7 @@ export const quizModules = [
       'It speeds up resolution',
     ],
     answer: 1,
+    explain: 'esModuleInterop and allowSyntheticDefaultImports are permanently on since 6.0 -- the old "turn this on first" tutorial step is now a no-op.',
   },
   {
     q: 'Which `moduleResolution` value is a hard error in TypeScript 7?',
@@ -145,6 +244,7 @@ export const quizModules = [
       '`node20`',
     ],
     answer: 1,
+    explain: 'The legacy node/node10 algorithm predates package.json exports and type, and is removed entirely in TypeScript 7.',
   },
   {
     q: 'How do you import a JSON file under `module: nodenext`?',
@@ -155,6 +255,29 @@ export const quizModules = [
       'JSON cannot be imported under nodenext',
     ],
     answer: 1,
+    explain: 'A JSON module has only a default export, and the with attribute (not the deprecated assert) is required under nodenext.',
+  },
+  {
+    q: '```ts\nconst data = require("node:fs");\nconsole.log(data);\n```\nIn an ESM-detected file, `tsc --strict` reports `TS2591` when no Node types are loaded, but reports **zero errors** on the identical code once `"types": ["node"]` is set. Why the difference, and what actually happens when this file runs?',
+    options: [
+      'TypeScript re-checks the module format once @types/node is present, and correctly allows require in ESM',
+      '`@types/node` declares `require` as an ordinary ambient global with no awareness of the current file\'s module format, so the checker is satisfied either way -- but Node itself still throws `ReferenceError: require is not defined in ES module scope` the moment this file runs',
+      '@types/node changes the module format of the file to CommonJS',
+      'This is a bug in TypeScript that will be fixed in 7.1',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch both ways: with no node types, TS2591 (undeclared name); with @types/node\'s types in scope, zero errors, because require is just a global declaration with no per-file module-format check -- and running the file for real throws the exact ReferenceError shown, a real gap between "type-checks clean" and "runs correctly."',
+  },
+  {
+    q: 'A package splits `exports` into an ESM `.mjs` build and a CJS `.cjs` build, each exporting "the same" `Counter` class. A consumer imports it both ways in one process and gets two different `Counter` references where `instanceof` fails across them. Why?',
+    options: [
+      'This is a bug in Node, not the package',
+      'The two builds are separately-evaluated modules -- each defines its own independent class, so an instance from one is never `instanceof` the other, even though the source looked identical',
+      '`instanceof` never works across any two imports',
+      'Only `bundler` resolution mode has this problem',
+    ],
+    answer: 1,
+    explain: 'Verified in scratch with a real Node process: EsmCounter === CjsCounter is false, and an instance from one fails instanceof against the other -- the classic dual-package hazard, invisible under bundler-only resolution since it never actually evaluates both files against each other the way a Node-direct consumer can.',
   },
 ];
 
