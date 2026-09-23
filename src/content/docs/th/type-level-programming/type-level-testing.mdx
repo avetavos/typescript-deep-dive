@@ -1,0 +1,586 @@
+---
+title: 'Type-Level Testing'
+description: 'ทำไม type ที่ generate มาต้องมี test, toolbox Equal/Expect, @ts-expect-error กับ satisfies เป็น assertion, vitest expectTypeOf, expect-type, tsd และการ test utility กับ inference จากบทก่อนหน้า'
+sidebar:
+  order: 7
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## ทำไม type ที่ "ดูถูกต้อง" ยังต้องมี test
+
+[module index](/typescript/th/type-level-programming/) แนะนำ `Equal`/`Expect` ไปแล้ว และแสดงว่าทำไม naive `A extends B ? (B extends A ? true : false) : false` ยุบเหลือ `boolean` ที่ตัดสินใจไม่ได้สำหรับ `any` และ union ที่เทียบกับตัวเอง บทนี้คือสิ่งที่ section นั้น forward-link มา: toolbox เต็มรูปแบบ และวินัยของการใช้มันจริงกับ type ที่ generate มาทุกตัวก่อนจะเชื่อมัน
+
+utility ที่ generate มา compile ผ่านและดูถูกต้องชัดเจนบนตัวอย่างเดียวที่คุณลองด้วยมือ ยังคงผิดได้ — และความผิดมักซ่อนอยู่ใน 4 จุดพอดี: `any`, union, optional property และ `never` นี่คือตัวอย่างที่สมจริง แบบที่ AI assistant ยื่นให้คุณด้วยหน้าตาจริงจัง:
+
+```ts
+// @expect-error TS2344
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// "the union of keys on T that are required (not optional)"
+type RequiredKeys<T> = {
+  [K in keyof T]: T[K] extends undefined ? never : K;
+}[keyof T];
+
+// Looks right on the case anyone would actually try by hand:
+interface Basic { a: string; b?: number; }
+type SanityCheck = RequiredKeys<Basic>; // author expects "a"
+
+// 1. Wrong on optional properties: the OPTIONAL key "b" leaks into the
+// result (plus a stray undefined), because RequiredKeys only ever looked at
+// T[K]'s VALUE type -- an optional property's value type already includes
+// undefined, but that says nothing about whether the KEY itself is optional.
+type _optionalCaseIsWrong = Expect<Equal<RequiredKeys<Basic>, "a">>;
+
+// 2. Wrong on `any`: a reasonable guess is that `any` propagates through, so
+// RequiredKeys<any> should be `any` too. It is not -- it resolves to the
+// concrete type `string`, with no trace of "any" left anywhere in it.
+type _anyCaseIsWrong = Expect<Equal<RequiredKeys<any>, any>>;
+
+// 3. Wrong on a required property typed `never`: `never` is a naked checked
+// type here, so the conditional distributes over the empty union and the
+// whole branch vanishes -- key "a" (required, just uninhabited) silently
+// disappears from the result.
+interface WithNever { a: never; b: string; }
+type _neverCaseIsWrong = Expect<Equal<RequiredKeys<WithNever>, "a" | "b">>;
+```
+
+`TS2344` จริงสามครั้งที่ compiler ยืนยัน (harness ของคอร์สนี้ dedupe เหลือ code เดียว เพราะทั้งสาม assertion พังแบบเดียวกัน) ความผิดพลาดข้อที่สี่ — union — ถูกพิสูจน์ไปแล้วในบทก่อนหน้า: `Omit<Shape, "kind">` บน `type Shape = Circle | Square` ยุบเหลือ `{}` แทนที่จะเป็น `{ radius: number } | { side: number }` เพราะ `keyof` บน union คือ *intersection* ของ key ไม่ใช่ union ของมัน บทเรียนเดียวกันทุกครั้ง: type ที่ generate มา compile ผ่านและผ่านตัวอย่างเดียวที่ใครสักคนมองด้วยตาไม่ใช่หลักฐานอะไรเลย มีแค่ `Expect<Equal<...>>` — เช็คกับ `any`, กับ union, กับ optional property และกับ `never` — เท่านั้นที่ใช่
+
+## Toolbox: `Equal`, `Expect` และเพื่อน ๆ
+
+`Equal` กับ `Expect` ทำงานส่วนใหญ่ไปแล้ว มี helper เล็ก ๆ อีกสี่ตัวที่ครบสิ่งที่ type-level test suite จริงต้องใช้ และแต่ละตัวมีเวอร์ชัน "naive" ที่ดูสมเหตุสมผลแต่ผิดแบบวัดผลได้:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+type NotEqual<A, B> = Equal<A, B> extends true ? false : true;
+
+// IsAny: only `any` satisfies `0 extends (1 & T)` -- 1 & T is `1` for any real
+// type, and `0` is not assignable to `1`; but 1 & any is `any`, and `0` IS
+// assignable to `any`.
+type IsAny<T> = 0 extends (1 & T) ? true : false;
+type IsAnyNaive<T> = T extends any ? true : false;
+
+type _isAnyTrue = Expect<Equal<IsAny<any>, true>>;
+type _isAnyFalseString = Expect<Equal<IsAny<string>, false>>;
+type _isAnyFalseUnknown = Expect<Equal<IsAny<unknown>, false>>;
+
+// naive alternative: EVERYTHING extends any, so it reports "yes, this is
+// any" for string and for unknown too -- it cannot discriminate at all.
+type _naiveStringIsWronglyTrue = Expect<Equal<IsAnyNaive<string>, true>>;
+type _naiveUnknownIsWronglyTrue = Expect<Equal<IsAnyNaive<unknown>, true>>;
+
+// IsNever: Conditional Types already showed this exact trap -- `never` is the
+// empty union, so a bare `T extends never` distributes over zero members and
+// evaporates to `never` itself instead of a boolean. [T] extends [never] is
+// the fix (same [T] extends [U] idiom from that lesson and from Paths<T, D>).
+type IsNever<T> = [T] extends [never] ? true : false;
+type IsNeverNaive<T> = T extends never ? true : false;
+
+type _isNeverTrue = Expect<Equal<IsNever<never>, true>>;
+type _isNeverFalseString = Expect<Equal<IsNever<string>, false>>;
+
+// naive alternative on its one job -- never -- doesn't even produce a
+// boolean, it produces never right back
+type _naiveNeverIsActuallyNever = Expect<Equal<IsNeverNaive<never>, never>>;
+type _naiveNeverIsNotTrue = Expect<NotEqual<IsNeverNaive<never>, true>>;
+
+// IsUnion: the standard "compare one member against the whole" trick.
+// Needs the same [T] extends [never] guard IsNever does -- never is a
+// zero-member union, and without the guard IsUnion<never> is never, not false.
+type IsUnion<T, U extends T = T> = [T] extends [never]
+  ? false
+  : T extends any
+    ? ([U] extends [T] ? false : true)
+    : never;
+
+type _isUnionTrue = Expect<Equal<IsUnion<"a" | "b">, true>>;
+type _isUnionFalseSingle = Expect<Equal<IsUnion<"a">, false>>;
+type _isUnionFalseObject = Expect<Equal<IsUnion<{ a: string; b: number }>, false>>;
+type _isUnionTrueObjects = Expect<Equal<IsUnion<{ a: string } | { b: number }>, true>>;
+type _isUnionFalseNever = Expect<Equal<IsUnion<never>, false>>;
+```
+
+ทุกบรรทัด compile ผ่านโดยไม่มี error บน TypeScript 7.0.2 — ประเด็นไม่ใช่ว่ามันเป็นของแปลกใหม่ แต่ naive alternative แต่ละตัวพังตรง input เดียวกับที่ bug จริงในโลกจริงซ่อนอยู่: `any` สำหรับ `IsAny`, `never` สำหรับ `IsNever` และ `IsUnion` นี่คือ idiom `[T] extends [U]` เดียวกับที่คอร์สนี้ใช้มาตั้งแต่ Conditional Types และ `Paths<T, D>` — ไม่ใช่ trick ใหม่ แต่เป็น guard เดิมที่โผล่มาทุกที่ที่พฤติกรรม zero-member-union ของ `never` กัด type test ได้
+
+### `@ts-expect-error` เป็น assertion เชิงลบ
+
+`Expect<Equal<...>>` test ว่า type *คืออะไร* `@ts-expect-error` test ว่าบรรทัดหนึ่ง *compile ไม่ผ่าน* — assertion เชิงลบ อีกครึ่งหนึ่งของ test suite จริง:
+
+```ts
+function double(n: number): number { return n * 2; }
+
+// @ts-expect-error -- a string is not assignable to a number parameter
+double("nope");
+```
+
+นี่คือ compiler directive จริงของ TypeScript (คนละอันกับ harness marker `// @expect-error TSxxxx` ของคอร์สนี้เอง ที่มีความหมายแค่บรรทัดแรกสุดของ fence เท่านั้น) `@ts-expect-error` อยู่บรรทัดไหนก็ได้ ไฟล์ไหนก็ได้ และมันทำอย่างเดียว: ถ้าบรรทัด*ถัดไป*ไม่ error directive เองจะกลายเป็น error แก้ bug ที่มันกันไว้ หรือขยาย parameter type แล้ว negative test จะไม่หายไปเงียบ ๆ — มันพังดัง ๆ:
+
+```ts
+// @expect-error TS2578
+function double(n: number | string): number {
+  return typeof n === "string" ? Number(n) * 2 : n * 2;
+}
+
+// @ts-expect-error -- a string is not assignable to a number parameter
+double("nope");
+```
+
+```text
+error TS2578: Unused '@ts-expect-error' directive.
+```
+
+นั่นคือ message จริงจาก `tsc` บนไฟล์นี้ หลังจากขยาย `double` ให้รับ string ได้และการเรียกเลิกเป็น error นี่คือ failure mode ที่ negative test ที่ดีต้องมี: ทันทีที่ `double("nope")` กลายเป็นค่าที่ valid `@ts-expect-error` ก็ไม่มีที่ให้ซ่อนอีกต่อไป และไฟล์ที่เคย compile สะอาดก็พังด้วย `TS2578`
+
+### `satisfies` เป็น assertion แบบเบา ๆ
+
+`satisfies` เช็ค value กับ constraint โดยไม่เปลี่ยน inferred type ของ value เองแบบที่ annotation หรือ `as` จะทำ — ทำให้มันเป็น assertion แบบ inline ที่ถูกสำหรับ "shape นี้เข้ากันได้กับ X อย่างน้อยที่สุด":
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+const config = {
+  host: "localhost",
+  port: 5432,
+} satisfies Record<string, string | number>;
+
+// satisfies checked the shape and then got out of the way -- config.port is
+// still whatever TypeScript would infer without satisfies at all (number,
+// since there is no `as const` here), not widened to `string | number`.
+type PortType = typeof config.port;
+type _portStillNumber = Expect<Equal<PortType, number>>;
+
+interface Point { x: number; y: number; }
+const wrongShape = {
+  x: 1,
+  // @ts-expect-error -- missing y, satisfies checks the shape right here
+} satisfies Point;
+```
+
+มันเป็น assertion จริง — object `wrongShape` ข้างบน compile ไม่ผ่านทันทีที่ `y` หายไป — แต่มันแม่นยำแค่เท่าที่ type ที่คุณเช็คกับมันแม่นยำ key ที่พิมพ์ผิดยังคง "satisfies" constraint `Record<string, string | number>` ที่กว้างได้ เพราะไม่มีอะไรใน constraint นั้นบอกว่า key ไหนต้องมีอยู่ `satisfies` คือการเช็ค shape ณ จุดสร้าง ไม่ใช่ตัวแทนของ `Expect<Equal<...>>` เวลาที่ claim คือ "resolve เป็น type นี้เป๊ะ"
+
+### `expectTypeOf` ใน vitest — และกับดักที่ Phase 3 ของคอร์สนี้เจอ
+
+vitest 4.1.9 (เวอร์ชันที่ติดตั้งใน repo นี้) มี `expectTypeOf` มาให้ เป็น assertion API ที่อ่านเหมือน runtime แต่ไม่ใช่:
+
+```ts
+// @expect-error TS2344
+import { expectTypeOf, test } from "vitest";
+
+function add(a: number, b: number): number {
+  return a + b;
+}
+
+test("add returns a number", () => {
+  expectTypeOf(add(1, 2)).toEqualTypeOf<number>(); // passes
+  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose
+});
+```
+
+สังเกตว่า fence นี้เกิด `TS2344` จริงด้วยตัวมันเอง โดยไม่มี test runner ของ vitest เข้ามาเกี่ยวเลย — `expectTypeOf(...).toEqualTypeOf<...>()` เองก็เป็นแค่ generic function call ที่มี type constraint ดังนั้น `tsc --noEmit` เฉย ๆ บนไฟล์นี้ก็จับ assertion ที่ผิดได้แล้ว ข้อเท็จจริงนี้เองคือสิ่งที่ทำให้กับดักถัดไปเกิดขึ้นได้: เอกสารของ vitest เองพูดตรง ๆ ถึงกับดักนี้: *"The `expectTypeOf` function does not perform any actions during runtime. To enable type checking, you must pass the `--typecheck` flag when running Vitest."* พอตรวจกับเวอร์ชันที่ติดตั้งจริง ในไฟล์ชื่อ `math.test.ts` ได้ผลตรงนี้เป๊ะ:
+
+```text
+$ vitest run math.test.ts
+ RUN  v4.1.9
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+```
+
+**ผ่านหนึ่งอัน** assertion `toEqualTypeOf<string>()` ที่ผิดไม่เคยถูกรันเป็น type check เลย — `expectTypeOf` เป็น no-op ตอน runtime ดังนั้น `vitest run` เฉย ๆ ยืนยันแค่ว่า arrow function ไม่ throw การเปิด typechecking เจอกับดักที่สอง: `typecheck.include` ค่า default ของ vitest คือ `**/*.{test,spec}-d.?(c|m)[jt]s?(x)` — ไฟล์ที่ลงท้าย `-d.ts` ไม่ใช่ `.test.ts` เฉย ๆ รัน `vitest --typecheck run math.test.ts` บนไฟล์เดิมด้านบนยังรายงานแบบนี้:
+
+```text
+$ vitest --typecheck run math.test.ts
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+Type Errors  no errors
+```
+
+เขียว(ผ่าน)ผิด ๆ แบบเดิม แม้เปิด `--typecheck` แล้ว เพราะชื่อไฟล์ไม่ตรงกับ typecheck glob เลย เปลี่ยนชื่อไฟล์เป็น `math.test-d.ts` (หรือเพิ่ม `test.typecheck.include`) แล้วโค้ดเดิมเป๊ะจะให้ failure จริง:
+
+```text
+$ vitest --typecheck run
+ FAIL  math.test-d.ts > add returns a number
+TypeCheckError: Type 'string' does not satisfy the constraint '"Expected string, Actual number"'.
+ ❯ math.test-d.ts:12:41
+     10|   expectTypeOf(add(1, 2)).toEqualTypeOf<number>();
+     11|   // wrong on purpose: add returns number, not string
+     12|   expectTypeOf(add(1, 2)).toEqualTypeOf<string>();
+       |                                         ^
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 1 passed (2)
+Type Errors  1 failed
+```
+
+รัน `tsc --noEmit` เฉย ๆ บน `math.test-d.ts` ไฟล์เดียวกันแยกต่างหาก ยืนยันว่ามันเป็น compiler error จริง ไม่ใช่ quirk เฉพาะของ vitest:
+
+```text
+$ tsc --noEmit --strict math.test-d.ts
+math.test-d.ts(12,41): error TS2344: Type 'string' does not satisfy the constraint '"Expected: string, Actual: number"'.
+```
+
+ต้องถูกสองอย่างพร้อมกันถึงจะทำให้ `expectTypeOf` มีความหมาย: `--typecheck` (หรือ `test.typecheck.enabled: true` ใน `vitest.config.ts` — ตรวจแล้วให้ failure เดียวกันกับข้างบน) *และ* ชื่อไฟล์ที่ `typecheck.include` ของ vitest ตรงจริง ผิดอันใดอันหนึ่ง แล้วทุก `expectTypeOf` call ใน suite ก็เป็นแค่ของประดับ
+
+<TSPlayground code={typeTestFailCode} id="deliberately-failing-type-test" title="A type test file with one assertion that is wrong on purpose" />
+
+export const typeTestFailCode = `// @expect-error TS2344
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// "the union of keys on T that are required (not optional)"
+type RequiredKeys<T> = {
+  [K in keyof T]: T[K] extends undefined ? never : K;
+}[keyof T];
+
+interface Basic { a: string; b?: number; }
+
+// This is what a type-level test suite failing actually looks like: click
+// "Check types" and read the real TS2344 the compiler reports below.
+type _optionalCaseIsWrong = Expect<Equal<RequiredKeys<Basic>, "a">>;`;
+
+### `expect-type` กับ `tsd`: ไอเดียเดียวกัน ไม่ต้องมี test runner
+
+`expect-type` (ติดตั้งแยกต่างหากในโปรเจกต์ scratch สำหรับบทนี้ เวอร์ชัน 1.4.0) คือ `expectTypeOf` แบบไม่มี framework แนบมาเลย — เป็น type ล้วน ๆ ดังนั้น `tsc --noEmit` เฉย ๆ บนไฟล์ที่ import มันคือ test run ทั้งหมด:
+
+```ts
+// @skip-verify expect-type is not a dependency of this repo -- installed in
+// a throwaway scratch project for this lesson; see the quoted tsc output.
+import { expectTypeOf } from "expect-type";
+
+function add(a: number, b: number): number { return a + b; }
+
+expectTypeOf(add(1, 2)).toEqualTypeOf<number>(); // passes, standalone
+expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose
+```
+
+```text
+$ tsc --noEmit --strict expecttype-demo.test.ts
+expecttype-demo.test.ts(8,39): error TS2344: Type 'string' does not satisfy the constraint '"Expected: string, Actual: number"'.
+```
+
+`tsd` (เวอร์ชัน 0.33.0) ใช้ API shape ตรงข้ามกัน — `expectType<T>(value)` กับ `expectError(expr)` แทน fluent chain — แต่โมเดลเดียวกัน "ไม่มี runner มีแค่ `tsc` อยู่ข้างใต้" และมันมี CLI ของตัวเองที่สแกนไฟล์ `*.test-d.ts` ให้:
+
+```ts
+// @skip-verify tsd is not a dependency of this repo -- installed in a
+// throwaway scratch project for this lesson; see the quoted tsd CLI output.
+import { expectType, expectError } from "tsd";
+import { add } from "./index.js";
+
+expectType<number>(add(1, 2)); // passes
+expectError(add("1", 2));      // passes: this call really is a type error
+expectType<string>(add(1, 2)); // wrong on purpose
+```
+
+```text
+$ tsd
+
+  index.test-d.ts:6:19
+  ✖  6:19  Argument of type number is not assignable to parameter of type string.
+
+  1 error
+```
+
+ลบบรรทัดสุดท้ายออก แล้ว `tsd` จะ exit `0` โดยไม่มี output อะไรเลย — ผ่านสะอาด ๆ คือไม่พิมพ์อะไรเลย ตรงกับพฤติกรรม "ไม่มีข่าวคือข่าวดี" ที่ CI step สำหรับ type test ควรเป็น
+
+## test พวกนี้อยู่ที่ไหน และทำไมมันไม่มีต้นทุนตอน runtime
+
+`*.test-d.ts` เป็น convention ไม่ใช่ feature ของ TypeScript: มันคือสิ่งที่ `typecheck.include` ค่า default ของ vitest และ file scanner ของ `tsd` เองมองหาโดยไม่ต้องตั้งค่าอะไร และมันเป็นสัญญาณให้คนอ่านรู้ว่าไฟล์นี้มีแต่ compile-time assertion เท่านั้น CI ไม่จำเป็นต้องมี vitest หรือ tsd เพื่อเช็คพวกมัน — `tsconfig.test.json` แยกต่างหากที่มี `"include": ["**/*.test-d.ts"]` กับ `tsc --noEmit -p tsconfig.test.json` เป็น CI step ของตัวเองก็พอ ตรวจแล้วกับ command จริงในโปรเจกต์ scratch ของบทนี้ (error `0`, output `0`, exit code `0` บนไฟล์ที่มีแต่บรรทัด `Expect<Equal<...>>`):
+
+```text
+$ tsc --noEmit -p tsconfig.test.json
+$ echo $?
+0
+```
+
+และมันไม่มีต้นทุนจริง ๆ เมื่อ ship: `Equal`, `Expect`, `IsAny`, ไฟล์ `.test-d.ts` เต็มไปด้วยพวกมัน — ไม่มีอันไหนแสดงออกใน JavaScript ได้ ดังนั้นไม่มีอันไหนรอด emit `tsc --noEmit` (ที่ใช้กับทุก command ในบทนี้) ไม่เคยเขียนไฟล์ `.js` เลยด้วยซ้ำ; build จริงที่ใช้ `emitDeclarationOnly` หรือ `isolatedModules` ก็ตัดไฟล์พวกนี้ทิ้งสะอาดเหมือนกัน เพราะไม่มี runtime construct ให้ emit ตั้งแต่แรก suite ทั้งหมดรันครั้งเดียวตอน compile time แล้วหายไป — erasure แบบเดียวกับที่คอร์สนี้พูดถึงใน `erasable-syntax` และ `build-and-emit` ใช้ได้ที่นี่ฟรี ๆ
+
+## Test utility จากบทก่อนหน้า
+
+บท [Utility Types](/typescript/th/type-level-programming/utility-types/) เขียน utility มือหกตัวและพิสูจน์บางตัวด้วย `Equal` check กระจัดกระจาย ไฟล์ `.test-d.ts` จริงสำหรับโมดูลนั้นจะจัดทุก claim ไว้ที่เดียว ประกาศ utility แต่ละตัวซ้ำ inline เพื่อให้ fence compile ได้แบบ standalone และ — นี่คือประเด็นของบทนี้ทั้งบท — เพิ่ม edge case `any`/`never`/union ที่ตัวอย่างเดิมไม่เคยลอง:
+
+<TSPlayground code={utilityTestSuiteCode} id="utility-types-test-suite" title="utility-types.test-d.ts -- 13 assertions across 5 utilities, including any/never/union edge cases" />
+
+export const utilityTestSuiteCode = `type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+type NotEqual<A, B> = Equal<A, B> extends true ? false : true;
+
+// Redeclared inline so this fence compiles standalone -- same definitions as
+// the previous lesson.
+type MyAwaited<T> = T extends null | undefined
+  ? T
+  : T extends { then(onfulfilled: infer F): any }
+    ? F extends (value: infer V, ...args: any) => any
+      ? MyAwaited<V>
+      : never
+    : T;
+
+type MyInstanceType<T extends abstract new (...args: any) => any> =
+  T extends abstract new (...args: any) => infer R ? R : never;
+
+type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
+type DeepReadonly<T> = T extends (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T;
+
+type Prev = [never, 0, 1, 2, 3, 4, 5];
+type Paths<T, D extends number = 5> = [D] extends [never]
+  ? never
+  : T extends object
+    ? { [K in keyof T & (string | number)]:
+          T[K] extends object
+            ? \`\${K}\` | \`\${K}.\${Paths<T[K], Prev[D]>}\`
+            : \`\${K}\`
+      }[keyof T & (string | number)]
+    : never;
+
+// --- MyAwaited: 5 assertions, including any/never/union ---
+type _await1 = Expect<Equal<MyAwaited<Promise<Promise<number>>>, number>>;
+type _await2 = Expect<Equal<MyAwaited<number>, number>>;
+type _await3 = Expect<Equal<MyAwaited<any>, any>>;
+type _await4 = Expect<Equal<MyAwaited<never>, never>>;
+type _await5 = Expect<Equal<MyAwaited<Promise<number> | Promise<string>>, number | string>>;
+
+// --- MyInstanceType: 2 assertions, including a real any surprise ---
+abstract class Animal { abstract speak(): string; }
+type _instance1 = Expect<Equal<MyInstanceType<typeof Animal>, Animal>>;
+// AI smell: assuming any always propagates through infer -- it does NOT here.
+// MyInstanceType<any> is unknown, not any -- a constrained generic capturing
+// infer against a naked any does not get the usual any-in, any-out treatment.
+type _instance2 = Expect<Equal<MyInstanceType<any>, unknown>>;
+type _instance2NotAny = Expect<NotEqual<MyInstanceType<any>, any>>;
+
+// --- DistributiveOmit: 3 assertions, including never and any ---
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type _omit1 = Expect<Equal<DistributiveOmit<Circle | Square, "kind">, { radius: number } | { side: number }>>;
+type _omit2 = Expect<Equal<DistributiveOmit<never, "kind">, never>>;
+// AI smell: Equal<X, any> is a tautology waiting to happen -- prove it FALSE
+// instead of assuming it. DistributiveOmit<any, "kind"> stays the unresolved
+// generic Omit<any, "kind">, exactly like Partial<any> from Recursive Types.
+type _omit3NotAny = Expect<NotEqual<DistributiveOmit<any, "kind">, any>>;
+
+// --- DeepReadonly: 2 assertions, any/never ---
+type _deep1 = Expect<Equal<DeepReadonly<never>, never>>;
+type _deep2 = Expect<Equal<DeepReadonly<any>, any>>;
+
+// --- Paths: 1 assertion, reusing the previous lesson's depth-guarded generic ---
+interface Address { city: string; zip: string; }
+interface Person { name: string; age: number; address: Address; }
+type _paths1 = Expect<Equal<Paths<Person>, "name" | "age" | "address" | "address.city" | "address.zip">>;`;
+
+สิบสาม assertion ห้า utility ไม่มีตัวไหนหยุดแค่ happy path: `any` โผล่มาให้ `MyAwaited`, `MyInstanceType`, `DistributiveOmit` และ `DeepReadonly`, `never` โผล่มาสามในห้าตัว และกรณี union ใช้ `Circle | Square` ซ้ำจากบทที่แนะนำมันมา `MyInstanceType<any>` resolve เป็น `unknown` แทนที่จะเป็น `any` ไม่ใช่ bug ของ utility จากบทก่อนหน้า — มันคือข้อเท็จจริงแบบที่ test file มีไว้เพื่อตรึงให้แน่นอน เพราะ "ฉันสมมติว่า any จะ propagate" ไม่ใช่ claim เดียวกับ "ฉันเช็คแล้ว และมันทำจริง"
+
+## Test inference ไม่ใช่แค่ alias
+
+`Expect<Equal<...>>` ทุกตัวที่ผ่านมา test type *alias* อีกครึ่งหนึ่งของ type-level testing คือการ assert ว่า**การเรียกที่เจาะจง**ไปยัง generic function resolve เป็นอะไร — ซึ่งต้องใช้ *instantiation expression* (`typeof f<T>`, TypeScript 4.7+) เพื่อ pin type parameter โดยไม่ต้องเรียก function จริง:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+function wrapInArray<T>(value: T): T[] {
+  return [value];
+}
+
+// Instantiation expression: pin T=number without calling wrapInArray, then
+// ask what THAT specialization's return type and parameter tuple are.
+type WrapNumberFn = typeof wrapInArray<number>;
+type _wrapNumberReturn = Expect<Equal<ReturnType<WrapNumberFn>, number[]>>;
+type _wrapNumberParams = Expect<Equal<Parameters<WrapNumberFn>, [number]>>;
+
+// Testing inference through an actual call site, not just the alias:
+const result = wrapInArray("x");
+type _resultIsStringArray = Expect<Equal<typeof result, string[]>>;
+
+// asserting an error for a wrong call
+// @ts-expect-error -- wrapInArray<number> only accepts a number argument
+wrapInArray<number>("not a number");
+```
+
+`ReturnType<typeof wrapInArray<number>>` กับ `Parameters<typeof wrapInArray<number>>` test signature ที่*instantiate แล้ว* — สิ่งที่ caller ที่เขียน `wrapInArray<number>(...)` ได้จริง — ไม่ใช่ definition แบบ generic เอง `typeof result` test inference ผ่าน call site จริง สิ่งเดียวกับที่ `// ^?` hover comment อ้าง แต่ต่างจาก hover comment ตรงที่มัน compile ไม่ผ่านจริงถ้ามันเลิกเป็นจริง และ `@ts-expect-error` ปิด loop: การเรียกที่ผิดจะถูก "test" ก็ต่อเมื่อมีอะไรพังทันทีที่มันเลิกผิด
+
+## AI-generated code smell ใน type-level test
+
+type-level test suite ที่ generate มา compile สะอาดได้และยังไม่ test อะไรเลย มีสามแพทเทิร์นให้มองหา:
+
+- **Assertion ที่เดินแค่ happy path** test file ที่มี `Expect<Equal<...>>` หนึ่งตัวต่อ utility เสมอบนตัวอย่างแรกที่ใครสักคนคิดจะลอง คือ failure mode เดียวกับ sanity check `RequiredKeys<Basic>` ที่ต้นบทนี้ — มันดูถูกต้อง และมันผิดบน input ทุกตัวที่สำคัญ
+- **`Equal<X, any>` แบบ tautology** การ assert ว่า utility ที่ generate มา resolve เป็น `any` เป็นจริงแบบ trivial ถ้า utility นั้น propagate `any` จริง ๆ — แต่มันก็เป็น *test ที่ผ่านง่ายที่สุดเท่าที่จะเขียนได้* ตอนที่คุณยังไม่ได้เช็คจริง เพราะ `any` assignable ได้ทั้งสองทางกับเกือบทุกอย่าง `_omit3NotAny` ข้างบนกลับด้านตรงนี้โดยตั้งใจ: การพิสูจน์ว่า `DistributiveOmit<any, "kind">` **ไม่ใช่** `any` เป็น claim จริง; การ assert ว่ามัน*คือ*`any`โดยไม่เช็คจะเป็น tautology ที่บังเอิญผิด
+- **`extends` ตรงที่ตั้งใจให้เท่ากัน** อันนี้ subtle ที่สุด เพราะมัน compile ผ่านและดูเหมือน assertion จริง:
+
+```ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// A generated utility, slightly buggy: it was supposed to strip down to
+// exactly { id: number }, but leaks an extra property.
+type BuggyPick<T> = T & { extraDebugFlag: boolean };
+
+interface User { id: number; name: string; }
+type Result = BuggyPick<Pick<User, "id">>;
+
+// The generated "test": uses `extends` because Result "should have at least
+// these fields." This compiles and looks like a passing assertion.
+type WrongTestPasses = Result extends { id: number } ? true : false;
+type _wrongTestPasses = Expect<WrongTestPasses>;
+```
+
+`WrongTestPasses` เป็น `true` และ compile สะอาด — `extends` เช็คแค่ "เป็น subtype ของ" และ type ที่มี property *เกินมา* ก็ยังเป็น subtype ของ shape ที่แคบกว่าอยู่ดี ดังนั้น `extraDebugFlag` ที่รั่วออกมาก็ผ่านฉลุยไปเลย เปลี่ยน `WrongTestPasses` เป็น `Expect<Equal<Result, { id: number }>>` แล้วมันจะพังถูกต้องด้วย `TS2344` เพราะ `Equal` เช็คสองทิศทางพร้อมกัน `extends` ตอบคำถาม "นี่จำเพาะเจาะจงอย่างน้อยเท่า X ไหม"; type-level test ที่ถามว่า "นี่คือ X *เป๊ะ* ไหม" ต้องใช้ `Equal` เสมอ
+
+<Mermaid title="The test pyramid for types: cheaper, faster checks at the bottom" code={pyramidDiagram} />
+
+export const pyramidDiagram = `flowchart TB
+  tsc["tsc --noEmit -- every fence, every build, catches real assignability errors"] --> tests["Type-level tests (Expect/Equal, @ts-expect-error) -- pin down exact resolved types, any/never/union edge cases"]
+  tests --> lint["Typed lint rules (no-unsafe-*, no-floating-promises) -- catch patterns tsc alone allows"]
+  lint --> runtime["Runtime tests -- the only layer that proves the JavaScript that ships actually behaves correctly"]`;
+
+## Mental Model
+
+นึกภาพ `Expect<Equal<A, B>>` เหมือน `assert(a === b)` แค่ประเมินโดย type checker แทน `node` — ฟรีตอน runtime หายไปหมดหลัง erasure และน่าเชื่อถือแค่เท่ากับ `Equal` ที่มันสร้างมาจาก helper ทั้งสี่ตัวใน toolbox ของบทนี้ (`IsAny`, `IsNever`, `IsUnion` และ `Equal` เอง) มี shape เดียวกันหมด: เวอร์ชัน naive ที่ดูถูกต้องชัดเจน กับเวอร์ชันจริงที่เพิ่ม guard เล็ก ๆ หนึ่งอัน (`0 extends (1 & T)`, `[T] extends [never]`, function-type wrapper) เพื่อรอด input ตัวเดียว — `any` หรือ `never` — ที่ทำ naive form พัง ทุก "toolbox" ในบทนี้คือ guard เดียวกันนั้น ประยุกต์กับคำถามคนละข้อ
+
+<Mermaid title="A generated type is untested until it survives all four edge cases" code={untestedDiagram} />
+
+export const untestedDiagram = `flowchart TD
+  generated["Generated utility -- compiles, looks right on one example"] --> any["Tested against any?"]
+  any -->|no| untested["Untested -- do not trust it"]
+  any -->|yes| union["Tested against a union?"]
+  union -->|no| untested
+  union -->|yes| optional["Tested against an optional property?"]
+  optional -->|no| untested
+  optional -->|yes| never["Tested against never?"]
+  never -->|no| untested
+  never -->|yes| trusted["All four survived -- now it is tested, not just compiled"]`;
+
+## ข้อแลกเปลี่ยน
+
+| ทางเลือก | ข้อดี | ต้นทุน |
+|---|---|---|
+| `Expect<Equal<...>>` inline ในไฟล์บทเรียน/module | ไม่ต้องตั้งค่าอะไร ใช้ได้ทุกที่ที่ fence compile | เขียนแค่ happy-path assertion แล้วหยุดได้ง่าย |
+| `*.test-d.ts` suite แยกต่างหาก + `tsc --noEmit -p tsconfig.test.json` ใน CI | จัด claim ทั้งหมดของ module ไว้ที่เดียว รันใน CI ด้วยแค่ `tsc` | มีไฟล์เพิ่มที่ต้อง sync ตาม utility ที่มันเทส |
+| vitest `expectTypeOf` | test file เดียวกัน structure `describe`/`test` เดียวกับ runtime test | เงียบและไม่ทำงานถ้าไม่เปิด `--typecheck` (หรือ `test.typecheck.enabled`) **และ** ชื่อไฟล์ต้องตรงกับ `typecheck.include` — ต้องทั้งคู่ ไม่ใช่แค่อันใดอันหนึ่ง |
+| `expect-type` / `tsd` | ไม่ต้องมี test runner เลย — `tsc --noEmit` (หรือ CLI ของ `tsd`) คือ test run ทั้งหมด | เครื่องมือเพิ่มอีกตัวใน toolchain; API `expectType`/`expectError` ของ `tsd` เป็นคนละ shape จาก fluent chain ของ `expectTypeOf` |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **type ที่ generate มา compile ผ่านและดูถูกต้องบนตัวอย่างใน PR description ก็โอเคแล้ว** `RequiredKeys<Basic>` ที่ต้นบทนี้ทำแบบนั้นเป๊ะ และผิดบน optional property, `any` และ `never` — สามความผิดที่ตัวอย่างเดียวด้วยมือไม่มีทางเผยออกมา
+- **ถ้า `Equal<X, any>` เป็น `true` แปลว่า utility propagate `any` ถูกต้องแน่นอน** มันอาจแปลว่าไม่มีใครเช็คก็ได้ และ `any` บังเอิญทำให้การเปรียบเทียบแบบ naive `extends` เห็นด้วยโดยบังเอิญ (failure เดียวกับที่ `EqualNaive` มีใน module index) การผ่านที่ดูเหมือน tautology ไม่ใช่หลักฐาน
+- **`X extends Y` กับ `Equal<X, Y>` test สิ่งเดียวกัน แค่ syntax ต่างกัน** `extends` เป็นทิศทางเดียว — type ที่มี*มากกว่า*`Y` ก็ยัง `extends Y` `extraDebugFlag` ที่รั่วของ `BuggyPick` ข้างบน compile สะอาดภายใต้ `extends` check และพังทันทีภายใต้ `Equal`
+- **`expectTypeOf` ของ vitest ถูกเช็คทันทีที่ test file รัน เหมือน assertion อื่น ๆ** มันไม่ทำอะไรตอน runtime เลย มันถูกเช็คก็ต่อเมื่อเปิด `--typecheck` (หรือ `test.typecheck.enabled`) และเฉพาะไฟล์ที่ glob `typecheck.include` ของ vitest ตรงจริง ผิดอันไหนอันหนึ่ง `vitest run` จะรายงานผ่านสะอาดบน assertion ที่ผิด
+
+## อ่านโค้ดที่ AI เขียน
+
+- utility type มือหรือ generate มาที่ไม่มี `Expect`/`Equal` (หรือ `tsd`/`expect-type`/`expectTypeOf`) อยู่ใกล้ ๆ เลย กำลังเชื่อ docstring, ชื่อตัวแปร หรือ comment `// ^?` เป็นหลักฐาน ไม่มีอันไหนถูกเช็คโดยอะไรเลย ถามว่าอะไรจะพังจริงถ้า utility นั้นเลิกถูกต้อง
+- `*.test-d.ts` (หรือ `.test.ts` เต็มไปด้วย `expectTypeOf`) ที่เดินแค่ตัวอย่างเดียวจาก ticket หรือ PR description คือกับดัก `RequiredKeys<Basic>` จากต้นบทนี้ — ถามเจาะจงว่ามัน assert อะไรบน `any`, บน union, บน optional property และบน `never` และถ้าคำตอบคือ "ไม่มีอะไรเลย" ให้ถือว่า utility นั้นยังไม่ผ่านการตรวจสอบไม่ว่าจะมี assertion ล้อมรอบกี่ตัวก็ตาม
+- vitest suite ที่ใช้ `expectTypeOf` ควรมองซ้ำสองจุด: `--typecheck` (หรือ `test.typecheck.enabled`) เปิดจริงใน config หรือ CI command ของโปรเจกต์นี้ไหม และไฟล์ตรงกับ `typecheck.include` ไหม suite ที่เขียวใน CI ยังคง skip type assertion ทุกตัวข้างในเงียบ ๆ ได้ ถ้าคำตอบข้อใดข้อหนึ่งคือไม่
+
+<SpotTheBug lang="ts" code={`type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+
+// "prove DeepPartial<T> never changes a property that is already optional"
+type DeepPartial<T> = { [K in keyof T]?: T[K] };
+
+interface Settings { theme?: "light" | "dark"; }
+
+type IsPreserved = DeepPartial<Settings>["theme"] extends Settings["theme"] ? true : false;
+type _isPreserved = Expect<IsPreserved>;`}>
+โค้ดนี้ compile ผ่านโดยไม่มี error และไม่ได้พิสูจน์อะไรเกี่ยวกับ claim ใน comment เลย assertion นี้ใช้ `extends` ไม่ใช่ `Equal` — `DeepPartial<Settings>["theme"]` คือ `"light" | "dark" | undefined` และ `Settings["theme"]` ก็คือ `"light" | "dark" | undefined` เหมือนกัน (optional อยู่แล้ว ดังนั้น `IsPreserved` เป็น `true` จริง ๆ ตรงนี้) แต่นั่นเป็นเพราะ property ตัวนี้บังเอิญ optional อยู่แล้วเท่านั้น ซึ่งเป็นเคสเดียวที่ comment *ไม่ได้*กังวลจะพิสูจน์ การเช็คด้วย `extends` จะ compile สะอาดเหมือนเดิม และรายงาน `true` เหมือนเดิม แม้ `DeepPartial` จะมี bug ที่เพิ่ม member พิเศษเข้าไปใน type (เช่น union `null` เข้าไปโดยไม่ตั้งใจ) — `X | Y extends X | Y | Z` ยังเป็น `true` ภายใต้ `extends` ที่ด้านถูกต้อง แต่ `DeepPartial<Settings>["theme"]` ที่ extends อะไรบางอย่างที่*กว้างกว่า*ที่คาดไว้ คือรั่วแบบที่ `Equal` จับได้และ `extends` จับไม่ได้พอดี สลับเป็น `Expect<Equal<DeepPartial<Settings>["theme"], Settings["theme"]>>` แล้ว claim ใน comment จะ test ได้จริง ไม่ใช่แค่ดูสมเหตุสมผล
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+type ที่ generate มา compile ผ่านไม่ได้แปลว่าถูก test — type-level test suite จริงคือ `Expect<Equal<...>>` (toolbox `Equal`/`Expect`/`IsAny`/`IsNever`/`IsUnion` แต่ละตัวมีเวอร์ชัน naive ที่พังบน `any` หรือ `never`), `@ts-expect-error` เป็น assertion เชิงลบ (ที่พังดัง ๆ ด้วย `TS2578` ทันทีที่ error ที่มันกันไว้หายไป) และ `satisfies` เป็นการเช็ค shape แบบเบา ๆ — รันผ่าน `vitest --typecheck` (เฉพาะเมื่อชื่อไฟล์ตรง `typecheck.include` *และ* flag หรือ `test.typecheck.enabled` เปิดอยู่), `expect-type` หรือ `tsd` ไม่มีอันไหนมีต้นทุนตอน runtime เพราะไม่มีอันไหนรอด erasure test utility ที่ generate มาทุกตัวกับ `any`, union, optional property และ `never` ก่อนจะเชื่อมัน — และใช้ `Equal` ไม่ใช่ `extends` เมื่อไรก็ตามที่ claim คือ "resolve เป็นสิ่งนี้เป๊ะ" เพราะ `extends` ปล่อยให้ type ที่มี member รั่วเกินมาผ่านไปได้สบาย ๆ
+</Callout>
+
+export const quizTesting = [
+  {
+    q: '```ts\ntype RequiredKeys<T> = { [K in keyof T]: T[K] extends undefined ? never : K }[keyof T];\ninterface Basic { a: string; b?: number; }\ntype R = RequiredKeys<Basic>;\n```\n`R` คืออะไร และทำไมนี่คือ type-level testing failure ที่สมจริง?',
+    options: [
+      '`"a"` -- utility ทำงานถูกต้อง',
+      '`"a" | "b" | undefined` -- key optional "b" รั่วเข้ามาเพราะ RequiredKeys เช็คแค่ type ของ VALUE (ซึ่งมี undefined รวมอยู่แล้วสำหรับ optional property) แทนที่จะเช็คว่า key เองเป็น optional หรือไม่',
+      '`never` -- optional property resolve เป็น never เสมอ',
+      'compile error เพราะ b เป็น optional',
+    ],
+    answer: 1,
+    explain: 'RequiredKeys เช็ค T[K] extends undefined แต่ value type ของ optional property มี undefined รวมอยู่แล้วไม่ว่า key เองจะ required หรือไม่ -- มันเลยแยก "required key ที่ value มี undefined" กับ "optional key" ไม่ออก ตรวจแล้วด้วย Expect<Equal<R, "a">> พังด้วย TS2344 จริง',
+  },
+  {
+    q: 'ทำไม `IsNeverNaive<T> = T extends never ? true : false` ถึงพังเฉพาะกับ `IsNeverNaive<never>`?',
+    options: [
+      'มัน throw runtime error',
+      '`never` คือ empty union (ศูนย์ member) ดังนั้น distributive conditional บนมันรันศูนย์ครั้ง และทั้ง expression ระเหยเป็น `never` เอง ไม่ใช่ boolean `true`',
+      'TypeScript ไม่อนุญาตให้ใช้ never เป็น type argument',
+      'จริง ๆ มันทำงานปกติ -- นี่เป็นความเชื่อผิด ๆ',
+    ],
+    answer: 1,
+    explain: 'นี่คือกับดักเดียวกับที่ Conditional Types แสดงไว้: distribute บน never ให้ never ไม่ใช่ boolean ที่ตัดสินใจได้ ทางแก้คือ idiom [T] extends [never] ที่ห่อ checked type ไม่ให้มันเปลือย เลยหยุด distribute',
+  },
+  {
+    q: '`// @ts-expect-error` assert อะไรจริง ๆ และเกิดอะไรขึ้นเมื่อ error ที่มันกันไว้หายไป?',
+    options: [
+      'มัน suppress error ทั้งหมดของไฟล์ถาวร',
+      'มัน assert ว่าบรรทัดถัดไป compile ไม่ผ่าน ถ้าบรรทัดนั้นเลิก error directive เองจะกลายเป็น error: TS2578 "Unused \'@ts-expect-error\' directive"',
+      'มันเหมือนกับ @ts-ignore เป๊ะ',
+      'มันทำงานได้เฉพาะในไฟล์ .test-d.ts',
+    ],
+    answer: 1,
+    explain: 'ตรวจแล้วโดยตรง: การขยาย parameter จนการเรียกที่กันไว้เลิก error ทำให้ไฟล์ที่เคยสะอาดกลายเป็นไฟล์ที่รายงาน TS2578 ซึ่งคือ negative test พังดัง ๆ ตอนที่มันควรพังพอดี',
+  },
+  {
+    q: '`satisfies` เช็คอะไร และไม่ทำอะไร?',
+    options: [
+      'มันขยาย value เป็น type ที่เช็ค เหมือน annotation',
+      'มันเช็ค value กับ constraint แล้วปล่อย inferred type เดิมของ value ไว้เฉย ๆ -- config.port ยังเป็น `number` ไม่ถูกขยายเป็น `string | number` แม้จะ satisfies Record<string, string | number>',
+      'มันทำ runtime check',
+      'มันแทนที่ความจำเป็นของ Equal ได้ทั้งหมด',
+    ],
+    answer: 1,
+    explain: 'satisfies validate shape ณ จุดสร้างโดยไม่เปลี่ยน inference แบบที่ `as` หรือ annotation จะทำ มันแม่นยำแค่เท่า constraint ที่ให้ไป -- key พิมพ์ผิดยังคง satisfies constraint Record<string, ...> ที่กว้างได้',
+  },
+  {
+    q: '```ts\ntest("add returns a number", () => {\n  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose\n});\n```\nรัน `vitest run` เฉย ๆ (ไม่มี flag --typecheck) บนไฟล์นี้แล้วรายงาน 1 test ผ่าน ทำไม?',
+    options: [
+      'vitest แอบรัน tsc บน test file ทุกไฟล์อัตโนมัติ',
+      '`expectTypeOf` ไม่ทำ action ตอน runtime เลย -- ถ้าไม่มี --typecheck (หรือ test.typecheck.enabled) ที่รันจริงและไฟล์ตรงกับ typecheck.include assertion จะไม่ถูกเช็คเลย ไม่มีอะไร throw arrow function ก็จบตามปกติ',
+      'assertion นี้ถูกต้องจริง ๆ',
+      'vitest เช็ค type เฉพาะใน watch mode เท่านั้น',
+    ],
+    answer: 1,
+    explain: 'ตรวจแล้วโดยตรงกับ vitest 4.1.9: vitest run เฉย ๆ รายงาน "1 passed" บนไฟล์ที่มี expectTypeOf assertion ที่ผิดโดยตั้งใจ แม้แต่ vitest --typecheck run บนไฟล์ .test.ts ธรรมดา (ไม่ตรงกับ glob *.test-d.ts ค่า default) ก็ยังรายงาน "Type Errors: no errors" -- ต้องถูกทั้ง flag และชื่อไฟล์ที่ตรง',
+  },
+  {
+    q: '`expect-type` กับ `tsd` มีอะไรเหมือนกับ `expectTypeOf` ของ vitest ในแง่ต้นทุนตอน runtime?',
+    options: [
+      'ทั้งหมดรัน runtime check จริงในทุก function call',
+      'ไม่มีอันไหนมีต้นทุนตอน runtime เลย -- ทั้งหมดเป็น compile-time construct ล้วน ๆ ที่ tsc ตรวจ (ตรง ๆ หรือผ่าน CLI/runner บาง ๆ) และไม่มีอันไหนรอด erasure เข้าไปใน JavaScript ที่ emit ออกมา',
+      'มีแค่ expect-type ที่ฟรี; tsd รัน Node process จริงต่อหนึ่ง assertion',
+      'ต้องมี browser ถึงจะรันได้',
+    ],
+    answer: 1,
+    explain: 'tsc --noEmit ไม่เคยเขียนไฟล์ .js สำหรับ construct พวกนี้ตั้งแต่แรก -- ไม่มี runtime representation ของ type-level assertion ให้ emit ดังนั้น test suite ทั้งหมดหายไปหลัง compiler ทำงานเสร็จ เหมือน erasable construct อื่น ๆ ที่คอร์สนี้พูดถึงมาแล้ว',
+  },
+  {
+    q: '```ts\ntype BuggyPick<T> = T & { extraDebugFlag: boolean };\ntype Result = BuggyPick<{ id: number }>;\ntype WrongTest = Result extends { id: number } ? true : false;\n```\nทำไม `WrongTest` compile เป็น `true` ทั้งที่ `Result` มี property เกินมาที่ไม่ต้องการ และควรใช้อะไรแทน?',
+    options: [
+      '`extends` เสีย ไม่ควรใช้ใน type test เลย',
+      '`extends` เช็คแค่ "เป็น subtype ของ" -- type ที่มี property มากกว่า target ก็ยังเป็น subtype ของมันอยู่ดี ดังนั้น extraDebugFlag ที่รั่วมาจึงมองไม่เห็นในเช็คนี้ Expect<Equal<Result, { id: number }>> เช็คสองทิศทางและพังถูกต้อง',
+      'WrongTest จริง ๆ เป็น false; คำถามผิด',
+      'TypeScript ไม่สนใจ property เกินมาบน type ทุกตัว ไม่ใช่แค่เช็คนี้',
+    ],
+    answer: 1,
+    explain: 'type-level test ที่ถามว่า "นี่คือ X เป๊ะไหม" ต้องใช้ Equal ที่เช็ค assignability สองทิศทางพร้อมกัน extends อย่างเดียวตอบคำถามที่อ่อนกว่า -- "นี่จำเพาะเจาะจงอย่างน้อยเท่า X ไหม" -- และ supertype ที่มี member เกินมาก็ผ่านเช็คนั้นแบบ trivial',
+  },
+];
+
+<Quiz client:visible id="type-level-programming/type-level-testing" questions={quizTesting} />
+
+<ProgressTracker client:visible id="type-level-programming/type-level-testing" />

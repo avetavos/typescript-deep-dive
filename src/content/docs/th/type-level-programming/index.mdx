@@ -143,7 +143,7 @@ type CaseOk = Expect<Equal<string | number, string | number>>;
 type CaseWrong = Expect<Equal<any, string>>;
 ```
 
-นี่คือเวอร์ชันเล็กที่สุดของสิ่งที่บทเรียนเฉพาะทีหลังในคอร์สนี้จะครอบคลุมแบบเต็ม ๆ — เขียน type-level test suite จริง จัดระเบียบ case ของ `Expect` ต่อ utility และอ่าน error ของ constraint violation ว่าเป็น assertion ที่ล้มเหลว ไม่ใช่ bug ในโค้ดคุณ คู่ `Equal`/`Expect` ทุกคู่ที่ใช้ก่อนหน้านี้ในคอร์ส (Conditional Types, Inference & `infer`) และทุกที่ในโมดูลนี้ต่อจากนี้ก็คือ pattern เดียวกันเป๊ะ
+นี่คือเวอร์ชันเล็กที่สุดของสิ่งที่ [Type-Level Testing](/typescript/th/type-level-programming/type-level-testing/) จะครอบคลุมแบบเต็ม ๆ — เขียน type-level test suite จริง จัดระเบียบ case ของ `Expect` ต่อ utility และอ่าน error ของ constraint violation ว่าเป็น assertion ที่ล้มเหลว ไม่ใช่ bug ในโค้ดคุณ คู่ `Equal`/`Expect` ทุกคู่ที่ใช้ก่อนหน้านี้ในคอร์ส (Conditional Types, Inference & `infer`) และทุกที่ในโมดูลนี้ต่อจากนี้ก็คือ pattern เดียวกันเป๊ะ
 
 ## Mental Model
 
