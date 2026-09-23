@@ -1,6 +1,6 @@
 ---
 title: 'this Types & Polymorphism'
-description: 'The polymorphic this type for fluent chaining, this parameters, and how losing the this binding shows up in the type system.'
+description: 'The polymorphic this type for fluent chaining, this parameters, and how losing the this binding shows up in the type system — including the real cost of the arrow-field fix.'
 sidebar:
   order: 3
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## `this` is also a type
 
@@ -85,11 +87,191 @@ const fn = c.increment;
 fn();
 ```
 
-Now the mismatch is caught: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` The idiomatic fixes are an **arrow-function field** (`increment = () => { ... }`, which binds `this` lexically) or binding at the call site (`c.increment.bind(c)`). The arrow field isn't free, though: it is created fresh on **every instance** instead of living once on the prototype, so it costs more memory per instance, and because it's a plain field rather than a method, a subclass can't `override` it or reach the base version through `super`.
+Now the mismatch is caught: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` The idiomatic fixes are an **arrow-function field** (`increment = () => { ... }`, which binds `this` lexically) or binding at the call site (`c.increment.bind(c)`).
+
+## The arrow-field fix, and what it actually costs
+
+An arrow-function field genuinely fixes the lost-`this` bug — arrow functions don't have their own `this`, so `this` inside one is captured lexically from where the field was defined, which is always the constructor, which always has the real instance bound. But "arrow field" is not just a syntax variant of "method" — it is a different *kind* of class member entirely, with different runtime placement and different rules for two things classes normally offer for free: overriding and `super`.
+
+### Per-instance allocation, not per-prototype
+
+An ordinary method lives once, on the prototype, shared by every instance. An arrow-function field is a **field** — it gets its own closure allocated fresh in the constructor of every single instance. The emitted JavaScript makes this concrete:
+
+```ts
+class Counter {
+  count = 0;
+  increment = () => { this.count++; }; // arrow-function field
+}
+```
+
+Compiling with `tsc --target es2025` (`node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext counter.ts`) emits exactly what was written, inside the (implicit) constructor:
+
+```text
+"use strict";
+class Counter {
+    count = 0;
+    increment = () => { this.count++; }; // arrow-function field
+}
+```
+
+That looks harmless until you compare it with a real method: a method compiles to one function, defined once on `Counter.prototype`, that every `new Counter()` shares by reference. An arrow field compiles to an assignment that runs **inside every constructor call**, allocating a brand-new closure object per instance. A thousand `Counter` instances share one `increment` method; a thousand `Counter` instances with an arrow field `increment` allocate a thousand separate closures, each capturing its own `this`. For a class instantiated rarely, this is immaterial. For a class instantiated at scale (a node in a large tree, a row in a virtualized list), it is real, measurable extra memory per instance — the trade a codebase makes for `this`-safety at the class-field level.
+
+### It can be shadowed, but it can't really be *overridden*
+
+`override` is syntactically accepted on an arrow field, because it is just a field re-declaration and the checker doesn't forbid the keyword there — but it doesn't provide the same guarantee a method override does. A real method lives on the prototype, so a base class calling `this.method()` in its own constructor genuinely dispatches to the subclass's override, even during construction:
+
+```ts
+class Base {
+  greet() { return "base"; }
+  constructor() {
+    console.log(this.greet()); // real prototype method -- genuinely virtual/polymorphic
+  }
+}
+class Derived extends Base {
+  override greet() { return "derived"; }
+}
+new Derived();
+```
+
+```ts
+// @run
+class Base {
+  greet() { return "base"; }
+  constructor() {
+    console.log(this.greet());
+  }
+}
+class Derived extends Base {
+  override greet() { return "derived"; }
+}
+new Derived();
+```
+
+```text
+derived
+```
+
+Do the identical thing with arrow fields, and the base constructor sees the *base's own* field — because `Derived`'s field assignment hasn't run yet when `super()`'s body (`Base`'s constructor) executes:
+
+```ts
+class Base {
+  greet = () => "base";
+  constructor() {
+    console.log(this.greet()); // calls Base's own arrow field -- not "virtual"
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived(); // logs during construction
+console.log(d.greet()); // this call DOES get "derived" -- last write wins after construction
+```
+
+```ts
+// @run
+class Base {
+  greet = () => "base";
+  constructor() {
+    console.log(this.greet());
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived();
+console.log(d.greet());
+```
+
+```text
+base
+derived
+```
+
+During `Base`'s constructor, `this.greet()` prints `"base"` — the opposite of the real-method version above. Only *after* construction finishes, once `Derived`'s own field assignment has run and shadowed `Base`'s, does `.greet()` return `"derived"`. This is the same [[Define]]-semantics ordering the class-fields init-order bug in the previous lesson is built on: an arrow field is "overridden" only in the sense that the later assignment wins for calls made *after* both constructors finish — never in the sense of true prototype-based virtual dispatch during construction.
+
+### It genuinely cannot be called through `super`
+
+A real overridden method can always reach the base implementation with `super.method()`. An arrow field cannot — there is no prototype slot for `super` to look up, only an instance property, and TypeScript rejects the attempt with a dedicated diagnostic:
+
+```ts
+// @expect-error TS2855
+class Base {
+  greet = () => "base";
+}
+class Derived extends Base {
+  greet = () => super.greet() + "-derived";
+}
+```
+
+```text
+error TS2855: Class field 'greet' defined by the parent class is not accessible in the child class via super.
+```
+
+`TS2855` exists specifically for this case — it is not a generic "property doesn't exist" error, but a diagnostic that knows exactly why: `greet` is a class *field* on the parent, not a prototype method, so there is nothing for `super` to find.
+
+<TSPlayground code={arrowFieldCode} id="this-types-arrow-cost" title="Real method vs. arrow field: virtual dispatch during construction" />
+
+export const arrowFieldCode = `class Base {
+  greet = () => "base";
+  constructor() {
+    console.log("during Base constructor:", this.greet());
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived();
+console.log("after construction:", d.greet());`;
+
+Click **Run**: `during Base constructor: base`, then `after construction: derived`. Change both arrow fields back to real methods (`greet() { return "base"; }` / `override greet() { return "derived"; }`) and click **Run** again — the first line becomes `derived` too, because a real method dispatches virtually from the moment the subclass exists, not only after its own initializer has run.
 
 <Callout title="The one-line takeaway">
-`this` is a type meaning "the current instance," and it is **polymorphic** — in a subclass it means the subclass. Return `this` (not the class name) from builder methods so chains keep their real subtype. A `this` **parameter** types the required calling context and is erased on emit. The JavaScript lost-`this` bug is invisible to the type checker unless the method declares a `this` parameter — an arrow-function field or `.bind()` fixes it, at the cost of a per-instance copy that can't be `override`n.
+`this` is a type meaning "the current instance," and it is **polymorphic** — in a subclass it means the subclass. Return `this` (not the class name) from builder methods so chains keep their real subtype. A `this` **parameter** types the required calling context and is erased on emit. The JavaScript lost-`this` bug is invisible to the type checker unless the method declares a `this` parameter — an arrow-function field or `.bind()` fixes it, but the arrow field is a genuinely different kind of member: allocated fresh per instance (not shared on the prototype), shadowed rather than virtually overridden during a base constructor's own execution, and rejected outright (`TS2855`) if you try to reach the base version through `super`.
 </Callout>
+
+## Mental Model
+
+Every fix in this lesson trades one guarantee for another. `this` parameters trade nothing — they're a pure compile-time check with zero runtime cost, which is why declaring one is free and should be done whenever a method's correctness genuinely depends on its `this`. The arrow-field fix for lost `this` trades memory (one closure per instance instead of one method per class) and trades away two things real methods give for free: virtual dispatch during a base constructor's own execution, and reachability through `super`. Neither trade is wrong — but treating an arrow field as "just a method with different syntax" is exactly the misconception that produces surprising bugs when a base class's constructor calls it, or a subclass tries to extend it with `super`.
+
+## Trade-offs
+
+| Fix for lost `this` | Benefit | Cost |
+|---|---|---|
+| `this` parameter (declare-only) | Zero runtime cost; turns a silent runtime crash into a compile error at the exact unsafe call site | Doesn't fix anything by itself — it only makes the existing bug visible to the checker |
+| Arrow-function field | Actually fixes the binding — `this` is always correct no matter how the field is called | One closure allocated per instance (not shared on the prototype); can't be reached through `super`; only shadowed, not virtually dispatched, during a base constructor |
+| `.bind()` at the call site | No change to the class itself | Easy to forget at any one of many call sites; still a method on the prototype otherwise, so this fix must be repeated everywhere the method is passed as a callback |
+
+## Common Misconceptions
+
+- **An arrow-function field is just a method written with different syntax.** It's a field, allocated fresh per instance in the constructor, not a shared prototype method — the two have different memory costs and different override semantics, not just different syntax.
+- **`override` on an arrow field gives the same guarantee `override` gives a real method.** It's accepted syntactically and does shadow the base field for calls made after construction finishes, but it does not provide virtual dispatch during the base class's own constructor — the base still sees its own field at that point, because the subclass's field assignment hasn't run yet.
+- **Since arrow fields can be reassigned like any field, `super.method()` should still reach the base version.** It cannot: `TS2855` reports this directly, because there is no prototype slot backing an arrow field for `super` to resolve against.
+
+## Reading AI-generated code
+
+Arrow-function class fields are a very common generated-code pattern for "fixing" React-style or event-handler `this` issues — for good reason, they usually work. But two follow-on mistakes are common once a codebase has several:
+
+- **A subclass tries to `super.method()` an arrow field it's overriding**, because the surrounding code looks exactly like normal method overriding. Watch for `TS2855` specifically — it means the member being extended is a field, not a method, and the fix is almost always to convert both the base and the subclass member back to real methods (if `this` doesn't actually need lexical binding there) or to compose behavior explicitly instead of calling through `super`.
+- **A base class's constructor calls an arrow-field "hook" expecting subclass customization to already be in effect**, mirroring the classic template-method pattern that works fine with real methods. Because arrow fields are only assigned after `super()` returns, this silently runs the base's own version during construction — the same underlying ordering issue as the `useDefineForClassFields` init-order bug from the previous lesson, just triggered by field-vs-field shadowing instead of an external `Object.assign`.
+
+<SpotTheBug code={`class Widget {
+  onMount = () => {
+    console.log("Widget.onMount");
+  };
+  constructor() {
+    this.onMount(); // "hook" pattern -- expects the most-derived onMount to run
+  }
+}
+
+class Dialog extends Widget {
+  override onMount = () => {
+    console.log("Dialog.onMount");
+  };
+}
+
+new Dialog();`}>
+This prints `Widget.onMount`, not `Dialog.onMount` — which reads as a bug to anyone expecting the template-method pattern that works with real methods. `Widget`'s constructor calls `this.onMount()` while `super()` (here, `Widget`'s own constructor body) is still running, which is *before* `Dialog`'s own field assignments happen. At that exact moment, `this.onMount` is still `Widget`'s own arrow field — `Dialog`'s `override onMount` hasn't been assigned yet, because arrow fields are assigned by the subclass constructor only after `super()` returns. The fix is to make `onMount` a real method (`onMount() { ... }` / `override onMount() { ... }`) if the design genuinely needs virtual dispatch during construction — real methods live on the prototype from the moment the class is defined, so `this.onMount()` in `Widget`'s constructor already sees `Dialog`'s override.
+</SpotTheBug>
 
 export const quizThis = [
   {
@@ -101,6 +283,7 @@ export const quizThis = [
       'A special any type',
     ],
     answer: 1,
+    explain: '`this` refers to whatever the actual instance is, which in a subclass means the subclass -- that is what "polymorphic `this`" means and what keeps fluent chains type-safe across inheritance.',
   },
   {
     q: 'Why return `this` (rather than the class name) from a chainable builder method?',
@@ -111,26 +294,51 @@ export const quizThis = [
       'To avoid inheritance',
     ],
     answer: 1,
+    explain: 'Typing the return as the concrete class name would "forget" that a subclass instance called the method, breaking the chain the moment a subclass-only method is called next.',
   },
   {
-    q: 'What is a `this` parameter used for?',
+    q: '```ts\nclass Counter {\n  count = 0;\n  increment() { this.count++; }\n}\nconst c = new Counter();\nconst fn = c.increment;\nfn();\n```\nWhat happens by default (no `this` parameter declared)?',
     options: [
-      'To pass an extra runtime argument',
-      'To type-check the required calling context; it is erased and not a real argument',
-      'To make the method static',
-      'To rename the instance',
+      'Compile error — `increment` cannot be assigned to a variable',
+      'Type-checks with zero diagnostics, then crashes at runtime because `this` is undefined inside `fn()`',
+      'Compiles and runs correctly — TypeScript automatically binds `this`',
+      '`strictBindCallApply` catches this by default',
     ],
     answer: 1,
+    explain: '`increment` never declares a required `this`, so the type checker has nothing to compare `fn()`\'s (missing) `this` context against. It compiles clean and crashes at runtime -- the exact reason a `this` parameter or an arrow field exists.',
   },
   {
-    q: 'What is an idiomatic fix for a method losing its `this` when passed as a callback?',
+    q: '```ts\nclass Base {\n  greet = () => "base";\n  constructor() { console.log(this.greet()); }\n}\nclass Derived extends Base {\n  override greet = () => "derived";\n}\nnew Derived();\n```\nWhat does this log, and why?',
     options: [
-      'Make the method static',
-      'Use an arrow-function class field, or bind at the call site with `.bind()`',
-      'Rename the method',
-      'There is no fix',
+      '`"derived"` — `override` makes the arrow field dispatch virtually, same as a method',
+      '`"base"` — `Base`\'s own arrow field runs during its constructor, before `Derived`\'s field assignment (which only happens after `super()` returns) has occurred',
+      'A compile error — arrow fields cannot be overridden at all',
+      '`"derived"` — arrow fields are hoisted before the constructor body runs',
     ],
     answer: 1,
+    explain: 'Arrow-function fields are assigned in the constructor, not placed on the prototype. During `Base`\'s own constructor execution (which is what runs `super()`\'s body), `Derived`\'s field assignments have not happened yet, so `this.greet` is still `Base`\'s own arrow function -- unlike a real method, which would already be virtually dispatched to the override at that point.',
+  },
+  {
+    q: 'Why does `super.greet()` fail with `TS2855` when `greet` is an arrow-function class field in both the base and the subclass?',
+    options: [
+      'It is a typo in the error message and should work',
+      'Arrow-function fields are instance properties, not prototype methods, so there is no prototype slot for `super` to look up',
+      'Arrow fields can only be called with `.call()`',
+      '`super` cannot be used inside any subclass constructor',
+    ],
+    answer: 1,
+    explain: '`super.method()` resolves through the prototype chain, which is exactly what an arrow field never occupies -- it lives only as an own property on each instance. TS2855 is a dedicated diagnostic for this specific situation, not a generic missing-property error.',
+  },
+  {
+    q: 'A generated class uses an arrow-function field as a "hook" the base class calls from its own constructor, expecting the most-derived override to run (the template-method pattern). What actually happens, and what is the fix?',
+    options: [
+      'It works exactly as expected — arrow fields are always virtual',
+      'The base class sees only its own arrow field during construction, because the subclass field assignment happens after `super()` returns; converting the hook to a real method (which lives on the prototype from class-definition time) restores virtual dispatch',
+      'It throws a compile error immediately',
+      'The fix is to mark the base class `abstract`',
+    ],
+    answer: 1,
+    explain: 'This is the same [[Define]]-semantics ordering as the class-fields init-order bug: arrow fields are assigned per instance, after `super()` returns, so a base constructor calling one during its own execution always gets the base\'s own version, never a not-yet-assigned subclass override. Real methods, being on the prototype immediately, do not have this problem.',
   },
 ];
 

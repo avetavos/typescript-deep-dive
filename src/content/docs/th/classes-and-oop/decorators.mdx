@@ -1,6 +1,6 @@
 ---
 title: 'Decorators'
-description: 'decorator แบบ stage-3 สมัยใหม่ (ตั้งแต่ TypeScript 5.0 และยังเป็นโมเดลหลักใน TypeScript 7) — class, method, accessor และ field decorator, context object, decorator factory และจุดที่ design แบบเก่ายังหลงเหลืออยู่'
+description: 'decorator แบบ stage-3 สมัยใหม่ (ตั้งแต่ TypeScript 5.0 และยังเป็นโมเดลหลักใน TypeScript 7) — class, method, accessor และ field decorator, context object, decorator metadata, decorator factory และจุด/เหตุผลที่ design แบบเก่ายังหลงเหลืออยู่'
 sidebar:
   order: 4
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## decorator มีสองยุค — ใช้ยุคใหม่
 
@@ -87,6 +89,28 @@ new Service().fetch(1); // logs "calling fetch", then returns "item 1"
 
 `context` object คือหัวใจของ design ใหม่ โดยบอก decorator ว่ากำลัง decorate อะไร — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private` และ hook `addInitializer` สำหรับงาน setup
 
+<TSPlayground code={loggedMethodCode} id="decorators-method-run" title="A method decorator, actually running in the browser" />
+
+export const loggedMethodCode = `function logged(originalMethod: any, context: ClassMethodDecoratorContext) {
+  const name = String(context.name);
+  function replacement(this: any, ...args: any[]) {
+    console.log(\`calling \${name}\`);
+    return originalMethod.call(this, ...args);
+  }
+  return replacement;
+}
+
+class Service {
+  @logged
+  fetch(id: number) {
+    return \`item \${id}\`;
+  }
+}
+
+console.log(new Service().fetch(1));`;
+
+กด **Check types**: ไม่มี diagnostic เลย เหมือน fence อื่นในบทนี้ แต่กด **Run** — ต่างจาก `node --experimental-strip-types` — มันรันได้จริง print `calling fetch` แล้ว `item 1` ปุ่ม Run ของ playground ในเบราว์เซอร์ใช้ `transpileModule` ของ TypeScript compiler เอง (ตอนนี้เป็น TypeScript 5.9.3 ตรงนั้น เทียบกับ 7.0.2 สำหรับ type-check ที่อื่นในคอร์สนี้) ซึ่ง **down-level** stage-3 decorator ให้กลายเป็น helper function ES2022 ธรรมดา (`__esDecorate`, `__runInitializers`) แทนที่จะ emit raw `@` syntax ตรง ๆ output ที่ compile แล้วเป็น JavaScript ธรรมดาที่ไม่มี `@` syntax เหลืออยู่ ดังนั้นรันได้ทุกที่ — รวมถึงข้างใน sandboxed `iframe` ของ playground นี้ และรวมถึง Node เองถ้าคุณ compile ล่วงหน้าด้วย `tsc` แทนที่จะให้ Node strip type สด ๆ `node --experimental-strip-types` พังเพราะมันทำสิ่งที่สองซึ่งตื้นกว่ามาก: มันลบ type syntax ทิ้งแบบ textual โดยไม่รัน transform จริง และ decorator เป็น syntax ที่ไม่เคยถูกออกแบบให้มันลบทิ้งได้เลย
+
 ## สี่สิ่งที่ decorate ได้
 
 | ชนิด decorator | รับอะไร | ใช้ทั่วไป |
@@ -97,6 +121,65 @@ new Service().fetch(1); // logs "calling fetch", then returns "item 1"
 | Field | `undefined`, context | return initializer เพื่อแปลง initial value |
 
 **field** decorator ต่างออกไปนิด — ไม่ได้รับ value มา wrap แต่ return initializer function ที่แปลง initial value ของ field เมื่อสร้าง instance ได้
+
+### accessor decorator
+
+accessor decorator เล็ง member ที่เป็น auto-accessor แบบ `accessor` keyword (จากบท Classes, Deep) และ wrap ได้ทั้ง `get` กับ `set` ที่ generate มา target ของมันไม่ใช่ function เดียว แต่เป็นคู่ `{ get, set }`:
+
+```ts
+function logged(
+  value: ClassAccessorDecoratorTarget<unknown, number>,
+  context: ClassAccessorDecoratorContext,
+) {
+  return {
+    get(this: unknown) {
+      const v = value.get.call(this);
+      console.log(`get ${String(context.name)} -> ${v}`);
+      return v;
+    },
+    set(this: unknown, newValue: number) {
+      console.log(`set ${String(context.name)} <- ${newValue}`);
+      value.set.call(this, newValue);
+    },
+  };
+}
+
+class Counter {
+  @logged
+  accessor count = 0;
+}
+
+new Counter().count = 5;
+```
+
+อันนี้ compile ผ่านสะอาด และเหมือน class decorator ก่อนหน้าในบทนี้ throw `SyntaxError: Invalid or unexpected token` แบบเดียวกันภายใต้ `node --experimental-strip-types` — decorator syntax ไม่ใช่ชนิดของสิ่งที่ถูก decorate เป็นสิ่งที่ stripper ของ Node parse ไม่ได้ มีรายละเอียดหนึ่งที่ควรเอ่ยให้แม่นยำ: error นั้น **ไม่ใช่** code `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` ที่ Node ใช้สำหรับ syntax ของ TypeScript ที่มันรู้จักแต่ตั้งใจปฏิเสธ (parameter property, `enum`, `namespace` — การละเมิด erasable-syntax จากบท Classes, Deep) decorator ไม่ใช่ syntax ของ TypeScript เลย — มันเป็น proposal ของ JavaScript ที่ stripper ของ Node ไม่เคยถูกสร้างมาให้ลบทิ้ง parser จึงพังที่ raw token `@` เอง แบบทั่วไปเหมือนที่มันจะพังกับตัวอักษรที่ไม่รู้จักตัวอื่น สอง failure mode นี้หน้าตาคล้ายกันแต่มาจากคนละที่: อันหนึ่งคือ stripper ของ Node บอกว่า "ฉันเห็นสิ่งนี้ แต่ไม่อนุญาตตรงนี้"; อีกอันคือ JavaScript parser พื้นฐานของ Node บอกว่า "ฉันไม่รู้จัก token นี้เลย"
+
+## decorator metadata
+
+context ของ stage-3 decorator ทุกตัวมี object `metadata` (`context.metadata`, TypeScript 5.2+) — plain object ที่แชร์กันระหว่าง decorator ทุกตัวที่ apply กับ class เดียวกัน มีไว้ให้ decorator เก็บข้อมูลไว้ อ่านได้ทีหลังจากตัว class เองผ่าน well-known symbol `Symbol.metadata`:
+
+```ts
+function track(value: undefined, context: ClassFieldDecoratorContext) {
+  const metadata = context.metadata as Record<string, unknown>;
+  metadata[context.name as string] = true;
+}
+
+class Config {
+  @track
+  host = "localhost";
+}
+
+console.log(Object.keys(Config[Symbol.metadata] ?? {}));
+```
+
+อันนี้ compile ผ่านสะอาดภายใต้ setting ของคอร์สนี้ (`--lib esnext,dom,dom.iterable`) — แต่ `Symbol.metadata` ใหม่พอที่ควรเช็คว่า `lib` ไหนที่ ship มันจริง compile source เดียวกันเป๊ะด้วย `--lib es2025,dom` แทน `esnext` พัง:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --target es2025 --lib es2025,dom --skipLibCheck metadata.ts
+metadata.ts(10,27): error TS2550: Property 'metadata' does not exist on type 'SymbolConstructor'. Do you need to change your target library link. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.
+```
+
+ในตอน TypeScript 7.0.2 typing ของ `Symbol.metadata` ยังอยู่แค่ใน esnext proposal lib ไม่ได้อยู่ใน versioned `es2025` lib แม้ตัว language feature เองจะ stable มาตั้งแต่ TypeScript 5.2 แล้วก็ตาม project ไหนที่ต้องการ decorator metadata โดยเฉพาะต้องมี `"lib": [..., "esnext"]` (หรือ versioned lib ใหม่กว่านั้นถ้ามีวันหนึ่ง ship ออกมา) ไม่ใช่แค่ `target` ล่าสุด
 
 ## decorator factory
 
@@ -118,9 +201,144 @@ class Api {
 }
 ```
 
+## ทำไม NestJS และ Angular ยังเอื้อมไปหา design แบบเก่า
+
+`context.metadata` ของ stage-3 (ข้างบน) ตั้งใจให้เรียบง่ายมาก: มันเป็น empty object ที่ decorator เติมเอง ไม่มีการเชื่อมอัตโนมัติกับอะไรที่ compiler รู้อยู่แล้วเกี่ยวกับ class เลย framework แบบ dependency-injection ต้องการสิ่งที่ stage-3 ไม่มีให้เลย: **type ที่ประกาศไว้ของ constructor parameter ทุกตัว** เพื่อให้ container สามารถ lookup "parameter ตัวนี้ type เป็น `Logger` ไปสร้างหรือ fetch `Logger` มา" โดยไม่ต้องให้ developer เขียน mapping นั้นด้วยมือ ข้อมูลชิ้นนี้เจาะจง — emit อัตโนมัติ ไม่ต้องมี decorator คำนวณเอง — คือสิ่งที่ `emitDecoratorMetadata` (คู่กับ `experimentalDecorators`) ให้มา และ stage-3 decorator ไม่มีอะไรเทียบเท่าเลย
+
+compile class เดียวกันสองแบบทำให้ช่องว่างนี้เป็นรูปธรรม ภายใต้ stage-3 (setting ค่าเริ่มต้นของคอร์สนี้ — ไม่มี flag เพิ่ม):
+
+```ts
+function Injectable(): ClassDecorator {
+  return (target) => {};
+}
+
+class Logger {}
+
+@Injectable()
+class UserService {
+  logger: Logger;
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+}
+```
+
+emit ออกมา (`tsc --target es2025 --module esnext` ไม่มี flag เพิ่ม):
+
+```text
+function Injectable() {
+    return (target) => { };
+}
+class Logger {
+}
+let UserService = (() => {
+    let _classDecorators = [Injectable()];
+    let _classDescriptor;
+    let _classExtraInitializers = [];
+    let _classThis;
+    var UserService = class {
+        static { _classThis = this; }
+        static {
+            const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+            __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+            UserService = _classThis = _classDescriptor.value;
+            if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+            __runInitializers(_classThis, _classExtraInitializers);
+        }
+        logger;
+        constructor(logger) {
+            this.logger = logger;
+        }
+    };
+    return UserService = _classThis;
+})();
+```
+
+ไม่มีตรงไหนใน output นั้นเลยที่บอกว่า type ที่ประกาศของ `logger` คือ `Logger` — `constructor(logger)` ที่ emit ออกมาเป็นแค่ชื่อ parameter ธรรมดา ตรงตามที่ erasure ทิ้ง type เสมอ compile source เดียวกันเป๊ะด้วย `--experimentalDecorators --emitDecoratorMetadata` แทน:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext --experimentalDecorators --emitDecoratorMetadata --outDir out legacy.ts
+```
+
+```text
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+function Injectable() {
+    return (target) => { };
+}
+class Logger {
+}
+let UserService = class UserService {
+    logger;
+    constructor(logger) {
+        this.logger = logger;
+    }
+};
+UserService = __decorate([
+    Injectable(),
+    __metadata("design:paramtypes", [Logger])
+], UserService);
+```
+
+`__metadata("design:paramtypes", [Logger])` คือชิ้นที่ stage-3 ไม่มีทางแสดงออกได้เลย: compiler เองรู้จาก source ว่า `logger: Logger` แล้ว emit ค่า class `Logger` จริง ๆ ลงใน output ดึงกลับมาได้ตอน runtime ด้วย `Reflect.getMetadata("design:paramtypes", UserService)` (ผ่าน package แยกต่างหาก `reflect-metadata` ที่ให้ `Reflect.metadata`/`Reflect.getMetadata`) นั่นคือ mechanism ตรง ๆ ที่ `@Injectable()` ของ NestJS และ dependency injector ของ Angular สร้างขึ้นมาบน: decorate class แล้วถาม runtime ว่า "constructor นี้ parameter type อะไรบ้าง" แล้วได้คำตอบจริง — ไม่มี `context.metadata` ของ stage-3 จำนวนเท่าไรก็ตามให้ได้แบบนี้ เพราะ stage-3 metadata เป็นแค่สิ่งที่ decorator เลือกเขียนเข้าไปเองด้วยมือ ไม่เคยเป็นสิ่งที่ compiler เติมให้อัตโนมัติจาก type system เลย
+
 <Callout title="สรุปหนึ่งบรรทัด">
-เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5.0 และไม่เปลี่ยนจนถึง TypeScript 7 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `addInitializer`) แล้ว wrap หรือแทน behavior ได้ ห่อ decorator ด้วย function อีกชั้น — **factory** — เมื่อต้องส่ง config ด้วย `@name(args)`
+เลือก **stage-3 decorator** (native ตั้งแต่ TypeScript 5.0 และไม่เปลี่ยนจนถึง TypeScript 7 ไม่ต้องใช้ flag `experimentalDecorators`) แทน design experimental เก่า — มัน type-check ผ่านภายใต้ `--strict` และรอด `--erasableSyntaxOnly` แต่ยังพังด้วย `SyntaxError` ธรรมดา (ไม่ใช่ `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) ภายใต้ Node type-stripping เพราะ V8 ยังไม่ implement syntax นี้; ปุ่ม Run ของ playground ในเบราว์เซอร์ทำงานได้เพราะมัน down-level decorator ให้เป็น helper ธรรมดาผ่าน `transpileModule` ก่อน decorator คือ function ที่รับสิ่งที่ถูก decorate บวก **context** object (`kind`, `name`, `static`, `private`, `metadata` ตั้งแต่ 5.2, `addInitializer`) ห่อมันด้วย **factory** เมื่อต้องส่ง config ด้วย `@name(args)` NestJS และ Angular ยังต้องใช้ `experimentalDecorators` + `emitDecoratorMetadata` เพราะมีแค่คู่ legacy นี้เท่านั้นที่ emit `design:paramtypes` — parameter type จริงที่ประกาศไว้ของ constructor ฝังเข้า output อัตโนมัติ — ซึ่ง `context.metadata` ของ stage-3 ที่ decorator ต้องเติมเองไม่มีอะไรเทียบเท่าเลย
 </Callout>
+
+## Mental Model
+
+แยกสองคำถามที่เป็นอิสระต่อกันไว้เสมอเมื่อ decorator code ไม่ทำงานตามที่คุณคาดหวัง: **"compiler ต้อง transform syntax นี้เป็นอย่างอื่นไหม?"** (setting erasable-syntax-only สนใจเรื่องนี้ และ decorator ผ่าน — มันเป็น ECMAScript มาตรฐาน ไม่มีอะไรต้อง transform สำหรับจุดประสงค์การ strip type) กับ **"JavaScript engine ที่รัน code นี้จริง ๆ เข้าใจ syntax นี้เลยไหม?"** (นี่คือสิ่งที่พังภายใต้ `node --experimental-strip-types` และเป็น failure ที่ต่างกันโดยสิ้นเชิง — parse error ดิบ ๆ ไม่ใช่ error แบบ TypeScript-construct-ที่-รู้จักแต่ถูกปฏิเสธ) ปุ่ม Run ของ playground ในเบราว์เซอร์เลี่ยงคำถามที่สองไปเลยด้วยการ transpile จริงก่อน ซึ่งก็เป็นวิธีเดียวกันเป๊ะที่ production build ที่ใช้ `tsc` (หรือ bundler ใดก็ตามที่มี TypeScript transform จริง ไม่ใช่แค่ stripper) ship code ที่ใช้ decorator ในปัจจุบัน
+
+## ข้อแลกเปลี่ยน
+
+| Design | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| stage-3 decorator | ECMAScript มาตรฐาน ไม่ต้องใช้ flag, `context` object rich และ type ดี, ใช้ได้กับ `--erasableSyntaxOnly` | รันภายใต้ pipeline ที่ strip อย่างเดียว (Node type stripping) ไม่ได้ถ้าไม่มี transpile จริงก่อน; `context.metadata` ไม่มี type information อัตโนมัติ |
+| legacy decorator (`experimentalDecorators`) | `emitDecoratorMetadata` ฝัง constructor parameter type จริง (`design:paramtypes`) เข้า output — รากฐานของ DI แบบ NestJS/Angular | experimental, signature ต่างจาก stage-3, ต้องใช้ `reflect-metadata`, ผูกกับ emit ของ `tsc` เอง (ไม่เคยทำงานภายใต้ pure type-stripper) |
+| `accessor` + accessor decorator | ดัก `get` กับ `set` ทั้งคู่ได้สะอาดผ่าน declaration เดียว | ใช้ได้แค่กับ member แบบ `accessor` keyword ไม่ใช่คู่ `get`/`set` ที่เขียนมือ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **ถ้า code type-check ผ่านภายใต้ `--erasableSyntaxOnly` มันจะรันได้ภายใต้ Node type stripping** decorator เป็นตัวอย่างที่ขัดแย้งชัดที่สุดในคอร์สนี้: มันผ่าน `--erasableSyntaxOnly` สะอาด (ไม่มีอะไรต้อง transform ฝั่ง compiler) แต่ยังพังด้วย `SyntaxError` ธรรมดาภายใต้ `node --experimental-strip-types` เพราะ flag นั้นแค่ strip *type* annotation เท่านั้น — มันไม่ implement หรือ transpile JavaScript-level proposal ใด ๆ ที่ V8 ยังไม่มี
+- **`SyntaxError` ที่ decorator throw ภายใต้ Node เป็น error ชนิดเดียวกับ TypeScript construct ที่ erase ไม่ได้ (parameter property, `enum`)** ไม่ใช่ — พวกนั้นได้ code เฉพาะของ Node คือ `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` ซึ่งเป็นการปฏิเสธตั้งใจของ syntax TypeScript ที่รู้จักแต่ไม่อนุญาต decorator พังด้วย parse error ทั่วไปเพราะ parser ของ stripper ไม่รู้จัก token `@` ว่าเป็นอะไรเลย
+- **`context.metadata` ใน stage-3 decorator ให้สิ่งเดียวกับที่ `design:paramtypes` ให้ตัว legacy** ไม่ใช่ — `context.metadata` เป็น empty object ที่ decorator ต้องเติมเอง; `design:paramtypes` คือ compiler emit parameter type จริงที่ประกาศไว้ของ constructor อัตโนมัติ ไม่ต้องมี decorator code เลย ซึ่งเป็น capability ที่ stage-3 decorator ไม่ได้ถูกออกแบบมาแทนที่เลย
+
+## อ่านโค้ดที่ AI เขียน
+
+- **decorator แบบ `@Injectable()` stage-3 ที่คาดว่าจะอ่าน constructor parameter type จาก `context` หรือ `context.metadata`** ทำแบบนี้ไม่ได้ — context object ของ stage-3 ไม่มี type information อยู่เลย เพราะ type ถูก erase ก่อนที่ decorator ใด ๆ จะรันด้วยซ้ำ การอ่าน parameter type จริงตอน runtime ต้องใช้ `experimentalDecorators` + `emitDecoratorMetadata` และรูปแบบ decorator แบบ legacy generated code ที่ผสม "stage-3 syntax" กับ "อ่าน metadata แบบ `design:paramtypes`" กำลังรวมสอง design ที่ไม่ interoperate กัน
+- **class decorator แบบ `@Component` ที่ copy จากตัวอย่าง NestJS หรือ Angular เข้า project ที่ไม่ได้เปิด `experimentalDecorators`** ตัว syntax decorator เองมักจะยัง compile ผ่าน (stage-3 รับ decorator function shape ได้หลากหลาย) แต่ reflection ใดก็ตามที่ decorator พึ่ง (`Reflect.getMetadata`) จะ return `undefined` เงียบ ๆ เพราะไม่มี `design:paramtypes` metadata ถูก emit เลยถ้าไม่มี flag
+
+<SpotTheBug code={`function Injectable(): ClassDecorator {
+  return (target) => {};
+}
+
+@Injectable()
+class Logger {}
+
+@Injectable()
+class UserService {
+  logger: Logger;
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+}
+
+// Somewhere in a hand-rolled DI container:
+function resolve(target: any) {
+  const paramTypes = Reflect.getMetadata("design:paramtypes", target) ?? [];
+  console.log(paramTypes);
+}
+resolve(UserService);`}>
+project นี้ไม่มี `experimentalDecorators`/`emitDecoratorMetadata` ใน `tsconfig.json` — decorator compile ผ่านได้ดีในฐานะ stage-3 decorator ธรรมดา แต่ `resolve(UserService)` log array ว่างเปล่า (หรือ throw ถ้า polyfill ของ `reflect-metadata` สำหรับ `Reflect.getMetadata` ไม่เคยถูก import เลย) ไม่ใช่ `[Logger]` metadata แบบ `design:paramtypes` ถูก emit จาก legacy decorator pipeline **เท่านั้น** ที่ถูก gate ไว้หลัง `experimentalDecorators` และ `emitDecoratorMetadata` รวมกัน — stage-3 decorator ไม่ว่าจะเขียนยังไงก็ไม่เคยเติมมันเลย เพราะ `context.metadata` ของ stage-3 เป็น bag แบบ opt-in ที่ decorator ต้องเติมเองด้วยมือ ไม่ใช่สิ่งที่ compiler เติมให้อัตโนมัติจาก type system วิธีแก้คือเปิด flag legacy ทั้งสองตัวจริง ๆ ทั้ง project (แล้วยอมรับ decorator model แบบ legacy ทุกที่) หรือเลิกใช้ reflection-based DI แล้วส่ง dependency ตรง ๆ แทน — trick เรื่อง constructor-parameter-type ที่ code นี้พยายามใช้ไม่มี stage-3 เทียบเท่าเลย
+</SpotTheBug>
 
 export const quizDecorators = [
   {
@@ -132,36 +350,62 @@ export const quizDecorators = [
       'TypeScript ไม่มี decorator',
     ],
     answer: 1,
+    explain: 'stage-3 decorator เป็น design ECMAScript ที่เป็นมาตรฐาน native ตั้งแต่ TypeScript 5.0 ไม่ต้องใช้ flag และเป็นสิ่งที่บทเรียนนี้สอน',
   },
   {
     q: 'argument ตัวที่สองของ stage-3 decorator (context) ให้อะไร?',
     options: [
       'runtime value ของ field เท่านั้น',
-      'metadata เกี่ยวกับสิ่งที่ถูก decorate — kind, name, static, private และ hook addInitializer',
+      'metadata เกี่ยวกับสิ่งที่ถูก decorate — kind, name, static, private, metadata object (5.2+) และ hook addInitializer',
       'ตัวเลือกใน tsconfig',
       'ไม่มีอะไรมีประโยชน์',
     ],
     answer: 1,
+    explain: 'context object อธิบาย member ที่ถูก decorate (kind, name, static, private) พก metadata object ที่แชร์กันให้ decorator เติมได้ และมี addInitializer สำหรับงาน setup',
   },
   {
-    q: 'decorator factory คืออะไร?',
+    q: '```ts\nfunction logged(value: any, context: ClassMethodDecoratorContext) {\n  return value;\n}\nclass Service {\n  @logged\n  fetch() { return "ok"; }\n}\n```\nอันนี้ compile ผ่านสะอาดภายใต้ `--erasableSyntaxOnly` และ `--strict` ทำไมมันยัง throw `SyntaxError` เมื่อรันด้วย `node --experimental-strip-types`?',
     options: [
-      'class ที่ build decorator ตอน runtime',
-      'function ที่ return decorator เพื่อส่ง config ด้วย `@name(args)`',
-      'setting พิเศษใน tsconfig',
-      'decorator ที่ apply กับ factory function',
+      'ไม่จริง — เป็นความเข้าใจผิด',
+      '`--erasableSyntaxOnly` เช็คแค่ว่า compiler ต้อง transform syntax หรือเปล่า มันไม่บอกอะไรเลยว่า V8 เอง implement syntax นี้หรือยัง ซึ่งยังไม่ implement สำหรับ stage-3 decorator',
+      'decorator ต้องใช้ `experimentalDecorators` ถึงจะทำงานได้เลย',
+      'Node รัน `tsc` ก่อนเสมอ เรื่องนี้เลยไม่เกิดขึ้น',
     ],
     answer: 1,
+    explain: 'นี่คือสองคำถามที่อิสระต่อกัน: compiler ต้อง emit code ต่างออกไปไหม (decorator ไม่ต้อง — มันเป็น ECMAScript syntax มาตรฐาน) กับ JavaScript engine parse syntax นี้ได้เลยไหม (V8 ยังไม่ได้) Node type-stripping แค่ลบ type annotation ทิ้ง มันไม่เคย transpile JavaScript-level syntax ที่ V8 ยังไม่มี',
   },
   {
-    q: 'field decorator ต่างจาก method decorator อย่างไร?',
+    q: '`SyntaxError` ที่ decorator throw ภายใต้ Node type-stripping ต่างจาก `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` ที่ parameter property throw ตรงนั้นยังไง?',
     options: [
-      'มีไม่ได้',
-      'ไม่ได้รับ value มา wrap แต่ return initializer ที่แปลง initial value ของ field ได้',
-      'รันแค่ครั้งเดียวต่อ class',
-      'ต้องเป็น static',
+      'ไม่ต่าง — เป็น error เดียวกันแค่ชื่อต่างกัน',
+      '`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` คือ stripper ของ Node รู้จัก syntax TypeScript แล้วตั้งใจปฏิเสธ; `SyntaxError` ธรรมดาของ decorator แปลว่า parser พื้นฐานไม่รู้จัก token `@` ว่าเป็นอะไรเลย เพราะ decorator ไม่ใช่ syntax ของ TypeScript',
+      'decorator throw ตอน runtime, parameter property throw ตอน compile time',
+      'ทั้งคู่เกิดแค่ใน strict mode',
     ],
     answer: 1,
+    explain: 'parameter property, enum และ construct คล้ายกันเป็น syntax TypeScript ที่ stripper ของ Node รู้จักตรง ๆ แล้วปฏิเสธด้วย error code ที่ตั้งชื่อไว้ decorator เป็น proposal ระดับ JavaScript ที่ stripper ไม่เคยถูกสร้างมาให้ลบทิ้งเลย failure เลยเป็น parse error ทั่วไปที่ไม่รู้จัก token แทน',
+  },
+  {
+    q: 'ทำไมปุ่ม "Run" ของ TSPlayground ในเบราว์เซอร์รัน code ที่ใช้ stage-3 decorator ได้สำเร็จ ทั้งที่ `node --experimental-strip-types` ทำไม่ได้?',
+    options: [
+      'เบราว์เซอร์ implement stage-3 decorator native แล้ว',
+      'playground ใช้ `ts.transpileModule` ซึ่ง down-level decorator ให้เป็น helper function ES2022 ธรรมดาก่อนรันผลลัพธ์ — JavaScript ธรรมดาที่ไม่มี `@` syntax เหลืออยู่เลย',
+      'decorator ถูก ignore เงียบ ๆ ในเบราว์เซอร์',
+      'มันแอบส่ง code ไป server ที่รัน Node เวอร์ชันใหม่กว่า',
+    ],
+    answer: 1,
+    explain: '`transpileModule` ทำ compiler transform จริง เขียน syntax `@decorator` ใหม่ให้เป็นการเรียก `__esDecorate`/`__runInitializers` — JavaScript ธรรมดาที่รองรับอยู่แล้ว `node --experimental-strip-types` ไม่ transpile มันแค่ลบ type annotation ทิ้งแบบ textual ปล่อย JavaScript-level syntax ที่ไม่รองรับอย่าง decorator ไว้เฉย ๆ (แล้วก็ parse ไม่ได้)',
+  },
+  {
+    q: '```ts\nfunction Injectable(): ClassDecorator {\n  return (target) => {};\n}\nclass Logger {}\n@Injectable()\nclass UserService {\n  logger: Logger;\n  constructor(logger: Logger) { this.logger = logger; }\n}\n```\ncompile อันนี้ด้วย stage-3 settings ธรรมดา เทียบกับด้วย `--experimentalDecorators --emitDecoratorMetadata` ได้ output ต่างกันมาก ทำไม NestJS และ Angular ยังต้องใช้คู่ legacy แทนที่จะใช้ stage-3 อย่างเดียว?',
+    options: [
+      'stage-3 decorator ยังไม่มีอยู่จริง',
+      'มีแค่คู่ legacy เท่านั้นที่ emit `design:paramtypes` — parameter type จริงที่ประกาศไว้ของ constructor ฝังเข้า output อัตโนมัติ — ซึ่ง dependency injection ของพวกเขาสร้างขึ้นมาบนสิ่งนี้ และ `context.metadata` ของ stage-3 ที่ decorator เติมเองไม่มีอะไรเทียบเท่า',
+      'stage-3 decorator ช้ากว่าตอน runtime',
+      '`experimentalDecorators` จำเป็นสำหรับการใช้ class เลย',
+    ],
+    answer: 1,
+    explain: 'compile class เดียวกันสองแบบแสดงช่องว่างตรง ๆ: มีแค่ `--experimentalDecorators --emitDecoratorMetadata` เท่านั้นที่ emit `__metadata("design:paramtypes", [Logger])` `context.metadata` ของ stage-3 เป็น empty object ที่ decorator ต้องเติมเอง — ไม่เคยถูกเติมอัตโนมัติด้วย type information แบบที่ `design:paramtypes` ทำ เพราะ type ถูก erase ก่อนที่ decorator ใด ๆ จะรัน',
   },
 ];
 

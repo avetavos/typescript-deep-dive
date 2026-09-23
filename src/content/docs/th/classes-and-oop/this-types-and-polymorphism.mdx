@@ -1,6 +1,6 @@
 ---
 title: 'this Types & Polymorphism'
-description: 'polymorphic this type สำหรับ fluent chaining, this parameter และการเสีย this binding แสดงออกใน type system อย่างไร'
+description: 'polymorphic this type สำหรับ fluent chaining, this parameter และการเสีย this binding แสดงออกใน type system อย่างไร — รวมถึงต้นทุนจริงของวิธีแก้ด้วย arrow field'
 sidebar:
   order: 3
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## `this` ก็เป็น type ด้วย
 
@@ -85,11 +87,191 @@ const fn = c.increment;
 fn();
 ```
 
-ตอนนี้ mismatch ถูกจับแล้ว: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` วิธีแก้แบบ idiomatic คือใช้ **arrow-function field** (`increment = () => { ... }` ซึ่ง bind `this` แบบ lexical) หรือ bind ที่จุดเรียก (`c.increment.bind(c)`) แต่ arrow field ก็ไม่ได้ฟรี — มันถูกสร้างใหม่บน **ทุก instance** แทนที่จะอยู่บน prototype ตัวเดียวเหมือน method ปกติ จึงกิน memory ต่อ instance มากกว่า และเพราะมันเป็น field ธรรมดาไม่ใช่ method subclass จึง `override` มันไม่ได้และเรียกผ่าน `super` ไม่ได้ด้วย
+ตอนนี้ mismatch ถูกจับแล้ว: `TS2684: The 'this' context of type 'void' is not assignable to method's 'this' of type 'Counter'.` วิธีแก้แบบ idiomatic คือใช้ **arrow-function field** (`increment = () => { ... }` ซึ่ง bind `this` แบบ lexical) หรือ bind ที่จุดเรียก (`c.increment.bind(c)`)
+
+## วิธีแก้ด้วย arrow field แล้วมันเสียอะไรจริง ๆ
+
+arrow-function field แก้ bug เสีย `this` ได้จริง — arrow function ไม่มี `this` เป็นของตัวเอง ดังนั้น `this` ข้างในมันถูก capture แบบ lexical จากจุดที่ field ถูก define ซึ่งก็คือ constructor เสมอ และ constructor ก็มี instance จริงผูกอยู่เสมอ แต่ "arrow field" ไม่ใช่แค่ syntax variant ของ "method" — มันเป็น class member คนละชนิดเลย มีตำแหน่งตอน runtime ต่างกัน และกฎต่างกันสำหรับสองสิ่งที่ class ให้ฟรีตามปกติ: การ override และ `super`
+
+### ถูก allocate ต่อ instance ไม่ใช่ต่อ prototype
+
+method ธรรมดาอยู่ครั้งเดียวบน prototype แชร์กันทุก instance arrow-function field เป็น **field** — มัน allocate closure ของตัวเองใหม่ใน constructor ของทุก instance เดี่ยว ๆ JavaScript ที่ emit ออกมาแสดงเรื่องนี้ชัดเจน:
+
+```ts
+class Counter {
+  count = 0;
+  increment = () => { this.count++; }; // arrow-function field
+}
+```
+
+compile ด้วย `tsc --target es2025` (`node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext counter.ts`) emit ตรงตามที่เขียนเป๊ะ ข้างใน constructor (ที่ implicit):
+
+```text
+"use strict";
+class Counter {
+    count = 0;
+    increment = () => { this.count++; }; // arrow-function field
+}
+```
+
+ดูไม่มีพิษภัยจนกว่าจะเทียบกับ method จริง: method compile เป็น function เดียว ประกาศครั้งเดียวบน `Counter.prototype` ที่ทุก `new Counter()` แชร์กันโดย reference arrow field compile เป็น assignment ที่รัน **ข้างใน constructor call ทุกครั้ง** allocate closure object ใหม่ต่อ instance Counter หนึ่งพัน instance แชร์ method `increment` เดียวกัน; Counter หนึ่งพัน instance ที่มี arrow field `increment` allocate closure แยกกันหนึ่งพันตัว แต่ละตัว capture `this` ของตัวเอง สำหรับ class ที่ instantiate น้อย เรื่องนี้ไม่มีนัยสำคัญ สำหรับ class ที่ instantiate ในระดับ scale (node ใน tree ขนาดใหญ่ แถวใน virtualized list) มันคือ memory ต่อ instance ที่เพิ่มขึ้นจริงและวัดได้ — trade-off ที่ codebase ทำเพื่อความปลอดภัยของ `this` ที่ระดับ class field
+
+### ถูก shadow ได้ แต่ override จริง ๆ ไม่ได้
+
+`override` ถูกยอมรับทาง syntax บน arrow field เพราะมันเป็นแค่ field re-declaration และ checker ไม่ได้ห้าม keyword ตรงนั้น — แต่มันไม่ได้ให้ guarantee เดียวกับที่ method override ให้ method จริงอยู่บน prototype ดังนั้น base class ที่เรียก `this.method()` ใน constructor ของตัวเอง dispatch ไปยัง override ของ subclass จริง ๆ แม้แต่ตอนกำลัง construct:
+
+```ts
+class Base {
+  greet() { return "base"; }
+  constructor() {
+    console.log(this.greet()); // real prototype method -- genuinely virtual/polymorphic
+  }
+}
+class Derived extends Base {
+  override greet() { return "derived"; }
+}
+new Derived();
+```
+
+```ts
+// @run
+class Base {
+  greet() { return "base"; }
+  constructor() {
+    console.log(this.greet());
+  }
+}
+class Derived extends Base {
+  override greet() { return "derived"; }
+}
+new Derived();
+```
+
+```text
+derived
+```
+
+ทำแบบเดียวกันเป๊ะด้วย arrow field แล้ว base constructor จะเห็น field ของ *base เอง* — เพราะ field assignment ของ `Derived` ยังไม่รันตอนที่ body ของ `super()` (ก็คือ constructor ของ `Base`) กำลัง execute:
+
+```ts
+class Base {
+  greet = () => "base";
+  constructor() {
+    console.log(this.greet()); // calls Base's own arrow field -- not "virtual"
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived(); // logs during construction
+console.log(d.greet()); // this call DOES get "derived" -- last write wins after construction
+```
+
+```ts
+// @run
+class Base {
+  greet = () => "base";
+  constructor() {
+    console.log(this.greet());
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived();
+console.log(d.greet());
+```
+
+```text
+base
+derived
+```
+
+ระหว่าง constructor ของ `Base` `this.greet()` print `"base"` — ตรงข้ามกับ version method จริงข้างบน ต่อเมื่อ construction เสร็จแล้วเท่านั้น เมื่อ field assignment ของ `Derived` เองรันและ shadow ของ `Base` แล้ว `.greet()` ถึง return `"derived"` นี่คือ [[Define]]-semantics ordering แบบเดียวกับที่ bug init order ของ class field ในบทก่อนสร้างขึ้นมา — arrow field ถูก "override" ได้แค่ในความหมายที่ว่า assignment หลังชนะสำหรับ call ที่เกิด *หลัง* constructor ทั้งคู่จบแล้ว ไม่ใช่ในความหมายของ virtual dispatch แบบ prototype จริงระหว่าง construction
+
+### เรียกผ่าน `super` ไม่ได้จริง ๆ
+
+method ที่ override จริงเรียก base implementation ผ่าน `super.method()` ได้เสมอ arrow field ทำไม่ได้ — ไม่มี prototype slot ให้ `super` ไปหา มีแค่ instance property และ TypeScript reject ความพยายามนี้ด้วย diagnostic เฉพาะ:
+
+```ts
+// @expect-error TS2855
+class Base {
+  greet = () => "base";
+}
+class Derived extends Base {
+  greet = () => super.greet() + "-derived";
+}
+```
+
+```text
+error TS2855: Class field 'greet' defined by the parent class is not accessible in the child class via super.
+```
+
+`TS2855` มีไว้เฉพาะกรณีนี้ — ไม่ใช่ error "property ไม่มีอยู่" ทั่วไป แต่เป็น diagnostic ที่รู้เหตุผลตรง ๆ: `greet` เป็น class *field* บน parent ไม่ใช่ prototype method จึงไม่มีอะไรให้ `super` หาเจอ
+
+<TSPlayground code={arrowFieldCode} id="this-types-arrow-cost" title="Real method vs. arrow field: virtual dispatch during construction" />
+
+export const arrowFieldCode = `class Base {
+  greet = () => "base";
+  constructor() {
+    console.log("during Base constructor:", this.greet());
+  }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+const d = new Derived();
+console.log("after construction:", d.greet());`;
+
+กด **Run**: `during Base constructor: base` แล้ว `after construction: derived` เปลี่ยน arrow field ทั้งคู่กลับเป็น method จริง (`greet() { return "base"; }` / `override greet() { return "derived"; }`) แล้วกด **Run** อีกครั้ง — บรรทัดแรกกลายเป็น `derived` ด้วย เพราะ method จริง dispatch แบบ virtual ตั้งแต่ subclass มีอยู่ ไม่ใช่แค่หลังจาก initializer ของมันเองรันแล้ว
 
 <Callout title="สรุปหนึ่งบรรทัด">
-`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และเป็น **polymorphic** — ใน subclass จะหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit bug เสีย `this` ของ JavaScript type checker มองไม่เห็นเลยเว้นแต่ method จะประกาศ `this` parameter — arrow-function field หรือ `.bind()` แก้ได้ แลกกับ copy ต่อ instance ที่ `override` ไม่ได้
+`this` เป็น type ที่หมายถึง "instance ปัจจุบัน" และเป็น **polymorphic** — ใน subclass จะหมายถึง subclass return `this` (ไม่ใช่ชื่อ class) จาก builder method เพื่อให้ chain รักษา subtype จริงไว้ `this` **parameter** type calling context ที่ต้องการและถูก erase ตอน emit bug เสีย `this` ของ JavaScript type checker มองไม่เห็นเลยเว้นแต่ method จะประกาศ `this` parameter — arrow-function field หรือ `.bind()` แก้ได้ แต่ arrow field เป็น member คนละชนิดจริง ๆ: allocate ใหม่ต่อ instance (ไม่แชร์บน prototype) ถูก shadow ไม่ใช่ override แบบ virtual ระหว่างที่ base constructor กำลัง execute และถูก reject ตรง ๆ (`TS2855`) ถ้าพยายามเข้าถึง version ของ base ผ่าน `super`
 </Callout>
+
+## Mental Model
+
+ทุกวิธีแก้ในบทนี้ trade guarantee หนึ่งไปกับอีกอัน `this` parameter ไม่ trade อะไรเลย — เป็น compile-time check ล้วน ๆ ไม่มีต้นทุนตอน runtime ซึ่งเป็นเหตุผลที่ประกาศมันได้ฟรีและควรทำทุกครั้งที่ความถูกต้องของ method ขึ้นอยู่กับ `this` ของมันจริง ๆ วิธีแก้ arrow-field สำหรับ `this` ที่หายไป trade memory (closure หนึ่งต่อ instance แทนที่จะเป็น method หนึ่งต่อ class) และ trade สองสิ่งที่ method จริงให้ฟรี: virtual dispatch ระหว่างที่ base constructor กำลัง execute และการเข้าถึงได้ผ่าน `super` ไม่มี trade ไหนผิด — แต่การมองว่า arrow field เป็น "แค่ method ที่ syntax ต่างไป" คือความเข้าใจผิดที่สร้าง bug เซอร์ไพรส์ตรงจุดที่ base class เรียกมันจาก constructor หรือ subclass พยายาม extend มันด้วย `super`
+
+## ข้อแลกเปลี่ยน
+
+| วิธีแก้เรื่องเสีย `this` | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| `this` parameter (declare อย่างเดียว) | ไม่มีต้นทุนตอน runtime; เปลี่ยน runtime crash เงียบ ๆ ให้เป็น compile error ที่จุดเรียกที่ไม่ปลอดภัยตรงเป๊ะ | ไม่แก้อะไรด้วยตัวเอง — แค่ทำให้ bug ที่มีอยู่แล้วมองเห็นได้สำหรับ checker |
+| arrow-function field | แก้ binding ได้จริง — `this` ถูกต้องเสมอไม่ว่า field จะถูกเรียกยังไง | closure ถูก allocate หนึ่งต่อ instance (ไม่แชร์บน prototype); เข้าถึงผ่าน `super` ไม่ได้; ถูก shadow ไม่ใช่ virtual dispatch ระหว่าง base constructor |
+| `.bind()` ที่จุดเรียก | ไม่ต้องเปลี่ยน class เอง | ลืมง่ายที่จุดใดจุดหนึ่งในหลายจุดที่เรียกใช้; ยังเป็น method บน prototype เหมือนเดิม ดังนั้นต้องทำวิธีแก้นี้ซ้ำทุกที่ที่ method ถูกส่งเป็น callback |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **arrow-function field เป็นแค่ method ที่เขียนด้วย syntax ต่างกัน** มันเป็น field ที่ allocate ใหม่ต่อ instance ใน constructor ไม่ใช่ prototype method ที่แชร์กัน — สองอย่างนี้มีต้นทุน memory ต่างกันและ semantics การ override ต่างกัน ไม่ใช่แค่ syntax ต่างกัน
+- **`override` บน arrow field ให้ guarantee เดียวกับที่ `override` ให้ method จริง** มันถูกยอมรับทาง syntax และ shadow field ของ base จริงสำหรับ call ที่เกิดหลัง construction เสร็จแล้ว แต่ไม่ได้ให้ virtual dispatch ระหว่าง constructor ของ base class เอง — base ยังเห็น field ของตัวเองตรงจุดนั้น เพราะ field assignment ของ subclass ยังไม่รัน
+- **เพราะ arrow field reassign ได้เหมือน field ทั่วไป `super.method()` ควรเข้าถึง version ของ base ได้เหมือนเดิม** เข้าถึงไม่ได้: `TS2855` report เรื่องนี้ตรง ๆ เพราะไม่มี prototype slot รองรับ arrow field ให้ `super` resolve ไปหา
+
+## อ่านโค้ดที่ AI เขียน
+
+arrow-function class field เป็น pattern ที่ AI generate มาบ่อยมากสำหรับ "แก้" ปัญหา `this` แบบ React-style หรือ event-handler — มีเหตุผลดี มันมักจะทำงานได้จริง แต่มี mistake ต่อเนื่องสองอย่างที่พบบ่อยเมื่อ codebase มีหลายตัว:
+
+- **subclass พยายาม `super.method()` arrow field ที่กำลัง override** เพราะ code รอบข้างหน้าตาเหมือน method overriding ปกติเป๊ะ สังเกต `TS2855` โดยเฉพาะ — มันแปลว่า member ที่กำลังถูก extend เป็น field ไม่ใช่ method วิธีแก้เกือบทุกครั้งคือแปลงทั้ง base และ subclass member กลับเป็น method จริง (ถ้า `this` ไม่ได้ต้องการ lexical binding ตรงนั้นจริง ๆ) หรือ compose behavior ตรง ๆ แทนการเรียกผ่าน `super`
+- **constructor ของ base class เรียก arrow-field "hook" คาดว่า customization ของ subclass มีผลแล้ว** สะท้อน pattern template-method แบบคลาสสิกที่ทำงานได้ดีกับ method จริง เพราะ arrow field ถูก assign หลัง `super()` return เท่านั้น สิ่งนี้ทำให้ version ของ base เองรันเงียบ ๆ ระหว่าง construction — ปัญหา ordering เดียวกับ bug init order ของ `useDefineForClassFields` ในบทก่อน แค่ถูก trigger ด้วย field-vs-field shadowing แทนที่จะเป็น `Object.assign` จากภายนอก
+
+<SpotTheBug code={`class Widget {
+  onMount = () => {
+    console.log("Widget.onMount");
+  };
+  constructor() {
+    this.onMount(); // "hook" pattern -- expects the most-derived onMount to run
+  }
+}
+
+class Dialog extends Widget {
+  override onMount = () => {
+    console.log("Dialog.onMount");
+  };
+}
+
+new Dialog();`}>
+อันนี้ print `Widget.onMount` ไม่ใช่ `Dialog.onMount` — ซึ่งอ่านเหมือน bug สำหรับใครก็ตามที่คาดหวัง pattern template-method ที่ทำงานได้กับ method จริง constructor ของ `Widget` เรียก `this.onMount()` ขณะที่ `super()` (ตรงนี้คือ body ของ constructor ของ `Widget` เอง) ยังกำลัง run อยู่ ซึ่งเกิด *ก่อน* field assignment ของ `Dialog` เอง ตรงจุดนั้นเป๊ะ `this.onMount` ยังเป็น arrow field ของ `Widget` เอง — `override onMount` ของ `Dialog` ยังไม่ถูก assign เพราะ arrow field ถูก assign โดย constructor ของ subclass หลังจาก `super()` return เท่านั้น วิธีแก้คือทำให้ `onMount` เป็น method จริง (`onMount() { ... }` / `override onMount() { ... }`) ถ้า design ต้องการ virtual dispatch ระหว่าง construction จริง ๆ — method จริงอยู่บน prototype ตั้งแต่ class ถูก define ดังนั้น `this.onMount()` ใน constructor ของ `Widget` จะเห็น override ของ `Dialog` อยู่แล้ว
+</SpotTheBug>
 
 export const quizThis = [
   {
@@ -101,6 +283,7 @@ export const quizThis = [
       'any type พิเศษ',
     ],
     answer: 1,
+    explain: '`this` หมายถึง instance จริงไม่ว่าจะเป็นอะไร ซึ่งใน subclass หมายถึง subclass — นี่คือความหมายของ "polymorphic `this`" และเป็นสิ่งที่ทำให้ fluent chain type-safe ข้าม inheritance',
   },
   {
     q: 'ทำไมต้อง return `this` (แทนชื่อ class) จาก builder method ที่ chain ได้?',
@@ -111,26 +294,51 @@ export const quizThis = [
       'เพื่อเลี่ยง inheritance',
     ],
     answer: 1,
+    explain: 'ถ้า type return เป็นชื่อ class ตรง ๆ มันจะ "ลืม" ว่า subclass instance เป็นคนเรียก method นี้ ทำให้ chain พังทันทีที่ method ที่มีแค่ใน subclass ถูกเรียกต่อ',
   },
   {
-    q: '`this` parameter ใช้ทำอะไร?',
+    q: '```ts\nclass Counter {\n  count = 0;\n  increment() { this.count++; }\n}\nconst c = new Counter();\nconst fn = c.increment;\nfn();\n```\nโดย default (ไม่ประกาศ `this` parameter) จะเกิดอะไรขึ้น?',
     options: [
-      'ส่ง argument runtime เพิ่มอีกตัว',
-      'type-check calling context ที่ต้องการ ถูก erase และไม่ใช่ argument จริง',
-      'ทำให้ method เป็น static',
-      'เปลี่ยนชื่อ instance',
+      'compile error — `increment` assign ให้ตัวแปรไม่ได้',
+      'type-check ผ่านโดยไม่มี diagnostic แล้วพังตอน runtime เพราะ `this` เป็น undefined ข้างใน `fn()`',
+      'compile และรันได้ถูกต้อง — TypeScript bind `this` ให้อัตโนมัติ',
+      '`strictBindCallApply` จับอันนี้ได้โดย default',
     ],
     answer: 1,
+    explain: '`increment` ไม่เคยประกาศว่าต้องการ `this` แบบไหน type checker เลยไม่มีอะไรให้เทียบ `this` context ของ `fn()` (ที่ขาดไป) ด้วย มัน compile ผ่านสะอาดแล้วพังตอน runtime — เหตุผลตรง ๆ ที่ `this` parameter หรือ arrow field มีไว้',
   },
   {
-    q: 'วิธีแก้แบบ idiomatic เมื่อ method เสีย `this` ตอนถูกส่งเป็น callback คืออะไร?',
+    q: '```ts\nclass Base {\n  greet = () => "base";\n  constructor() { console.log(this.greet()); }\n}\nclass Derived extends Base {\n  override greet = () => "derived";\n}\nnew Derived();\n```\nอันนี้ log อะไร แล้วทำไม?',
     options: [
-      'ทำให้ method เป็น static',
-      'ใช้ arrow-function class field หรือ bind ที่จุดเรียกด้วย `.bind()`',
-      'เปลี่ยนชื่อ method',
-      'ไม่มีทางแก้',
+      '`"derived"` — `override` ทำให้ arrow field dispatch แบบ virtual เหมือน method',
+      '`"base"` — arrow field ของ `Base` เองรันระหว่าง constructor ของมัน ก่อนที่ field assignment ของ `Derived` (ที่เกิดหลัง `super()` return เท่านั้น) จะเกิดขึ้น',
+      'compile error — arrow field override ไม่ได้เลย',
+      '`"derived"` — arrow field ถูก hoist ก่อน constructor body รัน',
     ],
     answer: 1,
+    explain: 'arrow-function field ถูก assign ใน constructor ไม่ได้ถูกวางบน prototype ระหว่างที่ constructor ของ `Base` เอง execute (ซึ่งก็คือสิ่งที่รัน body ของ `super()`) field assignment ของ `Derived` ยังไม่เกิด ดังนั้น `this.greet` ยังเป็น arrow function ของ `Base` เอง — ต่างจาก method จริงที่จะถูก dispatch แบบ virtual ไปยัง override แล้วตรงจุดนั้น',
+  },
+  {
+    q: 'ทำไม `super.greet()` ถึงพังด้วย `TS2855` เมื่อ `greet` เป็น arrow-function class field ทั้งใน base และ subclass?',
+    options: [
+      'เป็นการพิมพ์ผิดใน error message ควรทำงานได้',
+      'arrow-function field เป็น instance property ไม่ใช่ prototype method ดังนั้นไม่มี prototype slot ให้ `super` ไปหา',
+      'arrow field เรียกได้แค่ด้วย `.call()`',
+      '`super` ใช้ใน constructor ของ subclass ไม่ได้เลย',
+    ],
+    answer: 1,
+    explain: '`super.method()` resolve ผ่าน prototype chain ซึ่งเป็นสิ่งที่ arrow field ไม่เคยครอบครองเลย — มันอยู่แค่เป็น own property บนแต่ละ instance TS2855 เป็น diagnostic เฉพาะสำหรับสถานการณ์นี้ ไม่ใช่ error missing-property ทั่วไป',
+  },
+  {
+    q: 'class ที่ generate มาใช้ arrow-function field เป็น "hook" ที่ base class เรียกจาก constructor ของตัวเอง คาดว่า override ของ subclass ที่ derive มากที่สุดจะรัน (pattern template-method) เกิดอะไรขึ้นจริง แล้ววิธีแก้คืออะไร?',
+    options: [
+      'ทำงานตามที่คาดหวังเป๊ะ — arrow field เป็น virtual เสมอ',
+      'base class เห็นแค่ arrow field ของตัวเองระหว่าง construction เพราะ field assignment ของ subclass เกิดหลัง `super()` return แปลง hook ให้เป็น method จริง (ที่อยู่บน prototype ตั้งแต่ class ถูก define) จะคืน virtual dispatch',
+      'มัน throw compile error ทันที',
+      'วิธีแก้คือ mark base class เป็น `abstract`',
+    ],
+    answer: 1,
+    explain: 'นี่คือ [[Define]]-semantics ordering เดียวกับ bug init order ของ class field: arrow field ถูก assign ต่อ instance หลัง `super()` return ดังนั้น base constructor ที่เรียกมันระหว่าง execute ของตัวเองจะได้ version ของ base เองเสมอ ไม่เคยได้ override ของ subclass ที่ยังไม่ถูก assign method จริง เพราะอยู่บน prototype ทันทีเลยไม่มีปัญหานี้',
   },
 ];
 

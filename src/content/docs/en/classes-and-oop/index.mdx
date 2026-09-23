@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Classes live in both worlds
 
@@ -16,7 +18,10 @@ Almost everything else in this course is a *type* — a compile-time construct t
 
 ```ts
 class User {
-  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
 }
 
 const u: User = new User("Ada"); // `User` as a TYPE (annotation) and a VALUE (constructor)
@@ -47,6 +52,144 @@ export const worldsDiagram = `flowchart TB
 When you write a `class`, hold two pictures at once: the **type** it defines (the shape of an instance, used for annotations and checked at compile time) and the **value** it creates (a constructor function that exists at runtime). Many class features are purely the former and vanish on compile; a few — notably `#private` fields and `static` members — are genuinely the latter and ship in your JavaScript.
 </Callout>
 
+## Structural, until `private` gets involved
+
+Every other type in this course — object types, interfaces, function types — is compared **structurally**: two types are compatible if their shapes match, no matter what they're named or where they're declared. Classes follow the same rule for their public members. But add a `private` (or `protected`) member, and a class stops being purely structural — it becomes **nominal-ish**: two classes with an *identical* shape, including a same-named `private` field, are still **not** assignable to each other.
+
+```ts
+// @expect-error TS2345
+class ApiClient {
+  private token: string;
+  constructor(token: string) {
+    this.token = token;
+  }
+  fetch(path: string) {
+    return `${path}?token=${this.token}`;
+  }
+}
+
+function useClient(client: ApiClient) {
+  return client.fetch("/users");
+}
+
+// A test double with the EXACT same shape, field for field, method for method —
+// structurally this should be a perfect match.
+class FakeApiClient {
+  private token: string;
+  constructor() {
+    this.token = "fake";
+  }
+  fetch(path: string) {
+    return `${path}?token=${this.token}`;
+  }
+}
+
+useClient(new FakeApiClient()); // ❌ still rejected
+```
+
+```text
+error TS2345: Argument of type 'FakeApiClient' is not assignable to parameter of type 'ApiClient'.
+  Types have separate declarations of a private property 'token'.
+```
+
+Nothing about `token`'s *shape* differs between the two classes — same name, same type, same visibility. TypeScript rejects the assignment anyway, because each `private` member is tagged with the class that declared it, and `ApiClient#token` and `FakeApiClient#token` are two different tags even though they look identical on paper. This is the one place TypeScript's structural model bends toward nominal typing: it exists specifically so that two unrelated classes can't accidentally satisfy each other's private contracts just by happening to declare a same-named field.
+
+`#private` fields (genuine ECMAScript private fields, not just the `private` keyword) enforce the identical rule, for the identical reason:
+
+```ts
+// @expect-error TS2345
+class WalletA {
+  #balance = 0;
+}
+class WalletB {
+  #balance = 0;
+}
+function drain(w: WalletA) { return w; }
+drain(new WalletB()); // ❌ different #balance, even though both look the same
+```
+
+```text
+error TS2345: Argument of type 'WalletB' is not assignable to parameter of type 'WalletA'.
+  Property '#balance' in type 'WalletB' refers to a different member that cannot be accessed from within type 'WalletA'.
+```
+
+### `#private` as a brand check
+
+Because a `#name` field is tied to the exact class that declared it, checking whether that field exists on an unknown object (`#name in obj`) works as a reliable, forgery-proof **brand check** — nothing outside the class can ever have added that exact private slot:
+
+<TSPlayground code={brandCheckCode} id="classes-index-brand" title="A #private field as an unforgeable brand" />
+
+export const brandCheckCode = `class Wallet {
+  #balance = 0;
+
+  static isWallet(obj: unknown): obj is Wallet {
+    return typeof obj === "object" && obj !== null && #balance in obj;
+  }
+}
+
+const w = new Wallet();
+console.log(Wallet.isWallet(w));   // true -- has the real #balance slot
+console.log(Wallet.isWallet({}));  // false -- no such slot exists, and none could be faked`;
+
+Click **Run**: `true` then `false`. No amount of duck-typing an object to *look* like a `Wallet` -- adding a property literally named `balance`, or any other public field -- can make `#balance in obj` return `true`; the `#`-prefixed name isn't just hidden, it isn't even a string property key another piece of code could spell. This is the sharpest tool TypeScript (via real ECMAScript private fields) has for turning a structural type into a genuinely nominal one, on purpose.
+
+## Mental Model
+
+Ask one question when a class assignment you expected to work gets rejected: **does either side declare a `private` or `#private` member?** If not, the ordinary structural rules from every other lesson apply unchanged — shape is everything. If so, TypeScript is deliberately being nominal for that member: it doesn't matter that the shapes match, only whether both sides trace back to the *same declaration*. `#private` takes this further than `private` — a `#name in obj` check gives you a runtime-enforced brand that no external code can forge, which is why it is the idiomatic way to answer "is this really an instance of my class?" for security- or identity-sensitive code, not just a type-checking convenience.
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---|---|---|
+| Public members (structural) | Maximum flexibility — any shape-compatible value works, including plain objects and test doubles | No protection against accidental shape collisions between unrelated types |
+| `private` member | Documents intent, catches accidental cross-class assignment, compile-time only | Erased at emit — a determined caller reaches it via `(obj as any).field`; two classes with an identical shape still won't structurally match |
+| `#private` field | Real runtime privacy, unforgeable brand check via `#x in obj`, survives to the emitted JavaScript | Slightly more ceremony (`#` syntax), and — like `private` — makes the class nominal-ish for that member |
+
+## Common Misconceptions
+
+- **"TypeScript is structural, so any two classes with the same shape are interchangeable."** True for public members only. The moment either class declares a `private` or `#private` member with a matching name, that specific member — and therefore the whole class comparison — is checked nominally: same declaration or nothing.
+- **`private` and `#private` protect a field the same way, just with different syntax.** `private` is a compile-time-only annotation, erased on emit, readable at runtime via `any`. `#private` is enforced by the JavaScript engine itself and cannot be bypassed even with a cast — the next lesson proves both halves of that claim with real emitted output.
+- **A test double needs to `implements` or structurally match a class to be usable in its place.** If the real class has any `private`/`#private` member, a hand-written double with the "same" shape will be rejected outright (as `FakeApiClient` was above) — the usual fix is to extract a `private`-free `interface` for the public contract and depend on that instead of the concrete class.
+
+## Reading AI-generated code
+
+Generated test doubles and mocks are a common place this bites: a model asked to "write a fake `ApiClient` for testing" will often copy the real class's fields verbatim, `private` modifiers included, and the result won't type-check anywhere the real class was expected.
+
+- **See a `private` or `#` field duplicated into an unrelated class "for parity"?** Ask whether the two classes are actually meant to be interchangeable. If they are, the fix is almost always to extract an `interface` describing only the public contract, and type the consuming code against that interface instead of the concrete class.
+- **See `(obj as any).privateField` in generated code reading a class's internals from outside?** That's reaching through the compile-time-only erasure of `private` — it works, but it defeats the entire point of marking the field private in the first place, and silently breaks if the field is ever renamed.
+
+<SpotTheBug code={`class ApiClient {
+  private token: string;
+  constructor(token: string) {
+    this.token = token;
+  }
+  fetch(path: string) {
+    return \`\${path}?token=\${this.token}\`;
+  }
+}
+
+function useClient(client: ApiClient) {
+  return client.fetch("/users");
+}
+
+class FakeApiClient {
+  private token: string;
+  constructor() {
+    this.token = "fake";
+  }
+  fetch(path: string) {
+    return \`\${path}?token=\${this.token}\`;
+  }
+}
+
+useClient(new FakeApiClient());`}>
+This looks like a reasonable hand-rolled test double — same field, same constructor shape, same method — and a model asked to "make a fake ApiClient for tests" produces almost exactly this. It fails to compile: `TS2345: Argument of type 'FakeApiClient' is not assignable to parameter of type 'ApiClient'. Types have separate declarations of a private property 'token'.` Because `ApiClient` declares a `private token`, TypeScript compares it nominally for that member — `FakeApiClient`'s own `private token` is a *different* declaration, even though it looks identical. The fix is to stop depending on the concrete class: extract `interface ApiClientLike { fetch(path: string): string }` (no `private` members, since interfaces can't have them), type `useClient` against that interface, and have both `ApiClient` and `FakeApiClient` satisfy it structurally.
+</SpotTheBug>
+
+<Callout title="The one-line takeaway">
+A class creates both a type and a runtime value; most class features (`private`, `protected`, `abstract`, `implements`) are compile-time-only and erase on emit, while a few (`#private` fields, `static` members, the constructor itself) are real and ship in your JavaScript. Ordinary class members are compared structurally like everything else in TypeScript, but a `private` or `#private` member makes that specific comparison nominal — same declaration required, shape be damned — which is also what makes `#name in obj` a real, unforgeable brand check.
+</Callout>
+
 export const quizIndex = [
   {
     q: 'What makes a class special compared to a type alias or interface?',
@@ -57,6 +200,7 @@ export const quizIndex = [
       'It disables structural typing',
     ],
     answer: 1,
+    explain: 'A class is one of the few declarations that produces both a compile-time type (the shape of an instance) and a runtime value (the constructor function itself).',
   },
   {
     q: 'Which class feature survives into the emitted JavaScript?',
@@ -67,6 +211,29 @@ export const quizIndex = [
       'An `abstract` method signature',
     ],
     answer: 2,
+    explain: '`#private` fields are real ECMAScript syntax enforced by the JS engine, so they are emitted as-is. `private`, `implements`, and `abstract` are TypeScript-only annotations erased on compile.',
+  },
+  {
+    q: '```ts\nclass ApiClient {\n  private token: string;\n  constructor(token: string) { this.token = token; }\n}\nclass FakeApiClient {\n  private token: string;\n  constructor() { this.token = "fake"; }\n}\nfunction useClient(client: ApiClient) { /* ... */ }\nuseClient(new FakeApiClient());\n```\nDoes this compile?',
+    options: [
+      'Yes — both classes have an identical structural shape',
+      'No — a `private` member makes the comparison nominal, and the two classes have separate declarations of `token`',
+      'Yes, but only under `strict` mode',
+      'No — `FakeApiClient` is missing a `fetch` method',
+    ],
+    answer: 1,
+    explain: 'TypeScript is structural for public members, but a `private` (or `#private`) member ties the comparison to the exact declaring class. Two classes with an identical shape, including a same-named private field, are still not assignable to each other: TS2345, "Types have separate declarations of a private property \'token\'."',
+  },
+  {
+    q: '```ts\nclass Wallet {\n  #balance = 0;\n  static isWallet(obj: unknown): obj is Wallet {\n    return typeof obj === "object" && obj !== null && #balance in obj;\n  }\n}\nconsole.log(Wallet.isWallet({ balance: 0 }));\n```\nWhat does this print, and why?',
+    options: [
+      '`true` — the object has a `balance` property that matches',
+      '`false` — `#balance` is a distinct private slot that a plain object literal can never have, no matter what public properties it carries',
+      'A compile error — `#balance in obj` is invalid syntax',
+      '`true` — `unknown` bypasses the private-field check',
+    ],
+    answer: 1,
+    explain: 'A `#`-prefixed name is not a string property key at all -- it can only exist on an object if some code inside the declaring class actually installed it via `new Wallet()`. A plain object literal, even one with a same-named public `balance` field, can never satisfy `#balance in obj`, which is exactly what makes this an unforgeable brand check.',
   },
   {
     q: 'What design approach does modern TypeScript OOP tend to favor?',
@@ -77,6 +244,18 @@ export const quizIndex = [
       'Global mutable state',
     ],
     answer: 1,
+    explain: 'This module leans toward `this` types, decorators, and mixins -- tools for composing flexible behavior -- over deep `extends` chains, which tend to be brittle.',
+  },
+  {
+    q: 'A generated test double copies a real class field-for-field, including its `private` members, so it can be passed wherever the real class is expected. What is the idiomatic fix when TypeScript rejects it?',
+    options: [
+      'Cast the double with `as any` at every call site',
+      'Extract an `interface` describing only the public contract, and type the consuming code against that interface instead of the concrete class',
+      'Remove `private` from the real class',
+      'There is no fix -- test doubles cannot be used with classes',
+    ],
+    answer: 1,
+    explain: 'Interfaces cannot declare private members, so an interface extracted from a class\'s public surface is compared purely structurally. Both the real class and the test double can satisfy it without ever needing to be assignable to each other directly.',
   },
 ];
 

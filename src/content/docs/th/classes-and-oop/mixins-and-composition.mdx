@@ -1,6 +1,6 @@
 ---
 title: 'Mixins & Composition'
-description: 'สร้าง behavior ที่ reuse ได้จาก class factory ที่ compose ได้ แทน inheritance ลึก ๆ และการ type mixin ด้วย generic constructor type'
+description: 'สร้าง behavior ที่ reuse ได้จาก class factory ที่ compose ได้ แทน inheritance ลึก ๆ, type mixin ด้วย generic constructor type และจุดที่ private member กับ abstract class เข้ามาเกี่ยว'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## ปัญหาของ inheritance ที่ลึก
 
@@ -37,7 +39,10 @@ function Activatable<TBase extends Constructor>(Base: TBase) {
 }
 
 class User {
-  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
 }
 
 // Compose several behaviors onto User:
@@ -81,9 +86,231 @@ function Movable<TBase extends Positioned>(Base: TBase) {
 
 mixin เป็นรูปแบบหนึ่งของหลักการที่กว้างกว่า: **เลือกประกอบ behavior จากชิ้นเล็ก ๆ ที่อิสระต่อกัน แทนการ derive ผ่าน hierarchy ที่แข็งทื่อ** บ่อยครั้งคุณไม่ต้องใช้ mixin ด้วยซ้ำ — plain object composition (ถือ collaborator เป็น field แล้ว delegate งานให้) ง่ายกว่าและเลี่ยงกลไก class-factory ไปเลย ใช้ mixin เมื่อคุณต้องการให้ผลลัพธ์ที่ compose แล้ว *เป็น* class ที่มีทุก behavior merge อยู่บน instance ของตัวเองจริง ๆ
 
+## ตั้งชื่อ mixin backbone: `Constructor<T>`, `typeof C` และ `InstanceType`
+
+mixin ทุกอันในบทนี้พึ่ง shape เดียวกัน — `new (...args: any[]) => T` — ซึ่งควรตั้งชื่อและเข้าใจแยกต่างหาก ไม่ขึ้นกับ mixin pattern เอง ชื่อ class ใดก็ตาม ถ้าใช้เป็น *value* ไม่ใช่ type annotation จะมี type `typeof ClassName`: type ของ **constructor** ไม่ใช่ type ของ instance
+
+```ts
+class User {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+
+type UserCtor = typeof User; // the CONSTRUCTOR type -- new (name: string) => User
+type UserInstance = InstanceType<UserCtor>; // "unwrap" a constructor type back to its instance type
+
+function makeOne(Ctor: UserCtor, name: string): InstanceType<UserCtor> {
+  return new Ctor(name);
+}
+
+const u: UserInstance = makeOne(User, "Ada");
+console.log(u.name);
+```
+
+`InstanceType<C>` เป็น utility type ที่ทำตรงข้ามกับ `typeof`: จาก constructor type มันดึง type ของสิ่งที่ `new` มันแล้วได้ คู่นี้ — `typeof ClassName` เพื่อพูดถึง constructor, `InstanceType<...>` เพื่อกลับไปหา instance — คือสิ่งที่ mixin factory ทุกอันในบทนี้สร้างมาจาก: `type Constructor<T = {}> = new (...args: any[]) => T` เป็น **generic, unnamed constructor type** ที่ match class *ใดก็ได้* ที่ instance ของมัน shape เหมือน (อย่างน้อย) `T` การตั้งชื่อมันครั้งเดียวเป็น helper ที่ reuse ได้ เป็น idiomatic version ของ `new (...args: any[]) => {}` inline ที่บทนี้เปิดด้วย:
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Loggable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    log() {
+      console.log("logging");
+    }
+  };
+}
+```
+
+`TBase extends Constructor` คือ mixin backbone แบบเต็ม ๆ: มัน constrain `TBase` ให้เป็น "constructor สักตัว" ทำให้ mixin `extends Base` ได้ (ซึ่งต้องการ constructor type จริง ไม่ใช่แค่ object shape) และ — รวมกับ `Constructor<SomeRequiredShape>` แบบใน `Movable` ข้างบน — ทำให้ mixin เรียกร้อง member เฉพาะบน *instance* ของ base ได้เพิ่มเติม
+
+## mixin กับ `private` ไม่ compose กัน — และเหตุผลเป็นเรื่อง structural ไม่ใช่บังเอิญ
+
+TypeScript handbook อย่างเป็นทางการบอกข้อจำกัดนี้ตรง ๆ: "Mixins may not declare private/protected properties, however, you can use ES2020 private fields." field แบบ `#private` ที่ประกาศ *ข้างใน* class body ที่ mixin return ทำงานได้ตามคาดเป๊ะ — มันเป็น ECMAScript syntax จริง scope อยู่แค่ class expression ตัวนั้น ไม่มีอะไรเกี่ยวกับ generic เลย:
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Loggable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    #callCount = 0; // a #private field declared inside a mixin -- this is fine
+    log() {
+      this.#callCount++;
+      console.log(`logged ${this.#callCount} times`);
+    }
+  };
+}
+
+class Account {}
+const LoggableAccount = Loggable(Account);
+const a = new LoggableAccount();
+a.log();
+```
+
+สิ่งที่ทำไม่ได้จริง ๆ คือการพยายาม *constrain* base ของ mixin ให้มี `private` (หรือ `protected`) member อยู่แล้ว — เพราะ **constraint ของ constrained mixin เป็น object type ธรรมดา** และ object type literal แสดง access modifier ไม่ได้เลย:
+
+```ts
+// @expect-error TS1070
+type Constructor<T = {}> = new (...args: any[]) => T;
+type WithSecret = Constructor<{ private secret: string }>;
+```
+
+```text
+error TS1070: 'private' modifier cannot appear on a type member.
+```
+
+นี่เป็น syntax error ไม่ใช่ทางเลือกออกแบบที่หาทางเลี่ยงด้วย typing แบบอื่นได้ — member ของ `interface` และ object-type literal ไม่มี concept เรื่อง visibility เลย ทุก member ของ object type เป็น public โดย implicit ดังนั้น "mixin กับ private ไม่ compose กัน" แปลว่าตรงนี้เป๊ะ: คุณใช้ `#private` *ข้างใน* class ที่ mixin return ได้อย่างอิสระ แต่ไม่มีทาง *เรียกร้อง* ผ่าน `Constructor<...>` constraint ว่า base class ของ mixin ต้องมี `private`/`protected` member อยู่แล้ว — ไม่มี vocabulary ระดับ type ให้พูดแบบนั้นได้
+
+## abstract mixin class และ abstract constructor type
+
+mixin ที่ไม่เคยเรียก `new Base()` เองเลย — เพราะ mixin แค่เพิ่ม method ทับ และการ construct ถูกเลื่อนไปให้อะไรก็ตามที่มา extend ผลลัพธ์ในที่สุด — รับ `abstract` class เป็น base ได้ แต่ต้องให้ type signature ของ mixin บอกไว้ตรง ๆ ตั้งแต่ TypeScript 4.2 `abstract new (...args: any[]) => T` (**abstract constructor type**) อธิบายตรงนี้เป๊ะ: constructor ที่ extend ได้ แต่เรียก `new` ตรง ๆ ไม่ได้
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+type AbstractConstructor<T = {}> = abstract new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+// This mixin's base only needs to be extendable, never directly constructed --
+// so it accepts an ABSTRACT constructor, and can take an abstract class as input.
+function Describable<TBase extends AbstractConstructor<Shape>>(Base: TBase) {
+  abstract class Described extends Base {
+    describe() {
+      return `area is ${this.area()}`;
+    }
+  }
+  return Described;
+}
+
+const DescribableShape = Describable(Shape); // ✅ Shape is abstract -- fine here
+
+class Square extends DescribableShape {
+  side: number;
+  constructor(side: number) {
+    super();
+    this.side = side;
+  }
+  area() { return this.side * this.side; }
+}
+
+console.log(new Square(3).describe());
+```
+
+ใช้ `Constructor<Shape>` ธรรมดา (ไม่ abstract) แทน จะ reject `Shape` ตรง ๆ ด้วย error สองตัวที่แยกกันและแม่นยำ:
+
+```ts
+// @expect-error TS2653 TS2345
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+function Describable<TBase extends Constructor<Shape>>(Base: TBase) {
+  return class extends Base {
+    describe() { return "area"; }
+  };
+}
+
+const DescribableShape = Describable(Shape);
+```
+
+```text
+error TS2653: Non-abstract class expression does not implement inherited abstract member 'area' from class 'Shape'.
+error TS2345: Argument of type 'typeof Shape' is not assignable to parameter of type 'Constructor<Shape>'.
+  Cannot assign an abstract constructor type to a non-abstract constructor type.
+```
+
+error แรกคือ class expression ที่ mixin return เองโดนเช็ค abstract-member เดียวกับที่ concrete subclass ของ `Shape` ตัวไหนก็ต้องเจอ — class ที่ **ไม่ใช่ abstract** ที่ extend `Shape` ต้อง implement `area()` และ `class extends Base { describe() {...} }` ไม่ได้ทำ error ที่สองชี้ตรงไปที่ปัญหาที่ลึกกว่า: constructor type ของ `Shape` เป็น abstract (เรียก `new` ตรง ๆ ไม่ได้) และ `Constructor<Shape>` เรียกร้อง constructor ที่ **ไม่ใช่ abstract** เรียกตรงได้ — abstract constructor type ไม่มีทาง assignable ไปเป็นตัวธรรมดาได้เลย เพราะตัวธรรมดาสัญญาว่า "เรียก `new` กับสิ่งนี้ได้" ซึ่ง abstract class รักษาสัญญานั้นไม่ได้
+
+<TSPlayground code={abstractMixinCode} id="mixins-abstract-constructor" title="An abstract-constructor-typed mixin accepting an abstract base" />
+
+export const abstractMixinCode = `type AbstractConstructor<T = {}> = abstract new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+function Describable<TBase extends AbstractConstructor<Shape>>(Base: TBase) {
+  abstract class Described extends Base {
+    describe() {
+      return \`area is \${this.area()}\`;
+    }
+  }
+  return Described;
+}
+
+const DescribableShape = Describable(Shape);
+
+class Square extends DescribableShape {
+  side: number;
+  constructor(side: number) {
+    super();
+    this.side = side;
+  }
+  area() { return this.side * this.side; }
+}
+
+console.log(new Square(3).describe());`;
+
+กด **Check types**: ไม่มี diagnostic เลย กด **Run**: `area is 9` นี่คือรูปแบบทั่วไปเบื้องหลัง mixin library ใดก็ตามที่สร้างมาให้ทำงานได้ทั้งกับ base class ที่ concrete และ abstract — รับ abstract constructor type เมื่อ mixin เองไม่เคย instantiate base ตรง ๆ
+
 <Callout title="สรุปหนึ่งบรรทัด">
-**mixin** คือ function ที่รับ base class แล้ว return subclass พร้อม behavior เพิ่ม type ด้วย generic constructor constraint (`TBase extends new (...args: any[]) => {}`) เพื่อให้ compiler track shape ที่ merge แล้ว mixin ให้ class หนึ่ง compose หลาย behavior อิสระที่ inheritance chain เดียวแสดงออกไม่ได้ เป็นเครื่องมือหนึ่งสำหรับ **composition over inheritance** — และ plain object composition มักง่ายกว่าอีก
+**mixin** คือ function ที่รับ base class แล้ว return subclass พร้อม behavior เพิ่ม type ด้วย generic constructor constraint (`TBase extends Constructor` โดย `Constructor<T> = new (...args: any[]) => T`) เพื่อให้ compiler track shape ที่ merge แล้ว — คู่ `typeof ClassName` / `InstanceType<...>` เดียวกับที่อธิบาย constructor ใดก็ได้ generalize ให้เป็น "constructor อะไรก็ได้" `#private` field ทำงานได้ดี *ข้างใน* class body ของ mixin เอง แต่ constrained mixin ไม่มีทาง *เรียกร้อง* ให้ base มี `private`/`protected` member อยู่แล้ว เพราะ object-type constraint ไม่มี syntax สำหรับ access modifier (`TS1070`) mixin ที่ไม่เคย construct base ตรง ๆ รับ `abstract` class ได้ ถ้า type constraint ของมันเป็น `abstract new (...args: any[]) => T` แทนรูปแบบธรรมดาที่เรียกตรงได้
 </Callout>
+
+## Mental Model
+
+mixin signature ทุกอันตอบคำถามสองข้อเกี่ยวกับ type parameter `TBase` ของมัน: **constructor ของ base class ต้องหน้าตายังไง** (`new (...args: any[]) => T` ธรรมดา หรือ `abstract new (...args: any[]) => T` ถ้า mixin ไม่เคยเรียก `new Base()` เอง) และ **instance ที่ construct แล้วต้องมีอะไรอยู่แล้ว** (`T` ใน `Constructor<T>` ซึ่งกลายเป็น shape อะไรก็ตามที่ method ของ mixin เองพึ่งพา เหมือน `{ x: number; y: number }` ของ `Movable`) อ่าน mixin ไหนก็ตามด้วยการตอบสองคำถามนี้ก่อนอ่าน body ของมัน — constraint บอกตรง ๆ ว่ามันรับ base อะไรได้บ้างและทำไม โดยไม่ต้องไล่อ่าน class expression ที่ return เลย
+
+## ข้อแลกเปลี่ยน
+
+| แนวทาง | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| mixin (`TBase extends Constructor`) | compose หลาย behavior อิสระเข้ากับ class เดียว compiler track shape ที่ merge ผ่านแต่ละชั้น wrap | กลไก class-factory; `#private` ใช้ได้ข้างใน แต่ base เรียกร้องให้มี private member ไม่ได้ |
+| plain object composition | ง่ายกว่า ไม่ต้องยุ่งกับ generic constructor เลย | ผลลัพธ์ที่ compose แล้วไม่ใช่ class เดียว — collaborator ยังเป็น object แยก ที่ต้อง delegate ตรง ๆ |
+| mixin ที่ type ด้วย abstract constructor | รับได้ทั้ง base ที่ concrete และ `abstract` เพราะไม่เคยเรียก `new Base()` เอง | ต้องรู้ว่า syntax `abstract new (...args: any[]) => T` มีอยู่จริง — รายละเอียดที่พลาดง่าย |
+| mixin ที่ type ด้วย `Constructor<T>` ธรรมดา | signature ง่ายกว่า | reject base ที่เป็น `abstract` เงียบ ๆ ด้วย error สองตัวที่ประกอบกัน (TS2653, TS2345) ซึ่งดูไม่เกี่ยวกันตอนแรกเห็น |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **mixin เรียกร้องให้ base class มี `private` member อยู่แล้วได้ เหมือนที่ `Movable` เรียกร้อง `x`/`y`** ทำไม่ได้ — constraint ของ mixin เป็น object type ธรรมดา และ object type ไม่มี syntax สำหรับ `private`/`protected` เลย (`TS1070`) เรียกร้องได้แค่ public shape เท่านั้น
+- **field `#private` "ใช้กับ mixin ไม่ได้" เต็ม ๆ** มันใช้ได้ดี *ข้างใน* class body ที่ mixin return เอง — ECMAScript private field จริงไม่ได้รับผลกระทบจากกลไก generic รอบข้างเลย สิ่งที่ทำไม่ได้คือการ *เรียกร้อง* มันผ่าน constraint
+- **mixin ที่รับ `Constructor<Shape>` ควรรับ `abstract class Shape` ได้ด้วย** รับไม่ได้ — `Constructor<T>` เรียกร้อง constructor ที่เรียกตรงได้ ไม่ใช่ abstract mixin ต้อง opt in ตรง ๆ ด้วย `abstract new (...args: any[]) => T` ถึงจะรับ base ที่ abstract ได้
+- **`typeof SomeClass` กับ `SomeClass` (เป็น type annotation) หมายถึงอย่างเดียวกัน** ไม่ใช่: `SomeClass` เป็น type คือ type ของ *instance* (สิ่งที่ `x: SomeClass` ต้องการ); `typeof SomeClass` คือ type ของ *constructor* (สิ่งที่คุณจะ type ตัวแปรที่ถือ class เองไว้ เพื่อ `new` ทีหลัง)
+
+## อ่านโค้ดที่ AI เขียน
+
+code mixin ที่ generate มามักเอื้อมไปหา constraint ที่หลวมที่สุดเท่าที่ compile ผ่าน ซึ่งลบ safety ที่ mixin ที่ type ดีควรให้ไปเลยพอดี:
+
+- **mixin ที่ constrain ด้วย `Constructor` เปล่า ๆ (ไม่มี type argument จึง default เป็น `Constructor<{}>`) ที่แล้วเข้าถึง member เฉพาะบน `this`** (`this.x`, `this.save()`) โดยไม่มี member เหล่านั้นอยู่ใน constraint เลย กำลังพึ่ง leniency แบบ `any` ไม่ใช่ guarantee จริง เช็คว่า constraint เอ่ยชื่อ member ที่ body ของ mixin ใช้จริงหรือเปล่า แบบเดียวกับที่ constraint `Positioned` ของ `Movable` เอ่ยชื่อ `x` และ `y`
+- **mixin ที่ type ด้วย `Constructor<T>` ธรรมดา apply กับ `abstract` base class ของ library** จะพังด้วย error คู่ TS2653/TS2345 ที่แสดงข้างบน ถ้าวิธีแก้ของ generated code คือลบ `abstract` ออกจาก base class แทนที่จะขยาย constraint ของ mixin เป็น `AbstractConstructor<T>` วิธีแก้นั้นทิ้ง design constraint จริง (base ตั้งใจเป็น abstract) เพื่อเลี่ยงช่องว่างเรื่อง typing ที่มีทางแก้ที่แคบและถูกต้องอยู่แล้ว
+
+<SpotTheBug code={`type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Serializable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    serialize() {
+      return JSON.stringify(this.toPayload());
+    }
+  };
+}
+
+class Order {
+  id = "ord_1";
+  toPayload() {
+    return { id: this.id };
+  }
+}
+
+const SerializableOrder = Serializable(Order);
+const o = new SerializableOrder();
+console.log(o.serialize());`}>
+อันนี้ compile ไม่ผ่าน: `TS2339: Property 'toPayload' does not exist on type '(Anonymous class)'.` `Serializable` ถูก constrain ด้วย `Constructor` เปล่า ๆ — ซึ่งคือ `Constructor<{}>` เพราะ type parameter default เป็น `{}` — ดังนั้นข้างใน mixin body `this` รู้แค่ว่ามีสิ่งที่ member ของ anonymous class เองประกาศไว้ บวกกับสิ่งที่ `{}` รับประกันจาก base เท่านั้น: ไม่มีอะไรเพิ่มเลย การเรียก `this.toPayload()` สมมติว่า base ทุกตัวที่ส่งเข้า `Serializable` มี method `toPayload` แต่ไม่มีอะไรใน constraint บอกแบบนั้น compiler เลย reject การสมมตินี้อย่างถูกต้อง วิธีแก้สะท้อน pattern ของ `Movable` จากก่อนหน้าในบทนี้: constrain base ตรง ๆ `type Payloadable = Constructor<{ toPayload(): unknown }>` แล้วเขียน `function Serializable<TBase extends Payloadable>(Base: TBase)` ตอนนี้ constraint บอกตรง ๆ ว่า `Serializable` ต้องการอะไร และ `this.toPayload()` type-check ผ่านเพราะ `TBase` ที่ valid ทุกตัวรับประกันว่ามีมันอยู่
+</SpotTheBug>
 
 export const quizMixins = [
   {
@@ -95,16 +322,7 @@ export const quizMixins = [
       'decorator ที่ apply กับ class',
     ],
     answer: 1,
-  },
-  {
-    q: 'ทำไม mixin ใช้ generic constraint แบบ `TBase extends new (...args: any[]) => {}`?',
-    options: [
-      'เพื่อให้ code สั้นลง',
-      'เพื่อให้ compiler track member ของ base class แล้ว merge กับตัวใหม่ใน type ที่ return',
-      'เพื่อปิด type checking',
-      'เป็นแค่การตกแต่ง',
-    ],
-    answer: 1,
+    explain: 'mixin เป็น function ธรรมดา: มันรับ constructor แล้ว return class expression ใหม่ที่ extend มัน เพิ่ม member เข้าไป — ไม่มี keyword หรือ syntax พิเศษเกี่ยวข้องเลย',
   },
   {
     q: 'mixin แก้ปัญหาอะไรที่ single inheritance แก้ไม่ได้?',
@@ -115,16 +333,51 @@ export const quizMixins = [
       'บังคับ runtime privacy',
     ],
     answer: 1,
+    explain: '`extends` chain แบบเส้นตรงแสดง parent ได้แค่หนึ่งตัวต่อ class mixin ให้ class หนึ่งซ้อน behavior อิสระหลายตัว (Timestamped, Activatable, ...) ที่ไม่ต้องมี ancestor ร่วมกัน',
   },
   {
-    q: 'เมื่อไร plain object composition ดีกว่า mixin?',
+    q: '`typeof User` (โดย `User` เป็น class) กับ `User` ที่ใช้เป็น type annotation ต่างกันยังไง?',
     options: [
-      'ไม่มีวัน — mixin ดีกว่าเสมอ',
-      'เมื่อคุณถือ collaborator เป็น field แล้ว delegate ได้ โดยไม่ต้องให้ผลลัพธ์เป็น class เดียวที่ merge แล้ว',
-      'ใน JavaScript เท่านั้น ไม่ใช่ TypeScript',
-      'เมื่อต้องการ runtime privacy',
+      'เหมือนกันเป๊ะ',
+      '`User` เป็น type คือ instance type; `typeof User` คือ constructor type — สิ่งที่คุณใช้ type ตัวแปรที่ถือ class เองไว้ เพื่อ `new` ทีหลัง',
+      '`typeof User` ใช้ได้แค่กับ abstract class',
+      '`User` ถูก erase เสมอ; `typeof User` ไม่เคยถูก erase',
     ],
     answer: 1,
+    explain: '`typeof ClassName` ตั้งชื่อ type ของ constructor value ซึ่งเป็น category เดียวกับที่ `Constructor<T>` helper ทุกอันในบทนี้ generalize ไว้ `InstanceType<typeof User>` ดึง instance type กลับมาจากมัน',
+  },
+  {
+    q: '```ts\ntype Constructor<T = {}> = new (...args: any[]) => T;\ntype WithSecret = Constructor<{ private secret: string }>;\n```\nอันนี้ compile ผ่านไหม?',
+    options: [
+      'ผ่าน — mixin เรียกร้อง private member แบบนี้ได้',
+      'ไม่ผ่าน — TS1070: `private` อยู่บน type member ไม่ได้; object type literal ไม่มีทางแสดง access modifier เลย',
+      'ผ่าน แต่เฉพาะภายใต้ `strict`',
+      'ไม่ผ่าน — `Constructor` รับ type argument ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'ข้อเรียกร้องของ constrained mixin เป็น object type ธรรมดา และ object type (ทั้ง interface และ type literal) ประกาศ `private`/`protected` member ไม่ได้ — ทุก member ของ object type เป็น public โดย implicit นี่คือเหตุผลที่ "mixin กับ private ไม่ compose กัน": ใช้ `#private` ข้างใน class body ของ mixin เองได้ แต่เรียกร้องมันผ่าน constraint ไม่ได้เลย',
+  },
+  {
+    q: 'mixin ไม่เคยเรียก `new Base()` เอง — มันแค่เพิ่ม method ให้อะไรก็ตามที่มา extend ผลลัพธ์ในที่สุด ทำไม constraint ของมันถึงใช้ `abstract new (...args: any[]) => T` แทน `new (...args: any[]) => T` ธรรมดา?',
+    options: [
+      'พฤติกรรมเหมือนกันเป๊ะ ต่างกันแค่ style',
+      'รูปแบบ abstract รับ `abstract` class เป็น base ได้ด้วย เพราะไม่เคยสัญญาว่า base เรียกตรงได้ — รูปแบบธรรมดา reject base ที่ abstract ด้วย TS2653/TS2345',
+      'รูปแบบ abstract จำเป็นสำหรับ generic function ทุกตัว',
+      '`abstract new` ใช้ได้แค่ในไฟล์ `.d.ts`',
+    ],
+    answer: 1,
+    explain: '`Constructor<T>` ธรรมดาสัญญาว่า argument ของมันเรียก `new` ตรงได้ ซึ่ง constructor type ของ `abstract` class ไม่ใช่แบบนั้น — assign มันจะได้ "Cannot assign an abstract constructor type to a non-abstract constructor type." รูปแบบ abstract-constructor-typed ไม่สัญญาแบบนั้น จึงรับ base ได้ทั้งที่ concrete และ abstract',
+  },
+  {
+    q: '```ts\nfunction Serializable<TBase extends Constructor>(Base: TBase) {\n  return class extends Base {\n    serialize() { return JSON.stringify(this.toPayload()); }\n  };\n}\n```\n(`Constructor<T = {}>` ตามที่นิยามไว้ก่อนหน้าในบทนี้) ทำไม `this.toPayload()` compile ไม่ผ่าน?',
+    options: [
+      'JSON.stringify เรียกข้างใน mixin ไม่ได้',
+      '`Constructor` ที่ไม่มี type argument default เป็น `Constructor<{}>` ดังนั้นไม่มีอะไรใน constraint บอกว่า base มี `toPayload` — วิธีแก้คือ constrain มันตรง ๆ เช่น `Constructor<{ toPayload(): unknown }>`',
+      'mixin เรียก method บน `this` ไม่ได้เลย',
+      'มันพังเฉพาะตอน base class เป็น abstract',
+    ],
+    answer: 1,
+    explain: '`Constructor` ที่ไม่มี parameter คือ `Constructor<{}>` — base ที่รับประกันแค่ empty object shape การใช้ `this.toPayload()` ใน body ของ mixin ปลอดภัยก็ต่อเมื่อ constraint เรียกร้องมันตรง ๆ แบบเดียวกับที่ `Movable` เรียกร้อง `{ x: number; y: number }` ก่อนใช้ `this.x`/`this.y`',
   },
 ];
 

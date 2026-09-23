@@ -1,6 +1,6 @@
 ---
 title: 'Decorators'
-description: 'The modern stage-3 decorators (TypeScript 5.0 onward, still the model in TypeScript 7) — class, method, accessor, and field decorators, their context object, decorator factories, and where the legacy design still lingers.'
+description: 'The modern stage-3 decorators (TypeScript 5.0 onward, still the model in TypeScript 7) — class, method, accessor, and field decorators, their context object, decorator metadata, decorator factories, and where and why the legacy design still lingers.'
 sidebar:
   order: 4
 ---
@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Two decorators eras — use the new one
 
@@ -87,6 +89,28 @@ new Service().fetch(1); // logs "calling fetch", then returns "item 1"
 
 The `context` object is the heart of the new design. It tells the decorator what it is decorating — `context.kind` (`"method"`, `"field"`, `"getter"`, ...), `context.name`, `context.static`, `context.private`, and an `addInitializer` hook for setup work.
 
+<TSPlayground code={loggedMethodCode} id="decorators-method-run" title="A method decorator, actually running in the browser" />
+
+export const loggedMethodCode = `function logged(originalMethod: any, context: ClassMethodDecoratorContext) {
+  const name = String(context.name);
+  function replacement(this: any, ...args: any[]) {
+    console.log(\`calling \${name}\`);
+    return originalMethod.call(this, ...args);
+  }
+  return replacement;
+}
+
+class Service {
+  @logged
+  fetch(id: number) {
+    return \`item \${id}\`;
+  }
+}
+
+console.log(new Service().fetch(1));`;
+
+Click **Check types**: zero diagnostics, same as any fence in this lesson. Click **Run**, though, and — unlike `node --experimental-strip-types` — it actually executes and prints `calling fetch` then `item 1`. The in-browser playground's Run button uses the TypeScript compiler's own `transpileModule` (currently TypeScript 5.9.3 there, versus 7.0.2 for type-checking elsewhere in this course), which **down-levels** stage-3 decorators into plain ES2022 helper functions (`__esDecorate`, `__runInitializers`) rather than emitting the raw `@` syntax verbatim. That compiled output is ordinary JavaScript no `@` syntax remains, so it runs anywhere — including inside this playground's sandboxed `iframe`, and including Node itself if you compiled ahead of time with `tsc` instead of asking Node to strip types on the fly. `node --experimental-strip-types` fails only because it does the second, much shallower thing: it deletes type syntax textually without running a real transform, and decorators are syntax it was never built to remove.
+
 ## The four things you can decorate
 
 | Decorator kind | Receives | Typical use |
@@ -97,6 +121,65 @@ The `context` object is the heart of the new design. It tells the decorator what
 | Field | `undefined`, context | return an initializer to transform the initial value |
 
 A **field** decorator is a little different — it does not receive a value to wrap; it can return an initializer function that transforms the field's initial value when an instance is created.
+
+### An accessor decorator
+
+An accessor decorator targets an `accessor`-keyword auto-accessor (from the Classes, Deep lesson) and can wrap both the generated `get` and `set`. Its target isn't a single function, but a `{ get, set }` pair:
+
+```ts
+function logged(
+  value: ClassAccessorDecoratorTarget<unknown, number>,
+  context: ClassAccessorDecoratorContext,
+) {
+  return {
+    get(this: unknown) {
+      const v = value.get.call(this);
+      console.log(`get ${String(context.name)} -> ${v}`);
+      return v;
+    },
+    set(this: unknown, newValue: number) {
+      console.log(`set ${String(context.name)} <- ${newValue}`);
+      value.set.call(this, newValue);
+    },
+  };
+}
+
+class Counter {
+  @logged
+  accessor count = 0;
+}
+
+new Counter().count = 5;
+```
+
+This compiles cleanly and, like the class decorator earlier in this lesson, throws the same `SyntaxError: Invalid or unexpected token` under `node --experimental-strip-types` — decorator syntax, not the specific kind of thing being decorated, is what Node's stripper can't parse. One detail worth naming precisely: that error is **not** the `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` code Node uses for TypeScript syntax it recognizes but deliberately refuses (parameter properties, `enum`, `namespace` — the erasable-syntax violations from the Classes, Deep lesson). Decorators aren't TypeScript syntax at all — they're a JavaScript proposal Node's stripper was never built to remove, so the parser fails on the raw `@` token itself, the same generic way it would fail on any unrecognized character. The two failure modes look similar but come from different places: one is Node's stripper saying "I see this, and it isn't allowed here"; the other is Node's underlying JavaScript parser saying "I don't know what this token is at all."
+
+## Decorator metadata
+
+Every stage-3 decorator context carries a `metadata` object (`context.metadata`, TypeScript 5.2+) — a plain object shared by every decorator applied to the same class, meant for decorators to stash information on, readable later off the class itself via the well-known `Symbol.metadata`:
+
+```ts
+function track(value: undefined, context: ClassFieldDecoratorContext) {
+  const metadata = context.metadata as Record<string, unknown>;
+  metadata[context.name as string] = true;
+}
+
+class Config {
+  @track
+  host = "localhost";
+}
+
+console.log(Object.keys(Config[Symbol.metadata] ?? {}));
+```
+
+This compiles cleanly under this course's settings (`--lib esnext,dom,dom.iterable`) — but `Symbol.metadata` is new enough that it is worth checking which `lib` actually ships it. Compiling the identical source with `--lib es2025,dom` instead of `esnext` fails:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --target es2025 --lib es2025,dom --skipLibCheck metadata.ts
+metadata.ts(10,27): error TS2550: Property 'metadata' does not exist on type 'SymbolConstructor'. Do you need to change your target library link. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.
+```
+
+As of TypeScript 7.0.2, `Symbol.metadata`'s typing still lives only in the `esnext` proposal lib, not yet in the versioned `es2025` lib — even though the language feature itself has been stable since TypeScript 5.2. Any project targeting decorator metadata specifically needs `"lib": [..., "esnext"]` (or a later versioned lib once one ships it), not just a recent `target`.
 
 ## Decorator factories
 
@@ -118,9 +201,144 @@ class Api {
 }
 ```
 
+## Why NestJS and Angular still reach for the legacy design
+
+Stage-3's `context.metadata` (above) is deliberately minimal: it's an empty object decorators populate themselves, with no automatic connection to anything the compiler already knows about the class. Dependency-injection frameworks need something stage-3 doesn't provide at all: the **declared type of every constructor parameter**, so the container can look up "this parameter is typed `Logger`, go construct or fetch a `Logger`" without the developer writing that mapping by hand. That specific piece of information — emitted automatically, with no decorator having to compute it — is exactly what `emitDecoratorMetadata` (paired with `experimentalDecorators`) produces, and stage-3 decorators have no equivalent for it.
+
+Compiling the same class both ways makes the gap concrete. Under stage-3 (this course's default settings — no extra flags):
+
+```ts
+function Injectable(): ClassDecorator {
+  return (target) => {};
+}
+
+class Logger {}
+
+@Injectable()
+class UserService {
+  logger: Logger;
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+}
+```
+
+emits (`tsc --target es2025 --module esnext`, no extra flags):
+
+```text
+function Injectable() {
+    return (target) => { };
+}
+class Logger {
+}
+let UserService = (() => {
+    let _classDecorators = [Injectable()];
+    let _classDescriptor;
+    let _classExtraInitializers = [];
+    let _classThis;
+    var UserService = class {
+        static { _classThis = this; }
+        static {
+            const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+            __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+            UserService = _classThis = _classDescriptor.value;
+            if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+            __runInitializers(_classThis, _classExtraInitializers);
+        }
+        logger;
+        constructor(logger) {
+            this.logger = logger;
+        }
+    };
+    return UserService = _classThis;
+})();
+```
+
+Nowhere in that output is the fact that `logger`'s declared type is `Logger` — the emitted `constructor(logger)` is just a plain parameter name, exactly as erasure always throws types away. Compiling the identical source with `--experimentalDecorators --emitDecoratorMetadata` instead:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext --experimentalDecorators --emitDecoratorMetadata --outDir out legacy.ts
+```
+
+```text
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+function Injectable() {
+    return (target) => { };
+}
+class Logger {
+}
+let UserService = class UserService {
+    logger;
+    constructor(logger) {
+        this.logger = logger;
+    }
+};
+UserService = __decorate([
+    Injectable(),
+    __metadata("design:paramtypes", [Logger])
+], UserService);
+```
+
+`__metadata("design:paramtypes", [Logger])` is the piece stage-3 has no way to express: the compiler itself, knowing `logger: Logger` from the source, emits the real `Logger` class value into the output, retrievable at runtime with `Reflect.getMetadata("design:paramtypes", UserService)` (via the separate `reflect-metadata` package, which supplies `Reflect.metadata`/`Reflect.getMetadata`). That is the exact mechanism NestJS's `@Injectable()` and Angular's dependency injector are built on: decorate a class, then ask the runtime "what are this constructor's parameter types?" and get a real answer — something no amount of stage-3 `context.metadata` bookkeeping can provide, because stage-3 metadata is only ever what a decorator chooses to write into it by hand, never something the compiler populates automatically from the type system.
+
 <Callout title="The one-line takeaway">
-Prefer **stage-3 decorators** (native since TypeScript 5.0 and unchanged through TypeScript 7, no `experimentalDecorators` flag) over the legacy experimental design. A decorator is a function taking the decorated thing plus a **context** object (`kind`, `name`, `static`, `private`, `addInitializer`); it can wrap or replace behavior. Wrap the decorator in another function — a **factory** — when you need to pass configuration with `@name(args)`.
+Prefer **stage-3 decorators** (native since TypeScript 5.0 and unchanged through TypeScript 7, no `experimentalDecorators` flag) over the legacy experimental design — they type-check under `--strict` and survive `--erasableSyntaxOnly`, but still fail with a plain `SyntaxError` (not `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`) under Node's type-stripping, because V8 hasn't implemented the syntax yet; the in-browser playground's Run button works because it down-levels decorators to plain helpers via `transpileModule` first. A decorator is a function taking the decorated thing plus a **context** object (`kind`, `name`, `static`, `private`, `metadata` since 5.2, `addInitializer`); wrap it in a **factory** to pass configuration with `@name(args)`. NestJS and Angular still require `experimentalDecorators` + `emitDecoratorMetadata` because only that legacy pairing emits `design:paramtypes` — a constructor's real parameter types, baked into the output automatically — which stage-3's opt-in, decorator-populated `context.metadata` has no equivalent for.
 </Callout>
+
+## Mental Model
+
+Keep two independent questions separate whenever decorator code doesn't behave the way you expect: **"does the compiler need to transform this syntax into something else?"** (erasable-syntax-only settings care about this, and decorators pass — they're standard ECMAScript, nothing to transform for type-stripping purposes) and **"does the JavaScript engine actually running this code understand the syntax at all?"** (this is what fails under `node --experimental-strip-types`, and it's a completely different failure — a raw parse error, not a rejected-but-recognized-TypeScript-construct error). The in-browser playground's Run button sidesteps the second question entirely by real-transpiling first, which is also exactly how a production build using `tsc` (or any bundler with a real TypeScript transform, not just a stripper) ships decorator-using code today.
+
+## Trade-offs
+
+| Design | Benefit | Cost |
+|---|---|---|
+| Stage-3 decorators | Standard ECMAScript, no flag, `context` object is rich and well-typed, works with `--erasableSyntaxOnly` | Can't run under a strip-only pipeline (Node's type stripping) without a real transpile step first; `context.metadata` has no automatic type information |
+| Legacy decorators (`experimentalDecorators`) | `emitDecoratorMetadata` bakes real constructor parameter types (`design:paramtypes`) into the output — the foundation of NestJS/Angular-style DI | Experimental, different signatures from stage-3, requires `reflect-metadata`, tied to `tsc`'s own emit (never works under a pure type-stripper) |
+| `accessor` + accessor decorator | Clean interception of both `get` and `set` through one declaration | Only applies to `accessor`-keyword members, not plain `get`/`set` pairs written by hand |
+
+## Common Misconceptions
+
+- **If code type-checks under `--erasableSyntaxOnly`, it will run under Node's type stripping.** Decorators are the sharpest counterexample in this course: they pass `--erasableSyntaxOnly` cleanly (nothing about them needs compiler-side transformation) and still throw a plain `SyntaxError` under `node --experimental-strip-types`, because that flag only strips *type* annotations — it does not implement or transpile any JavaScript-level proposal V8 lacks.
+- **The `SyntaxError` decorators throw under Node is the same kind of error as an unerasable TypeScript construct (parameter properties, `enum`).** It isn't — those get Node's specific `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`, a deliberate rejection of recognized-but-disallowed TypeScript syntax. Decorators fail with a generic parse error because the stripper's parser doesn't recognize the `@` token as anything at all.
+- **`context.metadata` in a stage-3 decorator gives you the same thing `design:paramtypes` gives a legacy one.** It doesn't — `context.metadata` is an empty object a decorator must populate itself; `design:paramtypes` is the compiler automatically emitting a constructor's real, declared parameter types with zero decorator code required, which is precisely the capability stage-3 decorators were not designed to replace.
+
+## Reading AI-generated code
+
+- **A stage-3 `@Injectable()`-style decorator that expects to read constructor parameter types off `context` or `context.metadata`.** This will not work — stage-3's context object never contains type information, because types are erased before any decorator ever runs. Reading real parameter types at runtime requires `experimentalDecorators` + `emitDecoratorMetadata` and the legacy decorator shape; generated code mixing "stage-3 syntax" with "reads `design:paramtypes`-style metadata" is combining two designs that don't interoperate.
+- **A `@Component`-style class decorator copied from a NestJS or Angular example into a project that doesn't have `experimentalDecorators` enabled.** The decorator syntax itself will often still compile (stage-3 accepts a wide range of decorator function shapes), but any reflection the decorator relies on (`Reflect.getMetadata`) will silently return `undefined`, since no `design:paramtypes` metadata was ever emitted without the flag.
+
+<SpotTheBug code={`function Injectable(): ClassDecorator {
+  return (target) => {};
+}
+
+@Injectable()
+class Logger {}
+
+@Injectable()
+class UserService {
+  logger: Logger;
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+}
+
+// Somewhere in a hand-rolled DI container:
+function resolve(target: any) {
+  const paramTypes = Reflect.getMetadata("design:paramtypes", target) ?? [];
+  console.log(paramTypes);
+}
+resolve(UserService);`}>
+This project has no `experimentalDecorators`/`emitDecoratorMetadata` in its `tsconfig.json` — the decorators compile fine as ordinary stage-3 decorators, but `resolve(UserService)` logs an empty array (or throws, if `reflect-metadata`'s polyfill for `Reflect.getMetadata` was never imported at all), never `[Logger]`. `design:paramtypes` metadata is only ever emitted by the **legacy** decorator pipeline, gated behind `experimentalDecorators` and `emitDecoratorMetadata` together — stage-3 decorators, no matter how they're written, never populate it, because stage-3's `context.metadata` is an opt-in bag decorators must fill by hand, not something the compiler auto-populates from the type system. The fix is either to actually enable both legacy flags project-wide (and accept the legacy decorator model everywhere), or to abandon reflection-based DI and pass dependencies explicitly — the constructor-parameter-type trick this code is trying to use simply has no stage-3 equivalent.
+</SpotTheBug>
 
 export const quizDecorators = [
   {
@@ -132,36 +350,62 @@ export const quizDecorators = [
       'There are no decorators in TypeScript',
     ],
     answer: 1,
+    explain: 'Stage-3 decorators are the standardized ECMAScript design, native since TypeScript 5.0 with no flag required, and are what this lesson teaches.',
   },
   {
     q: 'What does the second argument to a stage-3 decorator (the context) provide?',
     options: [
       'The runtime value of the field only',
-      'Metadata about what is decorated — kind, name, static, private, and an addInitializer hook',
+      'Metadata about what is decorated — kind, name, static, private, a metadata object (5.2+), and an addInitializer hook',
       'The tsconfig options',
       'Nothing useful',
     ],
     answer: 1,
+    explain: 'The context object describes the decorated member (kind, name, static, private), carries a shared metadata object decorators can populate, and offers addInitializer for setup work.',
   },
   {
-    q: 'What is a decorator factory?',
+    q: '```ts\nfunction logged(value: any, context: ClassMethodDecoratorContext) {\n  return value;\n}\nclass Service {\n  @logged\n  fetch() { return "ok"; }\n}\n```\nThis compiles cleanly under `--erasableSyntaxOnly` and `--strict`. Why does it still throw a `SyntaxError` when run with `node --experimental-strip-types`?',
     options: [
-      'A class that builds decorators at runtime',
-      'A function that returns a decorator, so you can pass configuration with `@name(args)`',
-      'A special tsconfig setting',
-      'A decorator applied to a factory function',
+      'They do not — this is a myth',
+      '`--erasableSyntaxOnly` only checks whether the compiler needs to transform syntax; it says nothing about whether V8 itself has implemented the syntax, which it has not for stage-3 decorators',
+      'Decorators require `experimentalDecorators` to work at all',
+      'Node always runs `tsc` first, so this never happens',
     ],
     answer: 1,
+    explain: 'These are two independent questions: whether the compiler needs to emit different code (decorators don\'t -- they\'re standard ECMAScript syntax) and whether the JavaScript engine parses the syntax at all (V8 does not yet). Node\'s type-stripping only deletes type annotations; it never transpiles JavaScript-level syntax V8 lacks.',
   },
   {
-    q: 'How does a field decorator differ from a method decorator?',
+    q: 'What is different about the `SyntaxError` a decorator throws under Node\'s type-stripping, compared to the `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` error a parameter property throws there?',
     options: [
-      'It cannot exist',
-      'It does not receive a value to wrap; it can return an initializer that transforms the field initial value',
-      'It runs only once per class',
-      'It must be static',
+      'Nothing — they are the same error under a different name',
+      '`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` is Node\'s stripper recognizing TypeScript syntax and deliberately refusing it; a decorator\'s plain `SyntaxError` means the underlying parser does not recognize the `@` token as anything at all, because decorators are not TypeScript syntax',
+      'Decorators throw at runtime, parameter properties throw at compile time',
+      'Both only happen in strict mode',
     ],
     answer: 1,
+    explain: 'Parameter properties, enums, and similar constructs are TypeScript syntax Node\'s stripper explicitly recognizes and rejects with a named error code. Decorators are a JavaScript-level proposal the stripper was never built to remove at all, so the failure is a generic, unrecognized-token parse error instead.',
+  },
+  {
+    q: 'Why does the in-browser TSPlayground\'s "Run" button successfully execute code using stage-3 decorators, even though `node --experimental-strip-types` cannot?',
+    options: [
+      'The browser has implemented stage-3 decorators natively',
+      'The playground uses `ts.transpileModule`, which down-levels decorators into plain ES2022 helper functions before running the result — ordinary JavaScript with no `@` syntax left',
+      'Decorators are ignored silently in the browser',
+      'It secretly sends the code to a server running Node with a newer version',
+    ],
+    answer: 1,
+    explain: '`transpileModule` performs a real compiler transform, rewriting `@decorator` syntax into `__esDecorate`/`__runInitializers` calls -- plain, already-supported JavaScript. Node\'s `--experimental-strip-types` does not transpile; it only deletes type annotations textually, leaving unsupported JavaScript-level syntax like decorators completely untouched (and therefore unparseable).',
+  },
+  {
+    q: '```ts\nfunction Injectable(): ClassDecorator {\n  return (target) => {};\n}\nclass Logger {}\n@Injectable()\nclass UserService {\n  logger: Logger;\n  constructor(logger: Logger) { this.logger = logger; }\n}\n```\nCompiling this with plain stage-3 settings, versus with `--experimentalDecorators --emitDecoratorMetadata`, produces very different output. Why do NestJS and Angular still require the legacy pairing instead of stage-3 alone?',
+    options: [
+      'Stage-3 decorators do not exist yet',
+      'Only the legacy pairing emits `design:paramtypes` -- a constructor\'s real, declared parameter types, baked into the output automatically -- which their dependency injection is built on and stage-3\'s decorator-populated `context.metadata` has no equivalent for',
+      'Stage-3 decorators are slower at runtime',
+      '`experimentalDecorators` is required to use classes at all',
+    ],
+    answer: 1,
+    explain: 'Compiling the identical class both ways shows the gap directly: only `--experimentalDecorators --emitDecoratorMetadata` emits `__metadata("design:paramtypes", [Logger])`. Stage-3\'s `context.metadata` is an empty object decorators must populate by hand -- it is never auto-filled with type information the way `design:paramtypes` is, because types are erased before any decorator runs.',
   },
 ];
 

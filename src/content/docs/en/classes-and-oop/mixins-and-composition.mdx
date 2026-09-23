@@ -1,6 +1,6 @@
 ---
 title: 'Mixins & Composition'
-description: 'Building reusable behavior from composable class factories instead of deep inheritance, and how to type them with generic constructor types.'
+description: 'Building reusable behavior from composable class factories instead of deep inheritance, typing them with generic constructor types, and where private members and abstract classes fit in.'
 sidebar:
   order: 5
 ---
@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## The problem with deep inheritance
 
@@ -37,7 +39,10 @@ function Activatable<TBase extends Constructor>(Base: TBase) {
 }
 
 class User {
-  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
 }
 
 // Compose several behaviors onto User:
@@ -81,9 +86,231 @@ Now `Movable` can only be applied to a base whose instances have `x` and `y`, an
 
 Mixins are one form of a broader principle: **prefer assembling behavior from small, independent pieces over deriving it through a rigid hierarchy.** Often you do not even need mixins — plain object composition (holding collaborators as fields and delegating to them) is simpler still and avoids the `class`-factory machinery entirely. Reach for mixins when you genuinely need the composed result to *be* a class with all behaviors merged onto its instances.
 
+## Naming the mixin backbone: `Constructor<T>`, `typeof C`, and `InstanceType`
+
+Every mixin in this lesson relies on the same shape — `new (...args: any[]) => T` — which is worth naming and understanding on its own, separate from the mixin pattern itself. Any class name, used as a *value* rather than a type annotation, has the type `typeof ClassName`: the type of the **constructor**, not the type of an instance.
+
+```ts
+class User {
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+}
+
+type UserCtor = typeof User; // the CONSTRUCTOR type -- new (name: string) => User
+type UserInstance = InstanceType<UserCtor>; // "unwrap" a constructor type back to its instance type
+
+function makeOne(Ctor: UserCtor, name: string): InstanceType<UserCtor> {
+  return new Ctor(name);
+}
+
+const u: UserInstance = makeOne(User, "Ada");
+console.log(u.name);
+```
+
+`InstanceType<C>` is the utility type that does the reverse of `typeof`: given a constructor type, it extracts the type of what `new`-ing it produces. This pair — `typeof ClassName` to talk about the constructor, `InstanceType<...>` to get back to the instance — is exactly what every mixin factory in this lesson is built from: `type Constructor<T = {}> = new (...args: any[]) => T` is a **generic, unnamed constructor type**, matching *any* class whose instances are (at least) shaped like `T`. Naming it once, as a reusable helper, is the idiomatic version of the inline `new (...args: any[]) => {}` this lesson opened with:
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Loggable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    log() {
+      console.log("logging");
+    }
+  };
+}
+```
+
+`TBase extends Constructor` is the mixin backbone in full: it constrains `TBase` to "some constructor," lets the mixin `extends Base` (which requires a real constructor type, not just an object shape), and — combined with `Constructor<SomeRequiredShape>` as in `Movable` above — lets a mixin additionally demand that the base's *instances* already have specific members.
+
+## Mixins and `private` don't compose — and the reason is structural, not incidental
+
+The official TypeScript handbook states the limitation plainly: "Mixins may not declare private/protected properties, however, you can use ES2020 private fields." A `#private` field declared *inside* a mixin's returned class body works exactly as you'd expect — it's real ECMAScript syntax, scoped to that one class expression, with nothing generic about it:
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Loggable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    #callCount = 0; // a #private field declared inside a mixin -- this is fine
+    log() {
+      this.#callCount++;
+      console.log(`logged ${this.#callCount} times`);
+    }
+  };
+}
+
+class Account {}
+const LoggableAccount = Loggable(Account);
+const a = new LoggableAccount();
+a.log();
+```
+
+What genuinely doesn't work is trying to *constrain* a mixin's base to already have a `private` (or `protected`) member — because a **constrained mixin's constraint is an ordinary object type**, and object type literals cannot express access modifiers at all:
+
+```ts
+// @expect-error TS1070
+type Constructor<T = {}> = new (...args: any[]) => T;
+type WithSecret = Constructor<{ private secret: string }>;
+```
+
+```text
+error TS1070: 'private' modifier cannot appear on a type member.
+```
+
+This is a syntax error, not a design choice you could work around with different typing — `interface` and object-type-literal members simply have no concept of visibility; every member of an object type is implicitly public. So "mixins and `private` don't compose" means precisely this: you can freely use `#private` *inside* a mixin's own returned class, but you can never *require*, via a `Constructor<...>` constraint, that a mixin's base class already provides a `private`/`protected` member — there is no type-level vocabulary to say so.
+
+## Abstract mixin classes and the abstract constructor type
+
+A mixin that never actually calls `new Base()` itself — because the mixin only ever adds methods on top, and construction is deferred to whatever eventually extends the result — can accept an `abstract` class as its base, but only if the mixin's type signature says so explicitly. Since TypeScript 4.2, `abstract new (...args: any[]) => T` (an **abstract constructor type**) describes exactly this: a constructor that can be extended but not called with a bare `new`.
+
+```ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+type AbstractConstructor<T = {}> = abstract new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+// This mixin's base only needs to be extendable, never directly constructed --
+// so it accepts an ABSTRACT constructor, and can take an abstract class as input.
+function Describable<TBase extends AbstractConstructor<Shape>>(Base: TBase) {
+  abstract class Described extends Base {
+    describe() {
+      return `area is ${this.area()}`;
+    }
+  }
+  return Described;
+}
+
+const DescribableShape = Describable(Shape); // ✅ Shape is abstract -- fine here
+
+class Square extends DescribableShape {
+  side: number;
+  constructor(side: number) {
+    super();
+    this.side = side;
+  }
+  area() { return this.side * this.side; }
+}
+
+console.log(new Square(3).describe());
+```
+
+Using the ordinary (non-abstract) `Constructor<Shape>` instead rejects `Shape` outright, with two separate, precise errors:
+
+```ts
+// @expect-error TS2653 TS2345
+type Constructor<T = {}> = new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+function Describable<TBase extends Constructor<Shape>>(Base: TBase) {
+  return class extends Base {
+    describe() { return "area"; }
+  };
+}
+
+const DescribableShape = Describable(Shape);
+```
+
+```text
+error TS2653: Non-abstract class expression does not implement inherited abstract member 'area' from class 'Shape'.
+error TS2345: Argument of type 'typeof Shape' is not assignable to parameter of type 'Constructor<Shape>'.
+  Cannot assign an abstract constructor type to a non-abstract constructor type.
+```
+
+The first error is the mixin's own returned class expression getting caught by the same abstract-member check any concrete subclass of `Shape` would face — a **non-abstract** class extending `Shape` must implement `area()`, and `class extends Base { describe() {...} }` doesn't. The second names the deeper issue directly: `Shape`'s constructor type is abstract (it cannot be `new`-ed directly), and `Constructor<Shape>` demands a *non-abstract*, directly-callable constructor — an abstract constructor type is never assignable to a plain one, precisely because the plain one promises "you can call `new` on this," which an abstract class cannot honor.
+
+<TSPlayground code={abstractMixinCode} id="mixins-abstract-constructor" title="An abstract-constructor-typed mixin accepting an abstract base" />
+
+export const abstractMixinCode = `type AbstractConstructor<T = {}> = abstract new (...args: any[]) => T;
+
+abstract class Shape {
+  abstract area(): number;
+}
+
+function Describable<TBase extends AbstractConstructor<Shape>>(Base: TBase) {
+  abstract class Described extends Base {
+    describe() {
+      return \`area is \${this.area()}\`;
+    }
+  }
+  return Described;
+}
+
+const DescribableShape = Describable(Shape);
+
+class Square extends DescribableShape {
+  side: number;
+  constructor(side: number) {
+    super();
+    this.side = side;
+  }
+  area() { return this.side * this.side; }
+}
+
+console.log(new Square(3).describe());`;
+
+Click **Check types**: zero diagnostics. Click **Run**: `area is 9`. This is the general shape behind any mixin library built to work with both concrete and abstract base classes — accept an abstract constructor type when the mixin itself never instantiates its base directly.
+
 <Callout title="The one-line takeaway">
-A **mixin** is a function that takes a base class and returns a subclass with extra behavior, typed with a generic constructor constraint (`TBase extends new (...args: any[]) => {}`) so the compiler tracks the merged shape. Mixins let one class compose several independent behaviors that a single inheritance chain cannot express. They are one tool for **composition over inheritance** — and plain object composition is often simpler still.
+A **mixin** is a function that takes a base class and returns a subclass with extra behavior, typed with a generic constructor constraint (`TBase extends Constructor`, where `Constructor<T> = new (...args: any[]) => T`) so the compiler tracks the merged shape — the same `typeof ClassName` / `InstanceType<...>` pair that describes any constructor, generalized to "any constructor at all." `#private` fields work fine *inside* a mixin's own class body, but a constrained mixin can never *require* its base to already have a `private`/`protected` member, because object-type constraints have no syntax for access modifiers (`TS1070`). A mixin that never constructs its base directly can accept an `abstract` class by typing its constraint as `abstract new (...args: any[]) => T` instead of the plain, directly-callable form.
 </Callout>
+
+## Mental Model
+
+Every mixin signature answers two questions about its `TBase` type parameter: **what must the base class's constructor look like** (plain `new (...args: any[]) => T`, or `abstract new (...args: any[]) => T` if the mixin never calls `new Base()` itself), and **what must an already-constructed instance already provide** (the `T` in `Constructor<T>`, which becomes whatever shape the mixin's own methods rely on, like `Movable`'s `{ x: number; y: number }`). Read any mixin by answering those two questions before reading its body — the constraint tells you exactly what bases it accepts and why, without needing to trace through the returned class expression at all.
+
+## Trade-offs
+
+| Approach | Benefit | Cost |
+|---|---|---|
+| Mixin (`TBase extends Constructor`) | Composes several independent behaviors onto one class; the compiler tracks the merged shape through each wrap | `class`-factory machinery; `#private` works inside, but bases can't be *required* to have private members |
+| Plain object composition | Simpler, no generic constructor gymnastics at all | The composed result isn't one merged class — collaborators stay separate objects you delegate to explicitly |
+| Abstract-constructor-typed mixin | Accepts both concrete and `abstract` bases, since it never calls `new Base()` itself | Requires knowing the `abstract new (...args: any[]) => T` syntax exists at all — an easy detail to miss |
+| Ordinary `Constructor<T>`-typed mixin | Simpler signature | Silently rejects any `abstract` base with two compounding errors (TS2653, TS2345), which can look unrelated to the real cause at first glance |
+
+## Common Misconceptions
+
+- **A mixin can require its base class to already have a `private` member, the same way `Movable` requires `x`/`y`.** It cannot — a mixin's constraint is an ordinary object type, and object types have no syntax for `private`/`protected` at all (`TS1070`). Only public shape can be required this way.
+- **`#private` fields "don't work" with mixins, full stop.** They work fine *inside* a mixin's own returned class body — real ECMAScript private fields are unaffected by the generic machinery around them. What doesn't work is *requiring* one via a constraint.
+- **Any mixin that accepts a `Constructor<Shape>` should also accept `abstract class Shape`.** It won't — `Constructor<T>` demands a directly-callable, non-abstract constructor. A mixin has to opt in explicitly with `abstract new (...args: any[]) => T` to accept abstract bases.
+- **`typeof SomeClass` and `SomeClass` (as a type annotation) mean the same thing.** They don't: `SomeClass` as a type is the *instance* type (what `x: SomeClass` requires); `typeof SomeClass` is the *constructor* type (what you'd type a variable holding the class itself, to be `new`-ed later).
+
+## Reading AI-generated code
+
+Generated mixin code tends to reach for the loosest possible constraint that happens to compile, which erases exactly the safety a well-typed mixin should provide:
+
+- **A mixin constrained with a bare `Constructor` (no type argument, so it defaults to `Constructor<{}>`) that then accesses specific members on `this`** (`this.x`, `this.save()`) without those members appearing anywhere in the constraint is relying on `any`-like leniency, not a real guarantee — check whether the constraint actually names every member the mixin body uses, the way `Movable`'s `Positioned` constraint names `x` and `y`.
+- **A mixin typed with the ordinary `Constructor<T>` applied to a library's `abstract` base class** will fail with the TS2653/TS2345 pair shown above. If the generated code's fix is to strip `abstract` from the base class instead of widening the mixin's constraint to `AbstractConstructor<T>`, that fix throws away a real design constraint (the base was abstract on purpose) to route around a typing gap that has a proper, narrow solution.
+
+<SpotTheBug code={`type Constructor<T = {}> = new (...args: any[]) => T;
+
+function Serializable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    serialize() {
+      return JSON.stringify(this.toPayload());
+    }
+  };
+}
+
+class Order {
+  id = "ord_1";
+  toPayload() {
+    return { id: this.id };
+  }
+}
+
+const SerializableOrder = Serializable(Order);
+const o = new SerializableOrder();
+console.log(o.serialize());`}>
+This fails to compile: `TS2339: Property 'toPayload' does not exist on type '(Anonymous class)'.` `Serializable` is constrained with a bare `Constructor` — which is `Constructor<{}>`, since the type parameter defaults to `{}` — so inside the mixin body, `this` is only known to have whatever the anonymous class's own declared members provide, plus whatever `{}` guarantees from the base: nothing beyond that. Calling `this.toPayload()` assumes every base passed to `Serializable` has a `toPayload` method, but nothing in the constraint says so, so the compiler correctly refuses to assume it. The fix mirrors `Movable`'s pattern from earlier in this lesson: constrain the base explicitly, `type Payloadable = Constructor<{ toPayload(): unknown }>`, then write `function Serializable<TBase extends Payloadable>(Base: TBase)`. Now the constraint documents exactly what `Serializable` requires, and `this.toPayload()` type-checks because every valid `TBase` is guaranteed to provide it.
+</SpotTheBug>
 
 export const quizMixins = [
   {
@@ -95,16 +322,7 @@ export const quizMixins = [
       'A decorator applied to a class',
     ],
     answer: 1,
-  },
-  {
-    q: 'Why do mixins use a generic constraint like `TBase extends new (...args: any[]) => {}`?',
-    options: [
-      'To make the code shorter',
-      'So the compiler tracks the base class members and merges them with the new ones in the returned type',
-      'To disable type checking',
-      'It is only decorative',
-    ],
-    answer: 1,
+    explain: 'A mixin is an ordinary function: it receives a constructor and returns a new class expression that extends it, adding members -- no dedicated keyword or syntax is involved.',
   },
   {
     q: 'What problem do mixins solve that single inheritance cannot?',
@@ -115,16 +333,51 @@ export const quizMixins = [
       'Enforcing runtime privacy',
     ],
     answer: 1,
+    explain: 'A linear `extends` chain can only express one parent per class. Mixins let one class layer several independent behaviors (Timestamped, Activatable, ...) that don\'t need to share a common ancestor.',
   },
   {
-    q: 'When is plain object composition preferable to a mixin?',
+    q: '`typeof User` (where `User` is a class) and `User` used as a type annotation -- what is the difference?',
     options: [
-      'Never — mixins are always better',
-      'When you can hold collaborators as fields and delegate, without needing the result to be one merged class',
-      'Only in JavaScript, not TypeScript',
-      'When you need runtime privacy',
+      'They are identical',
+      '`User` as a type is the instance type; `typeof User` is the constructor type -- what you would use to type a variable holding the class itself, to `new` later',
+      '`typeof User` only works on abstract classes',
+      '`User` is always erased; `typeof User` never is',
     ],
     answer: 1,
+    explain: '`typeof ClassName` names the type of the constructor value, the same category of type every `Constructor<T>` helper in this lesson is generalizing. `InstanceType<typeof User>` recovers the instance type from it.',
+  },
+  {
+    q: '```ts\ntype Constructor<T = {}> = new (...args: any[]) => T;\ntype WithSecret = Constructor<{ private secret: string }>;\n```\nDoes this compile?',
+    options: [
+      'Yes — mixins can require private members this way',
+      'No — TS1070: `private` cannot appear on a type member; object type literals have no way to express access modifiers at all',
+      'Yes, but only under `strict`',
+      'No — `Constructor` cannot take a type argument',
+    ],
+    answer: 1,
+    explain: 'A constrained mixin\'s requirement is an ordinary object type, and object types (interfaces and type literals alike) cannot declare `private`/`protected` members -- every member of an object type is implicitly public. This is why "mixins and private don\'t compose": you can use `#private` inside a mixin\'s own class body, but you can never require one via a constraint.',
+  },
+  {
+    q: 'A mixin never calls `new Base()` itself -- it only adds methods to whatever eventually extends its result. Why would its constraint use `abstract new (...args: any[]) => T` instead of the plain `new (...args: any[]) => T`?',
+    options: [
+      'They behave identically; the choice is only stylistic',
+      'The abstract form additionally accepts `abstract` classes as the base, since it never promises the base is directly constructible -- the plain form rejects an abstract base with TS2653/TS2345',
+      'The abstract form is required for any generic function',
+      '`abstract new` is only valid inside `.d.ts` files',
+    ],
+    answer: 1,
+    explain: 'A plain `Constructor<T>` promises its argument is directly callable with `new`, which an `abstract` class\'s constructor type is not -- assigning one produces "Cannot assign an abstract constructor type to a non-abstract constructor type." The abstract-constructor-typed form makes no such promise, so it can accept both concrete and abstract bases.',
+  },
+  {
+    q: '```ts\nfunction Serializable<TBase extends Constructor>(Base: TBase) {\n  return class extends Base {\n    serialize() { return JSON.stringify(this.toPayload()); }\n  };\n}\n```\n(`Constructor<T = {}>` as defined earlier in this lesson.) Why does `this.toPayload()` fail to compile?',
+    options: [
+      'JSON.stringify cannot be called inside a mixin',
+      '`Constructor` with no type argument defaults to `Constructor<{}>`, so nothing in the constraint says the base provides `toPayload` -- the fix is to constrain it explicitly, e.g. `Constructor<{ toPayload(): unknown }>`',
+      'Mixins cannot call methods on `this` at all',
+      'It only fails when the base class is abstract',
+    ],
+    answer: 1,
+    explain: 'An unparameterized `Constructor` is `Constructor<{}>` -- a base guaranteed to provide nothing beyond an empty object shape. The mixin body\'s use of `this.toPayload()` is only safe once the constraint explicitly requires it, the same way `Movable` requires `{ x: number; y: number }` before using `this.x`/`this.y`.',
   },
 ];
 

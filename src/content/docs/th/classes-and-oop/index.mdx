@@ -9,6 +9,8 @@ import Mermaid from '../../../../components/Mermaid.astro';
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## class อยู่ทั้งสองโลก
 
@@ -16,7 +18,10 @@ import ProgressTracker from '../../../../components/ProgressTracker.tsx';
 
 ```ts
 class User {
-  constructor(public name: string) {} // parameter property — needs emit, see "erasable syntax"
+  name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
 }
 
 const u: User = new User("Ada"); // `User` as a TYPE (annotation) and a VALUE (constructor)
@@ -47,6 +52,144 @@ export const worldsDiagram = `flowchart TB
 เวลาเขียน `class` ให้นึกภาพสองอย่างพร้อมกัน: **type** ที่นิยาม (shape ของ instance ใช้ annotate และเช็คตอน compile) กับ **value** ที่สร้าง (constructor function ที่มีอยู่จริงตอน runtime) feature ของ class หลายตัวเป็นแค่อย่างแรกและหายไปตอน compile ส่วนไม่กี่ตัว — โดยเฉพาะ `#private` field และ `static` member — เป็นอย่างหลังจริง ๆ และ ship ไปกับ JavaScript ของคุณ
 </Callout>
 
+## structural จนกว่า `private` จะเข้ามาเกี่ยว
+
+ทุก type อื่นในคอร์สนี้ — object type, interface, function type — ถูกเทียบแบบ **structural**: สอง type เข้ากันได้ถ้า shape ตรงกัน ไม่ว่าจะชื่ออะไรหรือประกาศไว้ที่ไหน class ก็ตามกฎเดียวกันสำหรับ public member แต่พอเพิ่ม `private` (หรือ `protected`) member เข้ามา class จะเลิกเป็น structural ล้วน ๆ กลายเป็น **nominal-ish**: สอง class ที่มี shape *เหมือนกันเป๊ะ* รวมถึง `private` field ชื่อเดียวกัน ก็ยัง assign เข้าหากันไม่ได้
+
+```ts
+// @expect-error TS2345
+class ApiClient {
+  private token: string;
+  constructor(token: string) {
+    this.token = token;
+  }
+  fetch(path: string) {
+    return `${path}?token=${this.token}`;
+  }
+}
+
+function useClient(client: ApiClient) {
+  return client.fetch("/users");
+}
+
+// A test double with the EXACT same shape, field for field, method for method —
+// structurally this should be a perfect match.
+class FakeApiClient {
+  private token: string;
+  constructor() {
+    this.token = "fake";
+  }
+  fetch(path: string) {
+    return `${path}?token=${this.token}`;
+  }
+}
+
+useClient(new FakeApiClient()); // ❌ still rejected
+```
+
+```text
+error TS2345: Argument of type 'FakeApiClient' is not assignable to parameter of type 'ApiClient'.
+  Types have separate declarations of a private property 'token'.
+```
+
+ไม่มีอะไรใน *shape* ของ `token` ที่ต่างกันระหว่างสอง class เลย — ชื่อเดียวกัน type เดียวกัน visibility เดียวกัน แต่ TypeScript ยัง reject การ assign นี้ เพราะ `private` member แต่ละตัวถูก tag ด้วย class ที่ประกาศมัน และ `ApiClient#token` กับ `FakeApiClient#token` เป็นสอง tag ที่ต่างกัน แม้จะหน้าตาเหมือนกันบนกระดาษ นี่คือจุดเดียวที่ model structural ของ TypeScript โน้มไปทาง nominal typing — มีไว้เพื่อไม่ให้สอง class ที่ไม่เกี่ยวกันมา satisfy private contract ของกันและกันโดยบังเอิญ แค่เพราะบังเอิญประกาศ field ชื่อเดียวกัน
+
+field แบบ `#private` (ECMAScript private field ของจริง ไม่ใช่แค่ keyword `private`) บังคับกฎเดียวกันเป๊ะ ด้วยเหตุผลเดียวกัน:
+
+```ts
+// @expect-error TS2345
+class WalletA {
+  #balance = 0;
+}
+class WalletB {
+  #balance = 0;
+}
+function drain(w: WalletA) { return w; }
+drain(new WalletB()); // ❌ different #balance, even though both look the same
+```
+
+```text
+error TS2345: Argument of type 'WalletB' is not assignable to parameter of type 'WalletA'.
+  Property '#balance' in type 'WalletB' refers to a different member that cannot be accessed from within type 'WalletA'.
+```
+
+### `#private` เป็น brand check
+
+เพราะ field `#name` ผูกกับ class ที่ประกาศมันเป๊ะ ๆ การเช็คว่า field นั้นมีอยู่บน object ที่ไม่รู้จัก (`#name in obj`) จึงทำงานเป็น **brand check** ที่เชื่อถือได้และปลอมไม่ได้ — ไม่มีอะไรนอก class จะเพิ่ม private slot นั้นเข้าไปได้เลย:
+
+<TSPlayground code={brandCheckCode} id="classes-index-brand" title="A #private field as an unforgeable brand" />
+
+export const brandCheckCode = `class Wallet {
+  #balance = 0;
+
+  static isWallet(obj: unknown): obj is Wallet {
+    return typeof obj === "object" && obj !== null && #balance in obj;
+  }
+}
+
+const w = new Wallet();
+console.log(Wallet.isWallet(w));   // true -- has the real #balance slot
+console.log(Wallet.isWallet({}));  // false -- no such slot exists, and none could be faked`;
+
+กด **Run**: ได้ `true` แล้ว `false` ต่อให้ duck-type object ให้ *หน้าตา* เหมือน `Wallet` แค่ไหน — เพิ่ม property ที่ชื่อ `balance` ตรง ๆ หรือ public field อื่นใด — ก็ทำให้ `#balance in obj` เป็น `true` ไม่ได้ ชื่อที่มี `#` นำหน้าไม่ใช่แค่ถูกซ่อน มันไม่ใช่ string property key ที่ code อื่นจะสะกดถูกด้วยซ้ำ นี่คือเครื่องมือที่คมที่สุดที่ TypeScript (ผ่าน ECMAScript private field ของจริง) มีสำหรับเปลี่ยน structural type ให้เป็น nominal จริง ๆ โดยตั้งใจ
+
+## Mental Model
+
+ถามคำถามเดียวเมื่อการ assign class ที่คุณคาดว่าจะทำงานได้กลับถูก reject: **มีฝั่งไหนประกาศ `private` หรือ `#private` member หรือเปล่า?** ถ้าไม่มี กฎ structural ปกติจากทุกบทที่ผ่านมาก็ใช้เหมือนเดิม — shape คือทุกอย่าง ถ้ามี TypeScript กำลังตั้งใจเป็น nominal สำหรับ member นั้น — ไม่สนว่า shape ตรงกันไหม สนแค่ว่าทั้งสองฝั่ง trace กลับไปที่ *declaration เดียวกัน* หรือเปล่า `#private` ไปไกลกว่า `private` อีก — การเช็ค `#name in obj` ให้ brand ที่ enforce ตอน runtime จริงและปลอมจากภายนอกไม่ได้ นี่จึงเป็นวิธี idiomatic ในการตอบว่า "นี่คือ instance ของ class ฉันจริงไหม" สำหรับ code ที่เกี่ยวกับ security หรือ identity ไม่ใช่แค่ความสะดวกตอน type-check
+
+## ข้อแลกเปลี่ยน
+
+| Feature | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| public member (structural) | ยืดหยุ่นสูงสุด — value ที่ shape ตรงกันใช้ได้หมด รวมถึง plain object และ test double | ไม่มีการป้องกัน shape ชนกันโดยบังเอิญระหว่าง type ที่ไม่เกี่ยวกัน |
+| `private` member | บอก intent จับการ assign ข้าม class โดยไม่ตั้งใจ compile-time only | erase ตอน emit — คนที่ตั้งใจจริงเข้าถึงผ่าน `(obj as any).field` ได้; สอง class ที่ shape เหมือนกันก็ยังไม่ match structurally |
+| `#private` field | privacy จริงตอน runtime, brand check ปลอมไม่ได้ผ่าน `#x in obj`, รอดไปถึง JavaScript ที่ emit | ceremony เพิ่มนิดหน่อย (syntax `#`) และ — เหมือน `private` — ทำให้ class เป็น nominal-ish สำหรับ member นั้น |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **"TypeScript เป็น structural ดังนั้นสอง class ที่ shape เหมือนกันใช้แทนกันได้"** จริงแค่กับ public member เท่านั้น พอ class ไหนประกาศ `private` หรือ `#private` member ที่ชื่อตรงกัน member นั้น — และการเทียบ class ทั้งคู่ — จะถูกเช็คแบบ nominal: ต้อง declaration เดียวกันหรือไม่ก็ไม่เอาเลย
+- **`private` กับ `#private` ป้องกัน field เหมือนกัน แค่ syntax ต่างกัน** `private` เป็น annotation compile-time-only ที่ erase ตอน emit อ่านได้ตอน runtime ผ่าน `any` ส่วน `#private` ถูก JavaScript engine เองบังคับ และ bypass ด้วย cast ไม่ได้เลย — บทถัดไปพิสูจน์ทั้งสองข้อด้วย output จริงที่ emit ออกมา
+- **test double ต้อง `implements` หรือ match structural กับ class ถึงจะใช้แทนกันได้** ถ้า class จริงมี `private`/`#private` member ใด ๆ double ที่เขียนเอง shape "เหมือนกัน" จะถูก reject ตรง ๆ (เหมือน `FakeApiClient` ข้างบน) — วิธีแก้ปกติคือแยก `interface` ที่อธิบายแค่ public contract แล้วให้ code ที่ใช้พึ่ง interface นั้นแทน concrete class
+
+## อ่านโค้ดที่ AI เขียน
+
+test double และ mock ที่ AI สร้างเป็นจุดที่เจอบ่อย: model ที่ถูกขอให้ "เขียน fake `ApiClient` สำหรับ test" มักจะ copy field ของ class จริงมาตรง ๆ รวม `private` modifier ด้วย แล้วผลลัพธ์ก็ type-check ไม่ผ่านทุกที่ที่ class จริงถูกคาดหวัง
+
+- **เห็น `private` หรือ `#` field ถูก copy เข้า class ที่ไม่เกี่ยวกัน "เพื่อความเท่าเทียม"?** ถามว่าสอง class นี้ตั้งใจให้แทนกันได้จริงไหม ถ้าใช่ วิธีแก้เกือบทุกครั้งคือแยก `interface` ที่อธิบายแค่ public contract แล้ว type code ที่ใช้งานกับ interface นั้นแทน concrete class
+- **เห็น `(obj as any).privateField` ใน code ที่ generate มา อ่าน internal ของ class จากข้างนอก?** นั่นคือการเจาะทะลุการ erase ที่เป็น compile-time-only ของ `private` — มันทำงานได้ แต่ทำลาย point ทั้งหมดของการ mark field เป็น private ตั้งแต่แรก และพังเงียบ ๆ ถ้า field ถูกเปลี่ยนชื่อ
+
+<SpotTheBug code={`class ApiClient {
+  private token: string;
+  constructor(token: string) {
+    this.token = token;
+  }
+  fetch(path: string) {
+    return \`\${path}?token=\${this.token}\`;
+  }
+}
+
+function useClient(client: ApiClient) {
+  return client.fetch("/users");
+}
+
+class FakeApiClient {
+  private token: string;
+  constructor() {
+    this.token = "fake";
+  }
+  fetch(path: string) {
+    return \`\${path}?token=\${this.token}\`;
+  }
+}
+
+useClient(new FakeApiClient());`}>
+หน้าตาเหมือน test double ที่เขียนเองอย่างสมเหตุสมผล — field เดียวกัน constructor shape เดียวกัน method เดียวกัน — และ model ที่ถูกขอให้ "ทำ fake ApiClient สำหรับ test" จะได้ผลลัพธ์แบบนี้เกือบเป๊ะ มัน compile ไม่ผ่าน: `TS2345: Argument of type 'FakeApiClient' is not assignable to parameter of type 'ApiClient'. Types have separate declarations of a private property 'token'.` เพราะ `ApiClient` ประกาศ `private token` TypeScript เทียบ member นี้แบบ nominal — `private token` ของ `FakeApiClient` เป็น declaration *คนละตัว* แม้จะหน้าตาเหมือนกัน วิธีแก้คือเลิกพึ่ง concrete class: แยก `interface ApiClientLike { fetch(path: string): string }` (ไม่มี `private` member เพราะ interface มีไม่ได้) type `useClient` กับ interface นั้น แล้วให้ทั้ง `ApiClient` และ `FakeApiClient` satisfy มันแบบ structural
+</SpotTheBug>
+
+<Callout title="สรุปหนึ่งบรรทัด">
+class สร้างทั้ง type และ runtime value; feature ของ class ส่วนใหญ่ (`private`, `protected`, `abstract`, `implements`) เป็น compile-time-only และ erase ตอน emit ส่วนไม่กี่ตัว (`#private` field, `static` member, ตัว constructor เอง) เป็นของจริงและ ship ไปกับ JavaScript ของคุณ member ปกติของ class ถูกเทียบแบบ structural เหมือนทุกอย่างใน TypeScript แต่ `private` หรือ `#private` member ทำให้การเทียบนั้นเป็น nominal — ต้อง declaration เดียวกัน ไม่สนใจ shape — ซึ่งเป็นเหตุผลเดียวกับที่ทำให้ `#name in obj` เป็น brand check จริงที่ปลอมไม่ได้
+</Callout>
+
 export const quizIndex = [
   {
     q: 'อะไรทำให้ class พิเศษกว่า type alias หรือ interface?',
@@ -57,6 +200,7 @@ export const quizIndex = [
       'ปิด structural typing',
     ],
     answer: 1,
+    explain: 'class เป็นหนึ่งในไม่กี่ declaration ที่สร้างทั้ง compile-time type (shape ของ instance) และ runtime value (ตัว constructor function เอง)',
   },
   {
     q: 'feature ของ class อันไหนที่รอดไปถึง JavaScript ที่ emit ออกมา?',
@@ -67,6 +211,29 @@ export const quizIndex = [
       'signature ของ `abstract` method',
     ],
     answer: 2,
+    explain: '`#private` field เป็น ECMAScript syntax ของจริงที่ JS engine บังคับ จึง emit ออกมาตรง ๆ ส่วน `private`, `implements`, `abstract` เป็น annotation ของ TypeScript ล้วน ๆ ที่ erase ตอน compile',
+  },
+  {
+    q: '```ts\nclass ApiClient {\n  private token: string;\n  constructor(token: string) { this.token = token; }\n}\nclass FakeApiClient {\n  private token: string;\n  constructor() { this.token = "fake"; }\n}\nfunction useClient(client: ApiClient) { /* ... */ }\nuseClient(new FakeApiClient());\n```\nอันนี้ compile ผ่านไหม?',
+    options: [
+      'ผ่าน — ทั้งสอง class มี structural shape เหมือนกันเป๊ะ',
+      'ไม่ผ่าน — `private` member ทำให้การเทียบเป็น nominal และสอง class มี declaration ของ `token` แยกกัน',
+      'ผ่าน แต่เฉพาะภายใต้ `strict` mode',
+      'ไม่ผ่าน — `FakeApiClient` ไม่มี method `fetch`',
+    ],
+    answer: 1,
+    explain: 'TypeScript เป็น structural สำหรับ public member แต่ `private` (หรือ `#private`) member ผูกการเทียบกับ class ที่ประกาศมันเป๊ะ ๆ สอง class ที่ shape เหมือนกันเป๊ะ รวมถึง private field ชื่อเดียวกัน ก็ยังไม่ assign เข้าหากันได้: TS2345, "Types have separate declarations of a private property \'token\'."',
+  },
+  {
+    q: '```ts\nclass Wallet {\n  #balance = 0;\n  static isWallet(obj: unknown): obj is Wallet {\n    return typeof obj === "object" && obj !== null && #balance in obj;\n  }\n}\nconsole.log(Wallet.isWallet({ balance: 0 }));\n```\nอันนี้ print อะไร แล้วทำไม?',
+    options: [
+      '`true` — object มี property `balance` ที่ตรงกัน',
+      '`false` — `#balance` เป็น private slot ที่แยกต่างหาก ที่ object literal ธรรมดาไม่มีทางมีได้ ไม่ว่าจะมี public property อะไรก็ตาม',
+      'compile error — `#balance in obj` เป็น syntax ที่ผิด',
+      '`true` — `unknown` bypass การเช็ค private field',
+    ],
+    answer: 1,
+    explain: 'ชื่อที่มี `#` นำหน้าไม่ใช่ string property key เลย — มันมีอยู่บน object ได้ก็ต่อเมื่อ code ข้างใน class นั้นเป็นคนติดตั้งมันจริง ๆ ผ่าน `new Wallet()` object literal ธรรมดา แม้จะมี public field `balance` ชื่อตรงกัน ก็ไม่มีทาง satisfy `#balance in obj` ได้ ซึ่งนี่คือสิ่งที่ทำให้มันเป็น brand check ที่ปลอมไม่ได้',
   },
   {
     q: 'TypeScript OOP สมัยใหม่มักเลือกแนวทางออกแบบแบบไหน?',
@@ -77,6 +244,18 @@ export const quizIndex = [
       'global mutable state',
     ],
     answer: 1,
+    explain: 'โมดูลนี้เน้นไปที่ `this` type, decorator และ mixin — เครื่องมือสำหรับ compose behavior ที่ยืดหยุ่น — มากกว่า `extends` chain ที่ลึก ซึ่งมัก brittle',
+  },
+  {
+    q: 'test double ที่ generate มา copy field ของ class จริงมาทั้งหมด รวม `private` member ด้วย เพื่อให้ใช้แทนที่ class จริงได้ วิธีแก้ที่ idiomatic เมื่อ TypeScript reject มันคืออะไร?',
+    options: [
+      'cast double ด้วย `as any` ทุกจุดที่เรียกใช้',
+      'แยก `interface` ที่อธิบายแค่ public contract แล้ว type code ที่ใช้งานกับ interface นั้นแทน concrete class',
+      'ลบ `private` ออกจาก class จริง',
+      'ไม่มีทางแก้ — ใช้ test double กับ class ไม่ได้',
+    ],
+    answer: 1,
+    explain: 'interface ประกาศ private member ไม่ได้ ดังนั้น interface ที่แยกจาก public surface ของ class จะถูกเทียบแบบ structural ล้วน ๆ ทั้ง class จริงและ test double satisfy มันได้โดยไม่ต้อง assign เข้าหากันตรง ๆ เลย',
   },
 ];
 

@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## private มีสองแบบ
 
@@ -87,7 +89,7 @@ class UserExplicit {
 }
 ```
 
-มีอีกสองเรื่องที่เกี่ยวกัน ตั้งแต่ TypeScript 6.0 `strict` เปิดเป็นค่าเริ่มต้น `strictPropertyInitialization` จึงเปิดด้วย: field ที่ประกาศโดยไม่มี initializer ต้องถูก assign แน่นอนใน constructor (หรือใส่ `id!: string` ถ้าคุณ assign ที่อื่น) และ keyword `accessor` (5.0) ประกาศ *auto-accessor* — คู่ getter/setter ที่มี private slot รองรับ — ซึ่งเหมือน stage-3 decorator คือเป็น syntax ECMAScript มาตรฐาน จึงปลอดภัยกับการ strip type
+มีอีกสองเรื่องที่เกี่ยวกัน ตั้งแต่ TypeScript 6.0 `strict` เปิดเป็นค่าเริ่มต้น `strictPropertyInitialization` จึงเปิดด้วย: field ที่ประกาศโดยไม่มี initializer ต้องถูก assign แน่นอนใน constructor (หรือใส่ `id!: string` ถ้าคุณ assign ที่อื่น) และ keyword `accessor` (5.0) ประกาศ *auto-accessor* — คู่ getter/setter ที่มี private slot รองรับ — ซึ่งเหมือน stage-3 decorator คือเป็น syntax ECMAScript มาตรฐาน จึงปลอดภัยกับการ strip type รายละเอียดทั้งสองอยู่ด้านล่าง
 
 ## `override` และ `noImplicitOverride`
 
@@ -105,7 +107,57 @@ class Dog extends Animal {
 }
 ```
 
-อันนั้นเปิดอยู่เสมอ ส่วนที่ `noImplicitOverride` เพิ่มเข้ามาคือข้อบังคับกลับด้าน — และมัน **ไม่ได้** อยู่ใน `strict` คุณต้องเปิดแยกเอง (`"noImplicitOverride": true`) เมื่อเปิดแล้ว การ override method ของ base แบบเงียบ ๆ โดยไม่เขียน `override` จะกลายเป็น error ด้วย: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` รวมสองเช็คนี้เข้าด้วยกัน: `override` ที่ไม่ได้ตั้งใจถูกจับเสมอ และ (ถ้าเปิด flag) override ที่ลืมติดป้ายก็ถูกจับด้วย ตั้งแต่ 5.6 การเช็ค `override` ครอบคลุม member ที่ชื่อเป็น computed name อย่าง `[sym]() {}` ด้วย ส่วน `noImplicitOverride` แบบเต็ม ๆ พร้อม `private`/`#private` และ accessor จะอยู่ใน Phase 3
+อันนั้นเปิดอยู่เสมอ ส่วนที่ `noImplicitOverride` เพิ่มเข้ามาคือข้อบังคับกลับด้าน — และมัน **ไม่ได้** อยู่ใน `strict` คุณต้องเปิดแยกเอง (`"noImplicitOverride": true`) เมื่อเปิดแล้ว การ override method ของ base แบบเงียบ ๆ โดยไม่เขียน `override` จะกลายเป็น error ด้วย: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` รวมสองเช็คนี้เข้าด้วยกัน: `override` ที่ไม่ได้ตั้งใจถูกจับเสมอ และ (ถ้าเปิด flag) override ที่ลืมติดป้ายก็ถูกจับด้วย ตั้งแต่ 5.6 การเช็ค `override` ครอบคลุม member ที่ชื่อเป็น computed name อย่าง `[sym]() {}` ด้วย
+
+### เปลี่ยนชื่อ method ของ base ทำให้ overrider พัง — โดยตั้งใจ
+
+การเช็คที่เปิดตลอดของ `override` ได้ใช้จริงในวันที่มีคน rename method ของ base สมมติว่า `Animal.makeSound` ถูก rename เป็น `speak` ระหว่าง refactor และคนที่ rename ไม่เห็น `Dog` ที่อยู่ไฟล์อื่นห่างออกไปสามไฟล์ ที่ยังมี `override makeSound()` ค้างอยู่:
+
+```ts
+// @expect-error TS4113
+class Animal {
+  speak() { return "..."; } // renamed from makeSound
+}
+
+class Dog extends Animal {
+  override makeSound() { return "Woof"; } // now orphaned
+}
+```
+
+```text
+error TS4113: This member cannot have an 'override' modifier because it is not declared in the base class 'Animal'.
+```
+
+ถ้าไม่มี `override` การ rename นี้จะทำให้ `Dog.makeSound` กลายเป็น method ใหม่ที่ไม่เกี่ยวข้องเงียบ ๆ ที่ไม่มีใครเรียก — instance ของ `Dog` จะเงียบหายไม่ส่งเสียงตามที่ design เดิมตั้งใจ โดยไม่มี diagnostic ใด ๆ เลย `override` เปลี่ยน silent regression ให้เป็น compile error ที่ชี้ตรงไปยัง method ที่ถูกทิ้งไว้ ทันทีที่ base class เปลี่ยน shape นี่คือเหตุผลที่ใหญ่ที่สุดที่ควรเขียน `override` บนทุก override จริงใน codebase ที่คุณคาดว่าจะถูก refactor
+
+### `noImplicitOverride` ปิด vs เปิด
+
+การเช็คที่เปิดตลอดข้างบนจับได้แค่กรณี `override` ที่ไม่ควรอยู่ตรงนั้น มันไม่พูดถึง mistake ตรงข้าม: การ override method ของ base แบบเงียบ ๆ **โดยไม่** เขียน `override` เลย ซึ่งอ่านเหมือนกับการประกาศ method ใหม่เอี่ยมสำหรับคนที่ skim อ่าน subclass ทุกประการ:
+
+```ts
+class Animal {
+  makeSound() { return "..."; }
+}
+
+class Dog extends Animal {
+  makeSound() { return "Woof"; } // is this new, or an override? nothing here says.
+}
+```
+
+fence นี้ compile ผ่านโดยไม่มี error เลยภายใต้ setting ค่าเริ่มต้นของคอร์สนี้ — `noImplicitOverride` ไม่ได้อยู่ใน `strict` จึงปิดอยู่จนกว่า project จะเปิดเอง เปิด flag นี้ใน scratch ด้วย source เดียวกันเป๊ะ กลับผลตรงกันข้าม:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --target es2025 file.ts
+$ echo exit=$?
+exit=0
+
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --noImplicitOverride --target es2025 file.ts
+file.ts(5,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.
+$ echo exit=$?
+exit=1
+```
+
+เมื่อเปิด `noImplicitOverride` ทุก override ใน codebase — ตั้งใจหรือไม่ตั้งใจ — ต้องประกาศตัวเองใน source รวมกับการเช็คที่เปิดตลอดจากหัวข้อก่อนหน้า ทั้งสอง setting ครอบคลุมทั้งสองทิศทาง: `override` ที่ไม่ควรอยู่ กับ override ที่ควรมีแต่ไม่มี
 
 ## `static` member
 
@@ -118,6 +170,61 @@ class Circle {
 }
 
 Circle.area(2); // called on the class, not an instance
+```
+
+### `static {}` initialization block
+
+`static {}` block (TypeScript 4.4 / ES2022) รันครั้งเดียวตอน class เอง evaluate ก่อนที่ instance ใด ๆ จะมีอยู่ มี scope ของตัวเอง ใส่ setup logic ที่ field initializer expression ตัวเดียวแสดงออกไม่ได้ — และข้างในนั้น `this` หมายถึงตัว class เอง:
+
+```ts
+class Config {
+  static env: string;
+  static {
+    // runs once, at class-evaluation time -- `this` here is the class
+    Config.env = typeof process !== "undefined" ? "node" : "browser";
+  }
+  static describe(this: typeof Config) {
+    return `running in ${this.env}`;
+  }
+}
+
+console.log(Config.describe());
+```
+
+```ts
+// @run
+class Config {
+  static env: string;
+  static {
+    Config.env = typeof process !== "undefined" ? "node" : "browser";
+  }
+  static describe(this: typeof Config) {
+    return `running in ${this.env}`;
+  }
+}
+console.log(Config.describe());
+```
+
+```text
+running in node
+```
+
+มีมุมคมอยู่จุดหนึ่ง: `static readonly` field assign ข้างใน `static {}` block ไม่ได้ ทั้งที่ *instance* `readonly` field assign ใน constructor ได้ mark `env` ข้างบนเป็น `static readonly` แล้ว assign ข้างใน block จะได้ `TS2540: Cannot assign to 'env' because it is a read-only property.` — `static {}` block ไม่ถูกนับเป็น "จุด declaration" แบบที่ constructor เป็นสำหรับ instance field ดังนั้น `static readonly` field initialize ได้แค่ที่ declaration ของตัวเองเท่านั้น
+
+### `this` ใน static method
+
+ข้างใน `static` method `this` หมายถึงตัว class (หรือใน subclass คือ subclass — polymorphic แบบเดียวกับ instance `this`) ไม่ใช่ instance `new this()` เป็น pattern ทั่วไปสำหรับ static factory ที่ต้อง return *subclass ที่ถูกเรียก* จริง ๆ ไม่ใช่ base เสมอไป:
+
+```ts
+class Widget {
+  static create() {
+    return new this(); // `this` is the class actually called -- polymorphic across subclasses
+  }
+}
+class Gadget extends Widget {}
+
+const g = Gadget.create();
+console.log(g instanceof Gadget); // true -- create() returned a Gadget, not a bare Widget
 ```
 
 ## `abstract` class
@@ -150,9 +257,364 @@ class Product implements Named {
 }
 ```
 
+## `#private` ไม่ถูก erase อะไรเลย; `private` ถูก erase หมด
+
+private สองแบบจากต้นบทไม่ได้แค่ถูกเช็คต่างกัน — มันถูก **emit** ต่างกันด้วย และการดู compiler output จริงตัดปัญหาข้อสงสัยได้เลยว่าอันไหนเป็น runtime guarantee จริง
+
+```ts
+class Account {
+  private secret = "shh";
+  #pin = "1234";
+}
+```
+
+compile อันนี้ด้วย `tsc --target es2025` (JavaScript ที่ emit ออกมา คัดลอกตรง ๆ — `node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext account.ts`):
+
+```text
+"use strict";
+class Account {
+    secret = "shh";
+    #pin = "1234";
+}
+```
+
+`private` หายไปหมด — `secret` ถูก emit เป็น field ธรรมดาสาธารณะเต็มตัว เพราะ `private` ไม่เคยเป็นอะไรมากไปกว่า annotation ของ TypeScript ล้วน ๆ `#pin` ไม่ถูกแตะเลย: field ที่มี `#` นำหน้าเป็น syntax ECMAScript native ดังนั้น compiler ไม่มีอะไรต้อง erase ผลลัพธ์ตอน runtime ตามมาตรง ๆ:
+
+```ts
+// @run
+class Account {
+  private secret = "shh";
+  #pin = "1234";
+  reveal() {
+    return (this as any).secret; // reads straight through the erased annotation
+  }
+}
+const a = new Account();
+console.log((a as any).secret); // ✅ runs -- private was only ever a compile-time label
+console.log(a.reveal());
+```
+
+```text
+shh
+shh
+```
+
+ทั้งสองบรรทัด print `shh` `(a as any).secret` compile และรันได้โดยไม่มีปัญหา เพราะตอน runtime ไม่มี private *field* แบบนี้อยู่จริง — มีแค่ property ธรรมดาชื่อ `secret` ที่ type checker แค่ไม่ยอมให้คุณ *เอ่ยชื่อ* โดยไม่ cast ลองทำแบบเดียวกันกับ `#pin` — `(a as any)['#pin']` หรือแม้แต่ `(a as any).#pin` — จะพัง: ไม่มี string property key ชื่อ `#pin` ให้หา และ `#pin` นอก class body เป็น `SyntaxError` ตอน parse ไม่ใช่ runtime access failure `private` เป็นสัญญาที่ compiler รักษาได้แค่ตราบใดที่คุณไม่ขอให้มันมองข้าม `#private` เป็นสัญญาที่ตัวภาษาเองรักษา
+
+## Accessor: `get`/`set` และ `accessor`
+
+คู่ `get`/`set` ทำให้ property หน้าตาเหมือน field ธรรมดาจากภายนอก ในขณะที่รัน code ทุกครั้งที่อ่านหรือเขียน ตั้งแต่ TypeScript 4.3 getter กับ setter ไม่ต้องตกลง type เดียวกันเป๊ะอีกต่อไป — setter รับ type ที่ **กว้างกว่า** ที่ getter return ได้ ซึ่งมีประโยชน์สำหรับ property ที่ normalize ค่าอะไรก็ตามที่มันได้รับ:
+
+```ts
+class Temperature {
+  #celsius = 0;
+  get value(): number {
+    return this.#celsius;
+  }
+  set value(input: number | string) { // wider than the getter's return type
+    this.#celsius = typeof input === "string" ? Number(input) : input;
+  }
+}
+
+const t = new Temperature();
+t.value = "21.5"; // ✅ the setter accepts a string too
+const c: number = t.value; // ✅ but reading it back always gives the narrower number
+```
+
+อันนี้ compile ผ่านสะอาดภายใต้ `--strict` บน TypeScript 7.0.2 — asymmetric accessor ได้รับอนุญาตตั้งแต่ 4.3 ไม่เปลี่ยนจนถึง 7
+
+การเขียน getter กับ setter ที่แค่อ่านและเขียน private backing field ตัวเดียวกันเกิดบ่อยพอที่ TypeScript 4.9 เพิ่ม shorthand: keyword `accessor` ประกาศ **auto-accessor** — คู่ getter/setter จริง ที่มี private slot สร้างอัตโนมัติรองรับ จาก declaration เดียวที่หน้าตาเหมือน field:
+
+```ts
+class Counter {
+  accessor count = 0;
+}
+```
+
+JavaScript ที่ emit ออกมา (`tsc --target es2025`) แสดงชัดว่า `accessor` ขยายออกเป็นอะไร — private storage slot บวก `get`/`set` จริง ไม่ใช่ field ธรรมดา:
+
+```text
+"use strict";
+class Counter {
+    #count_accessor_storage = 0;
+    get count() { return this.#count_accessor_storage; }
+    set count(value) { this.#count_accessor_storage = value; }
+}
+```
+
+เพราะการขยายนั้นเป็น standard ECMAScript output (field `#` บวก accessor ธรรมดา) `accessor` จึงปลอดภัยกับการ strip เหมือน stage-3 decorator — และไม่ใช่เรื่องบังเอิญที่ member แบบ `accessor` คือสิ่งที่ stage-3 **accessor decorator** (อยู่ในบท Decorators) ถูกออกแบบมาให้ดักได้พอดี
+
+## generic class ที่ infer ไม่ได้: สรุปหนึ่งบรรทัด
+
+บท Generic Classes & Interfaces ครอบคลุมเรื่องนี้ในเชิงลึกไปแล้ว: เมื่อ type parameter ของ generic class ไม่มีอะไรให้ infer ตอน construct (`new Stack()` ไม่มี argument และไม่มี type annotation) `T` resolve เป็น `unknown` ไม่ใช่ `any` — parameter position ยอมรับทุกอย่าง แต่การอ่านค่ากลับออกมายังต้อง narrow ก่อน ถ้าส่วนไหนไม่คุ้นเคย ดู [Generic Classes & Interfaces](/typescript/th/generics/generic-classes-and-interfaces/) ก่อนอ่านต่อ เนื้อหาข้างล่างสมมติว่าคุณอ่าน type parameter ของ class ได้คล่องแล้ว
+
+## bug เรื่อง init order ของ class field: `useDefineForClassFields`
+
+emit target ค่าเริ่มต้นของคอร์สนี้ (ES2022+) ใช้ native JavaScript class field ซึ่งติดตั้งด้วย **`[[DefineOwnProperty]]`** (semantics แบบ "define") แทน semantics **`[[Set]]`** ของ assignment operator ธรรมดา ความต่างนี้ฟังดูวิชาการจนกว่า base class จะ set property ก่อนที่ field initializer ของ subclass จะรัน — ตอนนั้นมันสร้าง bug ที่เซอร์ไพรส์จริง ๆ
+
+### การเขียนของ base constructor ถูกเขียนทับเงียบ ๆ
+
+```ts
+// A framework base class that assigns arbitrary properties dynamically --
+// e.g. Object.assign(this, data) from a config object, common in ORMs,
+// "reactive props" mixins, and record base classes.
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  name: string = ""; // re-declared for typing -- carries its own initializer
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // you might expect "Ada"...
+```
+
+```ts
+// @run
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  name: string = "";
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+```
+
+```text
+(empty string)
+```
+
+output เป็น **string ว่างเปล่า** ไม่ใช่ `"Ada"` `super(data)` รันก่อนและเรียก `Object.assign(this, data)` ซึ่ง set `name` เป็น `"Ada"` จริง — แต่แค่ชั่วครู่ พอ `super()` return field initializer ของ `UserRecord` *เอง* รันต่อ ตามที่ native class-field semantics บังคับ และ `name: string = ""` re-define `name` กลับเป็น `""` แบบไม่มีเงื่อนไข — เขียนทับค่าที่ base constructor เพิ่ง set ไป ไม่มีอะไรดูผิดถ้าอ่านจากบนลงล่าง bug นี้อยู่ที่ลำดับที่ทั้งสอง mechanism รันล้วน ๆ
+
+### วิธีแก้: `declare` เอา field ออกจาก emit ทั้งหมด
+
+```ts
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  declare name: string; // type-only -- no [[DefineOwnProperty]] is emitted for this field
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // "Ada" -- nothing re-defines it after Object.assign runs
+```
+
+```ts
+// @run
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  declare name: string;
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+```
+
+```text
+Ada
+```
+
+`declare` บอก compiler ว่า "เชื่อฉันเถอะ property นี้มีอยู่จริงตอน runtime ผ่านทางอื่น" โดยไม่ emit อะไรให้มันเลย — ไม่มี field ไม่มี initializer ไม่มีการเรียก `[[DefineOwnProperty]]` มาทับสิ่งที่ `Object.assign` เขียนไปแล้ว นี่คือวิธีแก้ idiomatic ทุกครั้งที่ subclass ต้อง *type* property ที่ base class (หรือ decorator หรือ framework runtime) เป็นคนสร้างจริง ๆ
+
+### `[[Define]]` เทียบ `[[Set]]` เคียงข้างกัน
+
+flag ที่คุมเรื่องนี้คือ `useDefineForClassFields` ค่าเริ่มต้นเป็น `true` เมื่อไรก็ตามที่ compile target เป็น ES2022 ขึ้นไป (นี่คือเหตุผลที่ bug ข้างบนโผล่มาภายใต้ setting ของคอร์สนี้โดยไม่ต้องตั้งอะไรเอง) compile source *เดียวกันเป๊ะ* โดยบังคับปิด flag แสดงความต่างของ emit ตรง ๆ — subclass field ที่ไม่มี initializer เลยจะ emit **ไม่มีอะไรเลย** ดังนั้นมันจะไม่มีทาง shadow อะไรที่ base class ให้มา:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext --useDefineForClassFields false accessor-shadow.ts
+```
+
+จาก source นี้ (base class ที่ `value` เป็น `get`/`set` accessor จริง — ตัวแทนของ reactive-property system ของ UI framework):
+
+```ts
+// @expect-error TS2564 TS2610
+class ReactiveBase {
+  #stored = "framework-default";
+  get value() { return this.#stored; }
+  set value(v: string) { this.#stored = v; console.log(`setter ran: ${v}`); }
+}
+
+class Widget extends ReactiveBase {
+  value: string; // plain re-declaration -- no initializer
+}
+```
+
+ค่าเริ่มต้น (`useDefineForClassFields: true` พฤติกรรม native ของ ES2022+) emit field declaration เปล่า ๆ ที่ยังติดตั้ง own property ใหม่ตอน construct อยู่ดี shadow accessor ที่สืบทอดมาถาวร:
+
+```text
+class Widget extends ReactiveBase {
+    value; // -- installs an own data property, hiding ReactiveBase's accessor forever
+}
+```
+
+รันแล้ว print `undefined` ตอนอ่าน และไม่เคย log `setter ran` เลย — accessor หายไป ด้วย `--useDefineForClassFields false` source เดียวกันเป๊ะ emit ไม่มีอะไรสำหรับ field แทน:
+
+```text
+class Widget extends ReactiveBase {
+}
+```
+
+และ accessor ของ base class รอดไม่ถูกแตะ — setter รันจริง อ่านเขียน `value` ผ่านมันได้ถูกต้อง type checker ของ TypeScript จริง ๆ แล้ว flag pattern นี้ทันทีที่เห็น ไม่ว่า flag จะเป็นอะไร: `TS2610: 'value' is defined as an accessor in class 'ReactiveBase', but is overridden here in 'Widget' as an instance property.` — ควรฟังไว้ แม้ว่า (ตามที่หัวข้อนี้เพิ่งแสดง) ผลลัพธ์ตอน *runtime* จริง ๆ จะขึ้นอยู่กับ `useDefineForClassFields`
+
+<TSPlayground code={initOrderCode} id="classes-deep-init-order" title="Object.assign in a base constructor, undone by a subclass field" />
+
+export const initOrderCode = `class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  name: string = ""; // -- ES2022 class-field semantics re-define this AFTER super() runs
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // "" -- not "Ada" -- the field initializer wins the race`;
+
+กด **Run**: ได้ string ว่าง ไม่ใช่ `"Ada"` เปลี่ยน `name: string = "";` เป็น `declare name: string;` แล้วกด **Run** อีกครั้งเพื่อดูวิธีแก้
+
+## `instanceof` ไม่ได้เช็ค shape
+
+`instanceof` เดิน prototype chain ของ object เพื่อหา `prototype` ของ class — เป็น runtime identity check ไม่ใช่ structural check และมันมีขีดจำกัดจริงที่ควรรู้ก่อนจะเอาไปใช้ใน code ที่ generate มาหรือ code แบบ defensive:
+
+```ts
+class Money {
+  cents: number;
+  constructor(cents: number) {
+    this.cents = cents;
+  }
+}
+
+// An object that looks exactly like a Money instance -- same shape, same
+// prototype -- but was never built by calling `new Money(...)` (it could
+// have crossed a JSON boundary and been re-attached to the prototype by hand).
+const fromApi = Object.assign(Object.create(Money.prototype), { cents: 500 });
+console.log(fromApi instanceof Money); // true -- same prototype, so instanceof agrees
+
+const plainDuck = { cents: 500 }; // identical shape, ordinary Object.prototype
+console.log(plainDuck instanceof Money); // false -- instanceof only looks at the prototype chain
+```
+
+```ts
+// @run
+class Money {
+  cents: number;
+  constructor(cents: number) {
+    this.cents = cents;
+  }
+}
+const fromApi = Object.assign(Object.create(Money.prototype), { cents: 500 });
+console.log(fromApi instanceof Money);
+const plainDuck = { cents: 500 };
+console.log(plainDuck instanceof Money);
+```
+
+```text
+true
+false
+```
+
+มีสองช่องว่างที่รู้จักกันดีและเกี่ยวข้องกัน: `instanceof` พังข้าม **realm** — array ที่สร้างข้างใน `<iframe>`, `vm` context แยกต่างหาก หรือ worker มี `Array.prototype` *เป็นของตัวเอง* ดังนั้น `arr instanceof Array` เป็น `false` ได้สำหรับ array จริงที่มาจากที่อื่นแค่นั้น — และมันพังกับ object แบบ duck-typed ที่สร้างโดยไม่ผ่าน constructor จริง เหมือน `plainDuck` ข้างบนเป๊ะ ข้อมูลที่ถูก serialize แล้ว parse (JSON, message-passing boundary, database row) ไม่เคยมี prototype chain ตั้งแต่แรก การเช็ค `instanceof` กับมันคือการเช็คผิดเรื่องไปเลย
+
+### `Symbol.hasInstance`: ทำให้ `instanceof` รู้จัก shape ได้โดยตั้งใจ
+
+`instanceof` เอง customize ได้: class (หรือ object ใดก็ตาม) implement `[Symbol.hasInstance]` เพื่อนิยาม `x instanceof C` ใหม่ได้ รวมถึงเปลี่ยนมันให้เป็น structural check จริง ๆ:
+
+```ts
+interface Money { cents: number }
+
+class MoneyChecker {
+  static [Symbol.hasInstance](obj: unknown): obj is Money {
+    return typeof obj === "object" && obj !== null && typeof (obj as Money).cents === "number";
+  }
+}
+
+console.log({ cents: 500 } instanceof MoneyChecker); // true -- shape-based now, custom hook
+console.log({ dollars: 5 } instanceof MoneyChecker); // false
+```
+
+```ts
+// @run
+interface Money { cents: number }
+class MoneyChecker {
+  static [Symbol.hasInstance](obj: unknown): obj is Money {
+    return typeof obj === "object" && obj !== null && typeof (obj as Money).cents === "number";
+  }
+}
+console.log({ cents: 500 } instanceof MoneyChecker);
+console.log({ dollars: 5 } instanceof MoneyChecker);
+```
+
+```text
+true
+false
+```
+
+นี่เป็น escape hatch ที่มีประโยชน์จริง แต่ใช้เกินความจำเป็นกับ plain data ได้ง่าย สำหรับข้อมูลที่ข้าม boundary — JSON ที่ parse แล้ว, database row, message payload — **discriminant property** ที่เช็คด้วย `if` ธรรมดา (pattern จากบท discriminated union ของบท narrowing) ง่ายกว่า ไม่ต้อง customize language operator และเป็นสิ่งที่ validation code จริงและ schema library ส่วนใหญ่ใช้จริง เก็บ `Symbol.hasInstance` ไว้สำหรับ identity check จริง ๆ กับ class instance จริงที่อาจข้าม realm boundary ได้อย่างชอบธรรม
+
 <Callout title="สรุปหนึ่งบรรทัด">
-`private`, `protected`, `readonly`, `abstract` และ `implements` เป็น **compile-time** guarantee ที่ erase ตอน emit — ช่วยเรื่องความถูกต้อง ไม่ได้ถูกบังคับตอน runtime ส่วน `#private` field และ `static` member เป็น construct **runtime จริง ๆ** ใช้ parameter property ลด boilerplate และจำไว้ว่า `implements` แค่ *เช็ค* structural conformance เฉย ๆ ไม่ได้ copy อะไร
+`private`/`protected`/`abstract`/`implements` เป็น guarantee ระดับ **compile-time** ที่ erase ตอน emit (`private` field อ่านได้เต็มที่ผ่าน `(obj as any).field`); `#private` field, `static` member, `static {}` block และ slot ที่ `accessor` keyword สร้างเป็น construct **runtime จริง ๆ** `override` จับ method ที่ไม่เกี่ยวข้องมาปลอมเป็น override ได้ทั้งสองทาง — `override` ที่ถูกทิ้งไว้หลัง base rename (เปิดตลอด `TS4113`) และ override เงียบ ๆ ที่ไม่ติดป้าย (`noImplicitOverride` opt-in `TS4114`) native class field ของ ES2022+ ใช้ semantics `[[DefineOwnProperty]]` ซึ่ง silently เขียนทับค่าที่ base constructor set ไปแล้วผ่าน mechanism อื่น (`Object.assign`, accessor) ได้ — `declare` เอา field ออกจาก emit ทั้งหมดเพื่อไม่ให้มี shadow เกิดขึ้น `instanceof` เช็ค prototype chain ไม่ใช่ shape มันพังข้าม realm และกับ duck-typed data และ `Symbol.hasInstance` คือวิธี (ที่ไม่ค่อยจำเป็น) ทำให้มันรู้จัก shape โดยตั้งใจ
 </Callout>
+
+## Mental Model
+
+สำหรับทุก feature ของ class ในบทนี้ ให้ถามว่า **"อันนี้มีอยู่ใน JavaScript ที่ emit ออกมาจริง หรือมีแค่ในหัวของ type checker?"** `private`, `protected`, `abstract`, `implements` และ `override` หายไปหมดตอน compile — ถูกเช็คครั้งเดียวแล้วก็จบ ซึ่งเป็นเหตุผลที่คนตั้งใจจริงเอาชนะมันได้ด้วย `any` ส่วน `#private` field, `static` member, `static {}` block, private slot ของ `accessor` keyword และการ assign field initializer เบื้องหลัง `useDefineForClassFields` ล้วนเป็น code จริงที่รัน — ตรงนี้แหละที่ bug เซอร์ไพรส์ในบทนี้ (ช่องว่างการ erase, bug init order, bug accessor-shadow) มาจาก: mechanism ตอน *runtime* สองตัวแข่งกันหรือชนกัน ไม่ใช่ compiler ผิดพลาด
+
+## ข้อแลกเปลี่ยน
+
+| Feature | ประโยชน์ | ต้นทุน |
+|---|---|---|
+| `private` / `protected` | บอก intent, ไม่มีต้นทุนตอน runtime, จับ mistake ที่ตั้งใจดี | erase ตอน emit — ไม่ใช่ security boundary จริง; `(obj as any).field` เข้าถึงมันได้ |
+| `#private` | privacy จริงตอน runtime, ปลอมไม่ได้, ใช้เป็น brand check ได้ (`#x in obj`) | ceremony เพิ่มนิดหน่อย; เข้าถึงไม่ได้แม้จาก subclass ที่ชอบธรรม (ต่างจาก `protected`) |
+| `override` (เปิดตลอด) | จับ override ที่ถูกทิ้งไว้หลัง base class rename ใด ๆ โดยไม่ต้องตั้ง config | จับ mistake ตรงข้ามไม่ได้ — override เงียบ ๆ ที่ไม่ติดป้าย |
+| `noImplicitOverride` | จับ override เงียบ ๆ ทุกตัวด้วย | ไม่ได้อยู่ใน `strict`; opt-in ที่หลาย codebase ไม่ได้เปิด |
+| field initializer (`name = ""`) | กระชับ รับประกันค่า default | ภายใต้ `useDefineForClassFields` re-define property หลัง `super()` เสมอ แม้ base class จะ set มันไปแล้วผ่าน mechanism อื่น |
+| `declare` field | ไม่ emit อะไรเลย — ไม่ shadow ค่าที่ base ให้มา | เป็นแค่ type annotation ล้วน ๆ; runtime value ต้องมีจริงผ่านทางอื่น ไม่งั้นอ่านได้ `undefined` |
+| `instanceof` | เร็ว built-in ไม่ต้องเขียน code | พังข้าม realm และกับ duck-typed/deserialized data — เช็ค identity ไม่ใช่ shape |
+| `Symbol.hasInstance` | ทำให้ `instanceof` รู้จัก shape ได้โดยตั้งใจ | customize language operator — discriminant check ธรรมดาง่ายกว่าสำหรับการเช็ค shape ของข้อมูลส่วนใหญ่ |
+
+## ความเข้าใจผิดที่พบบ่อย
+
+- **`private` ป้องกัน field ไม่ให้ถูกอ่านตอน runtime** ไม่จริง — มัน erase หายไปทั้งหมด และ JavaScript ที่ emit ออกมาแสดง field เป็น property สาธารณะธรรมดาเต็มตัว มีแค่ `#private` เท่านั้นที่เป็น runtime boundary จริง
+- **`override` อย่างเดียวแปลว่า "ปลอดภัยจากการเปลี่ยน base class"** มันจับได้แค่กรณีที่ base member *หายไป* (`TS4113` เปิดตลอด) การจับ override เงียบ ๆ ที่ไม่ติดป้ายของ member ที่ยังอยู่ ต้องใช้ flag แยกต่างหาก opt-in คือ `noImplicitOverride`
+- **field declaration ของ subclass เป็นแค่ "documentation" ถ้าไม่มี initializer หรือไม่เป็นอันตรายถ้ามันซ้ำ default ที่ base ตั้งไว้แล้ว** ภายใต้ `useDefineForClassFields` (ค่าเริ่มต้นตั้งแต่ ES2022) field declaration ใด ๆ — มี initializer หรือไม่ — ติดตั้ง own property ใหม่ตอน construct ซึ่ง silently เขียนทับหรือ shadow ค่าที่ base class set ผ่าน constructor side effect หรือ accessor ที่สืบทอดมาได้
+- **`instanceof` เช็คว่า object มี shape ถูกต้องไหม** มันเช็คว่า prototype chain ของ object มี `prototype` ของ constructor นั้นรวมอยู่ไหม — เป็นคำถามเรื่อง identity ล้วน ๆ ไม่ใช่ structural ข้อมูลที่ deserialize แล้วและ object ข้าม realm พัง `instanceof` เป็นประจำ ทั้งที่มี shape ที่ถูกต้องเหมือนกันเป๊ะ
+
+## อ่านโค้ดที่ AI เขียน
+
+code ของ class ที่ generate มามักพึ่ง mechanism ที่บทนี้เพิ่งแสดงว่ามีมุมคม:
+
+- **subclass re-declare field ที่ base class "ควรจะ" ให้มา (ผ่าน constructor side effect, decorator หรือ framework base class)** ถามว่า base จริง ๆ assign มัน *ก่อน* หรือ *หลัง* `super()` return เทียบกับ field initializer ของ subclass เอง ถ้า base set มันผ่านอะไรก็ตามที่ไม่ใช่ field initializer ธรรมดาบน base เอง field ของ subclass มีโอกาสสูงมากที่กำลัง clobber มันอยู่ — `declare` เกือบทุกครั้งคือวิธีแก้
+- **`instanceof` ถูกใช้ validate ข้อมูลที่ข้าม network หรือ storage boundary** (JSON response ที่ parse แล้ว, deserialized queue message) เป็น smell ของ generated code ที่พบบ่อย: ข้อมูลนั้นไม่เคยมี prototype chain ดังนั้นเช็คนี้จะพังตลอดหรือไม่เคยถูกทดสอบจริงใน test ที่ "พิสูจน์" ว่ามันทำงาน discriminant property หรือ schema check ควรอยู่ตรงนั้นแทน
+- **`private` ถูกใช้ราวกับเป็น security boundary** — เช่นเก็บค่าที่ sensitive จริง ๆ (token, secret) ใน `private` field แล้วถือว่าปกป้องพอแล้ว ตัวอย่าง emitted-JS ของบทนี้เองแสดงตรง ๆ ว่าทำไมมันไม่จริง: `(value as any).secret` อ่านมันได้โดยไม่มีอะไรขวาง
+
+<SpotTheBug code={`class WidgetBase {
+  constructor(config: Record<string, unknown>) {
+    Object.assign(this, config);
+  }
+}
+
+class Button extends WidgetBase {
+  label: string = "Click me";
+}
+
+const b = new Button({ label: "Submit" });
+console.log(b.label);`}>
+อันนี้ print `"Click me"` ไม่ใช่ `"Submit"` — ตรงข้ามกับสิ่งที่ argument ของ call site บอกใบ้ `super(config)` รัน `Object.assign(this, config)` ก่อน ซึ่ง set `label` เป็น `"Submit"` จริง ๆ ชั่วครู่ แต่ field initializer ของ `Button` เอง `label: string = "Click me"` รันทันทีหลัง `super()` return ตาม native ES2022+ class-field semantics และ re-define `label` กลับเป็น default แบบไม่มีเงื่อนไข — เขียนทับสิ่งที่ `Object.assign` ของ base constructor เพิ่ง write ไป วิธีแก้คือ `declare label: string;` บน `Button`: type-only declaration ไม่ emit field เลย ดังนั้นไม่มีอะไรรันหลัง `super()` มา clobber ค่าที่ `Object.assign` ให้มา
+</SpotTheBug>
 
 export const quizDeep = [
   {
@@ -164,6 +626,7 @@ export const quizDeep = [
       '`private` ใช้ได้กับ method เท่านั้น',
     ],
     answer: 1,
+    explain: 'emit class ออกมาแสดงตรง ๆ: `private secret` กลายเป็น field สาธารณะธรรมดาชื่อ `secret` ใน output ส่วน `#pin` ไม่ถูกแตะเลย — มันเป็น ECMAScript syntax native ที่ไม่มีอะไรต้อง erase',
   },
   {
     q: 'parameter property (เช่น `constructor(public id: string)`) ทำอะไร?',
@@ -174,36 +637,51 @@ export const quizDeep = [
       'mark class ให้ abstract',
     ],
     answer: 1,
+    explain: 'access modifier บน constructor parameter เป็น shorthand ของการ declare field แล้วเขียน `this.id = id;` ใน constructor body — แต่การทำแบบนี้ต้องให้ compiler emit code ให้ ซึ่งเป็นเหตุผลที่มันพังภายใต้ setting แบบ erasable-syntax-only',
   },
   {
-    q: 'ภายใต้ `--erasableSyntaxOnly` (หรือ Node strip type) `constructor(public id: string)` จะเป็นอย่างไร?',
+    q: '```ts\nclass Animal {\n  speak() { return "..."; } // renamed from makeSound\n}\nclass Dog extends Animal {\n  override makeSound() { return "Woof"; }\n}\n```\nเกิดอะไรขึ้นตรงนี้ แล้วทำไม?',
     options: [
-      'ใช้ได้ — modifier ถูกลบทิ้ง',
-      'เป็น error เพราะ parameter property ต้องให้ compiler emit code ให้ ต้องประกาศ field แล้ว assign เองแทน',
-      'กลายเป็น static member',
-      'ถูกละเลยเงียบ ๆ',
+      'compile ผ่าน — `override` เป็นแค่ documentation',
+      'TS4113: `override` ถูก reject เพราะ `Animal` ไม่มี member `makeSound` ให้ `Dog` override อีกต่อไป — เช็คนี้เปิดตลอดไม่ต้องใช้ flag',
+      'TS4114 — ต้องเปิด `noImplicitOverride` ก่อน',
+      'compile ผ่าน แต่ method ไม่ทำอะไรเลยตอน runtime',
     ],
     answer: 1,
+    explain: 'ต่างจาก `noImplicitOverride` การเช็คว่า `override` member นั้น override อะไรจริงหรือเปล่าเปิดอยู่เสมอ หลัง rename `Dog.makeSound` ไม่ตรงกับอะไรใน `Animal` อีกต่อไป TypeScript จึง report TS4113 ชี้ตรงไปยัง override ที่ถูกทิ้งไว้ — จับสิ่งที่จะเป็น silent behavioral regression ได้',
   },
   {
-    q: '`static` member อยู่ที่ไหน?',
+    q: 'class ประกาศ `makeSound()` ใน subclass ตรงกับ method ชื่อเดียวกันของ base class แต่ไม่มี keyword `override` ภายใต้ setting ค่าเริ่มต้นของคอร์สนี้ (strict แต่ `noImplicitOverride` ปิด) อันนี้เกิด error ไหม?',
     options: [
-      'อยู่บนทุก instance',
-      'อยู่บนตัว class เอง (constructor) ไม่ใช่บน instance',
-      'อยู่ในอีก module',
-      'ถูก erase ตอน compile',
+      'ใช่ ทันที — override โดยไม่มี `override` เป็น error เสมอ',
+      'ไม่ — `noImplicitOverride` ไม่ได้อยู่ใน `strict` และปิดเป็นค่าเริ่มต้น source เดียวกันเป๊ะจะได้ TS4114 ก็ต่อเมื่อเปิด `--noImplicitOverride` ตรง ๆ เท่านั้น',
+      'ใช่ แต่เฉพาะไฟล์ `.tsx`',
+      'ไม่ และเปิด `noImplicitOverride` ก็ไม่เปลี่ยนอะไรเหมือนกัน',
     ],
     answer: 1,
+    explain: 'เช็คกลับด้าน — flag override ที่ขาด keyword `override` — ถูก gate ไว้หลัง flag opt-in `noImplicitOverride` ทั้งหมด ซึ่ง strict mode ไม่ได้เปิดให้ source เดียวกันเป๊ะ compile ผ่านสะอาดโดยไม่มี flag และพังด้วย TS4114 ทันทีที่เปิด flag',
   },
   {
-    q: '`implements Named` จริง ๆ แล้วทำอะไร?',
+    q: '```ts\nclass RecordBase {\n  constructor(data: Record<string, unknown>) {\n    Object.assign(this, data);\n  }\n}\nclass UserRecord extends RecordBase {\n  name: string = "";\n}\nconst u = new UserRecord({ name: "Ada" });\nconsole.log(u.name);\n```\nอันนี้ log อะไร แล้วทำไม?',
     options: [
-      'copy member ของ interface เข้ามาใน class',
-      'assert ตอน compile ว่า class satisfy interface เชิง structural โดย report mismatch ที่จุดนิยาม class',
-      'สร้าง runtime inheritance',
-      'ทำให้ class เป็น abstract',
+      '`"Ada"` — `Object.assign` ใน base constructor set มัน',
+      '`""` — field initializer ของ `UserRecord` เองรันหลัง `super()` return และ re-define `name` กลับเป็น default เขียนทับสิ่งที่ `Object.assign` เพิ่ง set ไป',
+      'compile error — `name` ถูก declare สองครั้ง',
+      '`undefined` — class field ไม่ถูก initialize อย่างถูกต้องตรงนี้',
     ],
     answer: 1,
+    explain: 'ภายใต้ native class-field semantics ของ ES2022+ ("useDefineForClassFields") field declaration ทุกตัว — มี initializer หรือไม่ — ติดตั้ง own property ใหม่ผ่าน [[DefineOwnProperty]] ทันทีหลัง `super()` return ซึ่งเกิดหลังจาก `Object.assign` ของ base constructor รันไปแล้ว ค่า default ของ field initializer เลยชนะ `declare name: string;` เอา field ออกจาก emit ทั้งหมดและแก้ปัญหานี้',
+  },
+  {
+    q: 'ทำไม `instanceof` ให้ `false` กับ plain object `{ cents: 500 }` ทั้งที่มัน shape เหมือน `Money` instance จริงเป๊ะ?',
+    options: [
+      '`instanceof` เสีย ไม่ควรใช้',
+      '`instanceof` เดิน prototype chain หา `Money.prototype` — มันเช็ค identity/lineage ไม่ใช่ shape และ plain object ไม่เคยถูกผูกกับ prototype นั้นเลย',
+      'เพราะ object ขาด method `toString`',
+      'เพราะ `Money` ใช้ `private` field',
+    ],
+    answer: 1,
+    explain: '`instanceof` เป็น runtime identity check บน prototype chain ไม่เกี่ยวกับ structural shape object แบบ duck-typed, JSON payload ที่ deserialize แล้ว หรือ object ที่สร้างใน realm อื่น มี shape ที่ถูกต้องเหมือนกันเป๊ะแต่พัง `instanceof` ได้ เพราะไม่เคยถูก construct จริงผ่าน `new Money(...)` หรือถูกผูกกับ `Money.prototype` แต่อย่างใด',
   },
 ];
 

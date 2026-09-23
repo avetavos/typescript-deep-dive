@@ -8,6 +8,8 @@ sidebar:
 import Callout from '../../../../components/Callout.astro';
 import Quiz from '../../../../components/Quiz.tsx';
 import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
 
 ## Two kinds of private
 
@@ -87,7 +89,7 @@ class UserExplicit {
 }
 ```
 
-Two related notes. Since TypeScript 6.0, `strict` is on by default, so `strictPropertyInitialization` is too: a field declared without an initializer must be definitely assigned in the constructor (or marked `id!: string` if you assign it elsewhere). And the `accessor` keyword (5.0) declares an *auto-accessor* — a getter/setter pair backed by a private slot — which, like stage-3 decorators, is standard ECMAScript syntax and therefore erasable-safe.
+Two related notes. Since TypeScript 6.0, `strict` is on by default, so `strictPropertyInitialization` is too: a field declared without an initializer must be definitely assigned in the constructor (or marked `id!: string` if you assign it elsewhere). And the `accessor` keyword (5.0) declares an *auto-accessor* — a getter/setter pair backed by a private slot — which, like stage-3 decorators, is standard ECMAScript syntax and therefore erasable-safe. More on both below.
 
 ## `override` and `noImplicitOverride`
 
@@ -105,7 +107,57 @@ class Dog extends Animal {
 }
 ```
 
-That's always on. What `noImplicitOverride` adds is the mirror requirement — and it is *not* part of `strict`, so you opt in separately (`"noImplicitOverride": true`). With it enabled, silently overriding a base method without writing `override` becomes an error too: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` Together the two checks mean an `override` you didn't intend is always caught, and (with the flag) one you forgot to label is caught as well. Since 5.6 the `override` checks also apply to members with computed names such as `[sym]() {}`; Phase 3 covers `noImplicitOverride` alongside `private`/`#private` and accessors in depth.
+That's always on. What `noImplicitOverride` adds is the mirror requirement — and it is *not* part of `strict`, so you opt in separately (`"noImplicitOverride": true`). With it enabled, silently overriding a base method without writing `override` becomes an error too: `TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.` Together the two checks mean an `override` you didn't intend is always caught, and (with the flag) one you forgot to label is caught as well. Since 5.6 the `override` checks also apply to members with computed names such as `[sym]() {}`.
+
+### A base-method rename breaks its overriders — on purpose
+
+`override`'s always-on check earns its keep the day someone renames a base method. Suppose `Animal.makeSound` gets renamed to `speak` in a refactor, and the person doing the rename never sees `Dog`, three files away, that still has `override makeSound()`:
+
+```ts
+// @expect-error TS4113
+class Animal {
+  speak() { return "..."; } // renamed from makeSound
+}
+
+class Dog extends Animal {
+  override makeSound() { return "Woof"; } // now orphaned
+}
+```
+
+```text
+error TS4113: This member cannot have an 'override' modifier because it is not declared in the base class 'Animal'.
+```
+
+Without `override`, this rename would silently turn `Dog.makeSound` into a brand-new, unrelated method that nothing calls — `Dog` instances would quietly stop making a sound the way the original design intended, with zero diagnostics anywhere. `override` turns a silent behavioral regression into a compile error, pointing at the exact orphaned method, the moment the base class changes shape. This is the single biggest reason to write `override` on every genuine override in a codebase you expect to be refactored.
+
+### `noImplicitOverride`, flag off vs on
+
+The always-on check above only catches an `override` that shouldn't be there. It says nothing about the opposite mistake: quietly overriding a base method **without** writing `override` at all, which reads exactly like declaring a brand-new method to anyone skimming the subclass:
+
+```ts
+class Animal {
+  makeSound() { return "..."; }
+}
+
+class Dog extends Animal {
+  makeSound() { return "Woof"; } // is this new, or an override? nothing here says.
+}
+```
+
+This fence compiles with zero errors under this course's default settings — `noImplicitOverride` is not part of `strict`, so it is off unless a project opts in. Turning it on in scratch with the exact same source reverses the result:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --target es2025 file.ts
+$ echo exit=$?
+exit=0
+
+$ node_modules/typescript/bin/tsc --ignoreConfig --noEmit --strict --noImplicitOverride --target es2025 file.ts
+file.ts(5,3): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Animal'.
+$ echo exit=$?
+exit=1
+```
+
+With `noImplicitOverride` on, every override in the codebase — intentional or not — has to say so in the source. Combined with the always-on typo check from the previous section, the two settings cover both directions: an `override` that shouldn't be there, and one that should be but isn't.
 
 ## `static` members
 
@@ -118,6 +170,61 @@ class Circle {
 }
 
 Circle.area(2); // called on the class, not an instance
+```
+
+### `static {}` initialization blocks
+
+A `static {}` block (TypeScript 4.4 / ES2022) runs once, when the class itself is evaluated, before any instance exists. It has its own scope, can contain arbitrary setup logic that a single field initializer expression can't express, and — inside it — `this` refers to the class itself:
+
+```ts
+class Config {
+  static env: string;
+  static {
+    // runs once, at class-evaluation time -- `this` here is the class
+    Config.env = typeof process !== "undefined" ? "node" : "browser";
+  }
+  static describe(this: typeof Config) {
+    return `running in ${this.env}`;
+  }
+}
+
+console.log(Config.describe());
+```
+
+```ts
+// @run
+class Config {
+  static env: string;
+  static {
+    Config.env = typeof process !== "undefined" ? "node" : "browser";
+  }
+  static describe(this: typeof Config) {
+    return `running in ${this.env}`;
+  }
+}
+console.log(Config.describe());
+```
+
+```text
+running in node
+```
+
+One sharp edge: a `static readonly` field cannot be assigned inside a `static {}` block, even though an *instance* `readonly` field can be assigned inside the constructor. Marking `env` above as `static readonly` and assigning it inside the block produces `TS2540: Cannot assign to 'env' because it is a read-only property.` — a `static {}` block is not treated as "the declaration" the way a constructor is for instance fields, so a `static readonly` field can only be initialized in its own declaration.
+
+### `this` in a static method
+
+Inside a `static` method, `this` refers to the class (or, in a subclass, the subclass — it is polymorphic the same way instance `this` is), not an instance. `new this()` is a common pattern for a static factory that must return the *calling* subclass, not always the base:
+
+```ts
+class Widget {
+  static create() {
+    return new this(); // `this` is the class actually called -- polymorphic across subclasses
+  }
+}
+class Gadget extends Widget {}
+
+const g = Gadget.create();
+console.log(g instanceof Gadget); // true -- create() returned a Gadget, not a bare Widget
 ```
 
 ## `abstract` classes
@@ -150,9 +257,364 @@ class Product implements Named {
 }
 ```
 
+## `#private` really erases nothing; `private` erases everything
+
+The two kinds of private from the top of this lesson aren't just checked differently — they are **emitted** differently, and looking at the real compiler output settles any doubt about which one is a real runtime guarantee.
+
+```ts
+class Account {
+  private secret = "shh";
+  #pin = "1234";
+}
+```
+
+Compiling this with `tsc --target es2025` (the emitted JavaScript, quoted verbatim — `node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext account.ts`):
+
+```text
+"use strict";
+class Account {
+    secret = "shh";
+    #pin = "1234";
+}
+```
+
+`private` vanished completely — `secret` is emitted as an ordinary, fully public field, because `private` was never anything but a TypeScript-only annotation. `#pin` is untouched: `#`-prefixed fields are native ECMAScript syntax, so the compiler has nothing to erase. The runtime consequence follows directly:
+
+```ts
+// @run
+class Account {
+  private secret = "shh";
+  #pin = "1234";
+  reveal() {
+    return (this as any).secret; // reads straight through the erased annotation
+  }
+}
+const a = new Account();
+console.log((a as any).secret); // ✅ runs -- private was only ever a compile-time label
+console.log(a.reveal());
+```
+
+```text
+shh
+shh
+```
+
+Both lines print `shh`. `(a as any).secret` compiles and runs without complaint, because at runtime there is no such thing as a private *field* here — only an ordinary property named `secret` that the type checker refuses to let you *name* without a cast. Try the same trick on `#pin` — `(a as any)['#pin']` or even `(a as any).#pin` — and it fails: there is no string property key `#pin` to find, and `#pin` outside the class body is a `SyntaxError` at parse time, not a runtime access failure. `private` is a promise the compiler keeps only as long as you don't ask it to look away; `#private` is a promise the language itself keeps.
+
+## Accessors: `get`/`set`, and `accessor`
+
+A `get`/`set` pair lets a property look like a plain field from the outside while running code on every read or write. Since TypeScript 4.3, the getter and setter no longer have to agree on the exact same type — the setter can accept a **wider** type than the getter returns, which is useful for a property that normalizes whatever it's given:
+
+```ts
+class Temperature {
+  #celsius = 0;
+  get value(): number {
+    return this.#celsius;
+  }
+  set value(input: number | string) { // wider than the getter's return type
+    this.#celsius = typeof input === "string" ? Number(input) : input;
+  }
+}
+
+const t = new Temperature();
+t.value = "21.5"; // ✅ the setter accepts a string too
+const c: number = t.value; // ✅ but reading it back always gives the narrower number
+```
+
+This compiles cleanly under `--strict` on TypeScript 7.0.2 — asymmetric accessors have been allowed since 4.3, unchanged through 7.
+
+Writing a getter and setter that both just read and write the same private backing field is common enough that TypeScript 4.9 added a shorthand: the `accessor` keyword declares an **auto-accessor** — a real getter/setter pair, backed by an automatically generated private slot, from a single field-looking declaration:
+
+```ts
+class Counter {
+  accessor count = 0;
+}
+```
+
+The emitted JavaScript (`tsc --target es2025`) shows exactly what `accessor` expands to — a private storage slot plus a real `get`/`set` pair, not a plain field:
+
+```text
+"use strict";
+class Counter {
+    #count_accessor_storage = 0;
+    get count() { return this.#count_accessor_storage; }
+    set count(value) { this.#count_accessor_storage = value; }
+}
+```
+
+Because that expansion is standard ECMAScript output (a `#` field plus ordinary accessors), `accessor` is erasable-safe the same way stage-3 decorators are — and, not coincidentally, `accessor` members are exactly what a stage-3 **accessor decorator** (covered in the Decorators lesson) is built to intercept.
+
+## The generic class that can't infer: a one-line recap
+
+The Generic Classes & Interfaces lesson already covers this in depth: when a generic class's type parameter has nothing to infer from at construction (`new Stack()` with no argument and no type annotation), `T` resolves to `unknown`, not `any` — parameter positions accept anything, but reading a value back out still requires narrowing first. If any of that is unfamiliar, see [Generic Classes & Interfaces](/typescript/en/generics/generic-classes-and-interfaces/) before continuing; everything below assumes you can read a class's type parameters fluently.
+
+## The class-fields init-order bug: `useDefineForClassFields`
+
+TypeScript's default emit target for this course (ES2022+) uses native JavaScript class fields, which are installed using **`[[DefineOwnProperty]]`** ("define" semantics) rather than the ordinary assignment operator's **`[[Set]]`** semantics. The distinction sounds academic until a base class sets a property before a subclass's own field initializer has run — then it produces a genuinely surprising bug.
+
+### The base constructor's write gets silently overwritten
+
+```ts
+// A framework base class that assigns arbitrary properties dynamically --
+// e.g. Object.assign(this, data) from a config object, common in ORMs,
+// "reactive props" mixins, and record base classes.
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  name: string = ""; // re-declared for typing -- carries its own initializer
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // you might expect "Ada"...
+```
+
+```ts
+// @run
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  name: string = "";
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+```
+
+```text
+(empty string)
+```
+
+The output is an **empty string**, not `"Ada"`. `super(data)` runs first and calls `Object.assign(this, data)`, which does set `name` to `"Ada"` — but only for a moment. Once `super()` returns, `UserRecord`'s *own* field initializers run next, as native class-field semantics require, and `name: string = ""` unconditionally re-defines `name` back to `""` — overwriting the value the base constructor just set. Nothing here looks wrong reading top to bottom; the bug is entirely about the order two different mechanisms run in.
+
+### The fix: `declare` removes the field from the emit entirely
+
+```ts
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  declare name: string; // type-only -- no [[DefineOwnProperty]] is emitted for this field
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // "Ada" -- nothing re-defines it after Object.assign runs
+```
+
+```ts
+// @run
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  declare name: string;
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+```
+
+```text
+Ada
+```
+
+`declare` tells the compiler "trust me, this property exists at runtime through some other means" without emitting anything for it at all — no field, no initializer, no `[[DefineOwnProperty]]` call to clobber what `Object.assign` already wrote. This is the idiomatic fix any time a subclass needs to *type* a property that a base class (or a decorator, or a framework runtime) is really responsible for creating.
+
+### `[[Define]]` vs `[[Set]]`, side by side
+
+The flag controlling this is `useDefineForClassFields`, and it defaults to `true` whenever the compile target is ES2022 or later (which is why the bug above shows up under this course's settings without setting anything explicitly). Compiling the *exact same source* with the flag forced off shows the emitted difference directly — a subclass field with no initializer at all emits **nothing**, so it can never shadow anything the base class provides:
+
+```text
+$ node_modules/typescript/bin/tsc --ignoreConfig --target es2025 --module esnext --useDefineForClassFields false accessor-shadow.ts
+```
+
+Given this source (a base class whose `value` is a real `get`/`set` accessor — a stand-in for a UI framework's reactive-property system):
+
+```ts
+// @expect-error TS2564 TS2610
+class ReactiveBase {
+  #stored = "framework-default";
+  get value() { return this.#stored; }
+  set value(v: string) { this.#stored = v; console.log(`setter ran: ${v}`); }
+}
+
+class Widget extends ReactiveBase {
+  value: string; // plain re-declaration -- no initializer
+}
+```
+
+the default (`useDefineForClassFields: true`, the ES2022+ native behavior) emits a bare field declaration that still installs a fresh own property at construction time, permanently shadowing the inherited accessor:
+
+```text
+class Widget extends ReactiveBase {
+    value; // -- installs an own data property, hiding ReactiveBase's accessor forever
+}
+```
+
+running which prints `undefined` on read and never logs `setter ran` at all — the accessor is gone. With `--useDefineForClassFields false`, the identical source instead emits nothing for the field:
+
+```text
+class Widget extends ReactiveBase {
+}
+```
+
+and the base class's accessor survives untouched — the setter really runs, and `value` reads and writes through it correctly. TypeScript's type checker actually flags this exact pattern on sight, independent of the flag: `TS2610: 'value' is defined as an accessor in class 'ReactiveBase', but is overridden here in 'Widget' as an instance property.` — worth heeding even though (as this section just showed) the *runtime* consequence genuinely depends on `useDefineForClassFields`.
+
+<TSPlayground code={initOrderCode} id="classes-deep-init-order" title="Object.assign in a base constructor, undone by a subclass field" />
+
+export const initOrderCode = `class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+
+class UserRecord extends RecordBase {
+  name: string = ""; // -- ES2022 class-field semantics re-define this AFTER super() runs
+}
+
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name); // "" -- not "Ada" -- the field initializer wins the race`;
+
+Click **Run**: an empty string, not `"Ada"`. Change `name: string = "";` to `declare name: string;` and click **Run** again to see the fix.
+
+## `instanceof` isn't checking shape
+
+`instanceof` walks an object's prototype chain looking for the class's `prototype` — it is a runtime identity check, not a structural one, and it has real limits worth knowing before you reach for it in generated or defensive code.
+
+```ts
+class Money {
+  cents: number;
+  constructor(cents: number) {
+    this.cents = cents;
+  }
+}
+
+// An object that looks exactly like a Money instance -- same shape, same
+// prototype -- but was never built by calling `new Money(...)` (it could
+// have crossed a JSON boundary and been re-attached to the prototype by hand).
+const fromApi = Object.assign(Object.create(Money.prototype), { cents: 500 });
+console.log(fromApi instanceof Money); // true -- same prototype, so instanceof agrees
+
+const plainDuck = { cents: 500 }; // identical shape, ordinary Object.prototype
+console.log(plainDuck instanceof Money); // false -- instanceof only looks at the prototype chain
+```
+
+```ts
+// @run
+class Money {
+  cents: number;
+  constructor(cents: number) {
+    this.cents = cents;
+  }
+}
+const fromApi = Object.assign(Object.create(Money.prototype), { cents: 500 });
+console.log(fromApi instanceof Money);
+const plainDuck = { cents: 500 };
+console.log(plainDuck instanceof Money);
+```
+
+```text
+true
+false
+```
+
+Two related, well-known gaps: `instanceof` fails across **realms** — an array built inside an `<iframe>`, a separate `vm` context, or a worker has its *own* `Array.prototype`, so `arr instanceof Array` can be `false` for a perfectly real array that simply came from somewhere else — and it fails for any duck-typed object built without going through the real constructor, exactly like `plainDuck` above. Data that has been serialized and parsed (JSON, a message-passing boundary, a database row) never had a prototype chain to begin with; checking `instanceof` against it is checking the wrong thing entirely.
+
+### `Symbol.hasInstance`: making `instanceof` shape-aware on purpose
+
+`instanceof` is itself customizable: a class (or any object) can implement `[Symbol.hasInstance]` to redefine what `x instanceof C` means, including switching it to a genuine structural check:
+
+```ts
+interface Money { cents: number }
+
+class MoneyChecker {
+  static [Symbol.hasInstance](obj: unknown): obj is Money {
+    return typeof obj === "object" && obj !== null && typeof (obj as Money).cents === "number";
+  }
+}
+
+console.log({ cents: 500 } instanceof MoneyChecker); // true -- shape-based now, custom hook
+console.log({ dollars: 5 } instanceof MoneyChecker); // false
+```
+
+```ts
+// @run
+interface Money { cents: number }
+class MoneyChecker {
+  static [Symbol.hasInstance](obj: unknown): obj is Money {
+    return typeof obj === "object" && obj !== null && typeof (obj as Money).cents === "number";
+  }
+}
+console.log({ cents: 500 } instanceof MoneyChecker);
+console.log({ dollars: 5 } instanceof MoneyChecker);
+```
+
+```text
+true
+false
+```
+
+This is a real, useful escape hatch, but it's easy to overuse for plain data. For data crossing a boundary — parsed JSON, a database row, a message payload — a **discriminant property** checked with a plain `if` (the pattern from the narrowing lesson's discriminated unions) is simpler, doesn't require customizing a language operator, and is what most real-world validation code and schema libraries actually reach for. Save `Symbol.hasInstance` for genuine identity checks against real class instances that might legitimately cross a realm boundary.
+
 <Callout title="The one-line takeaway">
-`private`, `protected`, `readonly`, `abstract`, and `implements` are **compile-time** guarantees that erase on emit — helpful for correctness, not enforced at runtime. `#private` fields and `static` members are **real runtime** constructs. Use parameter properties to cut boilerplate, and remember `implements` only *checks* structural conformance; it copies nothing.
+`private`/`protected`/`abstract`/`implements` are **compile-time** guarantees that erase on emit (a `private` field is fully readable via `(obj as any).field`); `#private` fields, `static` members, `static {}` blocks, and the `accessor` keyword's generated slot are **real runtime** constructs. `override` catches an unrelated method masquerading as one on both sides — an orphaned `override` after a base rename (always on, `TS4113`), and a silent override missing the label (`noImplicitOverride`, opt-in, `TS4114`). Native ES2022+ class fields use `[[DefineOwnProperty]]` semantics, which can silently overwrite a value a base constructor already set through some other mechanism (`Object.assign`, an accessor) — `declare` removes the field from the emit entirely so nothing shadows it. `instanceof` checks the prototype chain, not shape; it fails across realms and for duck-typed data, and `Symbol.hasInstance` is the (rarely needed) way to make it shape-aware on purpose.
 </Callout>
+
+## Mental Model
+
+For every class feature in this lesson, ask **"does this exist in the emitted JavaScript, or only in the type checker's head?"** `private`, `protected`, `abstract`, `implements`, and `override` all disappear on compile — they are checked once and then gone, which is why a determined caller can defeat any of them with `any`. `#private` fields, `static` members, `static {}` blocks, the `accessor` keyword's private slot, and the field-initializer assignments behind `useDefineForClassFields` are all real code that runs — which is exactly where the surprising bugs in this lesson (the erasure gap, the init-order bug, the accessor-shadowing bug) come from: two different *runtime* mechanisms racing or colliding, not a compiler mistake.
+
+## Trade-offs
+
+| Feature | Benefit | Cost |
+|---|---|---|
+| `private` / `protected` | Documents intent, zero runtime cost, catches honest mistakes | Erased on emit — not a real security boundary; `(obj as any).field` reaches it |
+| `#private` | Real runtime privacy, unforgeable, works as a brand check (`#x in obj`) | Slightly more ceremony; can't be accessed even from legitimate subclasses (unlike `protected`) |
+| `override` (always on) | Catches an orphaned override after any base-class rename, with no config | Doesn't catch the opposite mistake — a silent override with no label |
+| `noImplicitOverride` | Catches every silent override too | Not part of `strict`; an opt-in most codebases don't turn on |
+| Field initializer (`name = ""`) | Concise, guarantees a default value | Under `useDefineForClassFields`, always re-defines the property after `super()`, even when a base class already set it through another mechanism |
+| `declare` field | No emit at all — never shadows a base-provided value | Purely a type annotation; the runtime value must genuinely be provided some other way, or reads return `undefined` |
+| `instanceof` | Fast, built-in, no code to write | Fails across realms and for duck-typed/deserialized data — checks identity, not shape |
+| `Symbol.hasInstance` | Makes `instanceof` shape-aware on purpose | Customizes a language operator — a plain discriminant check is simpler for most data-shape checks |
+
+## Common Misconceptions
+
+- **`private` protects a field from being read at runtime.** It doesn't — it's erased entirely, and the emitted JavaScript shows the field as a fully ordinary, public property. Only `#private` is a real runtime boundary.
+- **`override` alone means "safe against base-class changes."** It only catches the case where the base member is *gone* (`TS4113`, always on). Catching a silent, unlabeled override of a member that's still there requires the separate, opt-in `noImplicitOverride` flag.
+- **A subclass field declaration is "just documentation" if it has no initializer, or is harmless if it repeats a default the base already sets.** Under `useDefineForClassFields` (the default from ES2022 on), any field declaration — initializer or not — installs a fresh own property at construction time, which can silently overwrite or shadow a value a base class set through a constructor side effect or an inherited accessor.
+- **`instanceof` checks whether an object has the right shape.** It checks whether the object's prototype chain includes the constructor's `prototype` — a purely identity-based, not structural, question. Deserialized data and cross-realm objects routinely fail `instanceof` while having an identical, valid shape.
+
+## Reading AI-generated code
+
+Generated class code tends to lean on exactly the mechanisms this lesson just showed have sharp edges:
+
+- **A subclass re-declares a field the base class is "supposed to" provide (via a constructor side effect, a decorator, or a framework base class).** Ask whether the base actually assigns it *before* or *after* `super()` returns relative to the subclass's own field initializers. If the base sets it through anything other than a plain field initializer on the base itself, the subclass field is very likely clobbering it — `declare` is almost always the fix.
+- **`instanceof` used to validate data that crossed a network or storage boundary** (a parsed JSON response, a deserialized queue message) is a common generated-code smell: that data never had a prototype chain, so the check either always fails or was never actually exercised in the tests that "proved" it works. A discriminant property or a schema check belongs there instead.
+- **`private` used as if it were a security boundary** — e.g. storing a genuinely sensitive value (a token, a secret) in a `private` field and treating that as sufficient protection. The lesson's own emitted-JS example shows exactly why that's false: `(value as any).secret` reads it with zero resistance.
+
+<SpotTheBug code={`class WidgetBase {
+  constructor(config: Record<string, unknown>) {
+    Object.assign(this, config);
+  }
+}
+
+class Button extends WidgetBase {
+  label: string = "Click me";
+}
+
+const b = new Button({ label: "Submit" });
+console.log(b.label);`}>
+This prints `"Click me"`, not `"Submit"` — the opposite of what the call site's argument suggests. `super(config)` runs `Object.assign(this, config)` first, which really does set `label` to `"Submit"` for a moment. But `Button`'s own field initializer, `label: string = "Click me"`, runs immediately after `super()` returns as part of native ES2022+ class-field semantics, and unconditionally re-defines `label` back to its default — overwriting whatever the base constructor's `Object.assign` just wrote. The fix is `declare label: string;` on `Button`: a type-only declaration emits no field at all, so nothing runs after `super()` to clobber the value `Object.assign` provided.
+</SpotTheBug>
 
 export const quizDeep = [
   {
@@ -164,6 +626,7 @@ export const quizDeep = [
       '`private` works only on methods',
     ],
     answer: 1,
+    explain: 'Emitting the class shows it directly: `private secret` becomes a plain public field named `secret` in the output, while `#pin` is untouched -- it is native ECMAScript syntax with nothing to erase.',
   },
   {
     q: 'What does a parameter property (e.g. `constructor(public id: string)`) do?',
@@ -174,36 +637,51 @@ export const quizDeep = [
       'It marks the class abstract',
     ],
     answer: 1,
+    explain: 'The access modifier on a constructor parameter is shorthand for declaring a field and writing `this.id = id;` in the constructor body -- but doing so requires the compiler to emit code, which is why it fails under erasable-syntax-only settings.',
   },
   {
-    q: 'Under `--erasableSyntaxOnly` (or Node type stripping), what happens to `constructor(public id: string)`?',
+    q: '```ts\nclass Animal {\n  speak() { return "..."; } // renamed from makeSound\n}\nclass Dog extends Animal {\n  override makeSound() { return "Woof"; }\n}\n```\nWhat happens here, and why?',
     options: [
-      'It works — the modifier is erased',
-      'It is an error, because parameter properties require the compiler to emit code; declare the field and assign it explicitly instead',
-      'It becomes a static member',
-      'It is silently ignored',
+      'Compiles fine — `override` is just documentation',
+      'TS4113: `override` is rejected because `Animal` no longer has a `makeSound` member for `Dog` to override — this check runs with no flag required',
+      'TS4114 — `noImplicitOverride` must be enabled first',
+      'Compiles, but the method silently does nothing at runtime',
     ],
     answer: 1,
+    explain: 'Unlike `noImplicitOverride`, the check that an `override` member actually overrides something is always on. After the rename, `Dog.makeSound` no longer matches anything in `Animal`, so TypeScript reports TS4113 pointing straight at the orphaned override -- catching what would otherwise be a silent behavioral regression.',
   },
   {
-    q: 'Where do `static` members live?',
+    q: 'A class declares `makeSound()` in a subclass, matching a same-named method on the base class, but without the `override` keyword. Under the default settings this course uses (strict, but `noImplicitOverride` off), does this produce an error?',
     options: [
-      'On every instance',
-      'On the class itself (the constructor), not on instances',
-      'In a separate module',
-      'They are erased at compile time',
+      'Yes, immediately — overriding without `override` is always an error',
+      'No — `noImplicitOverride` is not part of `strict` and is off by default; the same source produces TS4114 only once `--noImplicitOverride` is explicitly enabled',
+      'Yes, but only in `.tsx` files',
+      'No, and turning on `noImplicitOverride` would not change anything either',
     ],
     answer: 1,
+    explain: 'The mirror check -- flagging an override that is missing its `override` keyword -- is gated entirely behind the opt-in `noImplicitOverride` flag, which strict mode does not enable. The identical source compiles clean without the flag and fails with TS4114 once it is turned on.',
   },
   {
-    q: 'What does `implements Named` actually do?',
+    q: '```ts\nclass RecordBase {\n  constructor(data: Record<string, unknown>) {\n    Object.assign(this, data);\n  }\n}\nclass UserRecord extends RecordBase {\n  name: string = "";\n}\nconst u = new UserRecord({ name: "Ada" });\nconsole.log(u.name);\n```\nWhat does this log, and why?',
     options: [
-      'Copies the interface members into the class',
-      'Asserts at compile time that the class structurally satisfies the interface, reporting a mismatch at the class definition',
-      'Creates runtime inheritance',
-      'Makes the class abstract',
+      '`"Ada"` — `Object.assign` in the base constructor sets it',
+      '`""` — `UserRecord`\'s own field initializer runs after `super()` returns and re-defines `name` back to its default, overwriting what `Object.assign` just set',
+      'A compile error — `name` is declared twice',
+      '`undefined` — class fields are never initialized properly here',
     ],
     answer: 1,
+    explain: 'Under ES2022+ native class-field semantics ("useDefineForClassFields"), every field declaration -- initializer or not -- installs a fresh own property via [[DefineOwnProperty]] immediately after `super()` returns. That happens after the base constructor\'s `Object.assign` already ran, so the field initializer\'s default value wins. `declare name: string;` removes the field from the emit entirely and fixes it.',
+  },
+  {
+    q: 'Why does `instanceof` return `false` for a plain object `{ cents: 500 }` even though it has exactly the same shape as a real `Money` instance?',
+    options: [
+      '`instanceof` is broken and should not be used',
+      '`instanceof` walks the prototype chain looking for `Money.prototype` — it checks identity/lineage, not shape, and the plain object was never linked to that prototype',
+      'Because the object is missing a `toString` method',
+      'Because `Money` uses a `private` field',
+    ],
+    answer: 1,
+    explain: '`instanceof` is a runtime identity check on the prototype chain, unrelated to structural shape. A duck-typed object, a deserialized JSON payload, or an object built in a different realm can have an identical, valid shape and still fail `instanceof` because it was never actually constructed via `new Money(...)` or otherwise linked to `Money.prototype`.',
   },
 ];
 
