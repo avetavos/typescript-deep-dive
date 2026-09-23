@@ -1,0 +1,403 @@
+---
+title: 'Variance'
+description: 'Covariance, contravariance, invariance, and bivariance across TypeScript generics -- in/out annotations, the TS2636 checks they trigger, Promise/Map/Set/Array variance, and the AI-code smells variance produces.'
+sidebar:
+  order: 6
+---
+
+import Mermaid from '../../../../components/Mermaid.astro';
+import Callout from '../../../../components/Callout.astro';
+import Quiz from '../../../../components/Quiz.tsx';
+import ProgressTracker from '../../../../components/ProgressTracker.tsx';
+import TSPlayground from '../../../../components/TSPlayground.astro';
+import SpotTheBug from '../../../../components/SpotTheBug.astro';
+
+## Recap: variance is a question, not a switch
+
+[Generic Classes & Interfaces](/typescript/en/generics/generic-classes-and-interfaces/) already showed the core surprise: `Stack<Dog>` fits where `Stack<Animal>` is expected when `push` is written with method shorthand (unsound -- bivariant), and is correctly rejected when `push` is written as a property function (sound -- contravariant). That lesson also showed `readonly` arrays and mutable arrays are both covariant, mutable object fields are structurally covariant even though a real invariance rule would reject them, and that TypeScript 4.7+ lets you *declare* variance with `in`/`out`. This lesson takes those same four answers -- covariant, contravariant, invariant, bivariant -- and follows them through the types you actually import every day: `Promise`, `Map`, `Set`, `Array` vs `ReadonlyArray`, and plain function types. None of the demos below repeat that lesson's `Stack`, `Consumer`, or `Box` examples.
+
+## The four variances, at a glance
+
+| Variance | Definition | Where TypeScript applies it | One-line example |
+|---|---|---|---|
+| **Covariant** | `Box<Dog>` is a subtype of `Box<Animal>` -- same direction as the type argument | `readonly T[]`, `ReadonlyArray<T>`, `Promise<T>`, and (unsoundly) mutable `T[]`, `Map`/`Set` reads | `declare const p: Promise<Dog>; const q: Promise<Animal> = p;` |
+| **Contravariant** | `Handler<Animal>` is a subtype of `Handler<Dog>` -- opposite direction from the type argument | a standalone function type's parameters, under `strictFunctionTypes` | `type H<T> = (x: T) => void; declare const h: H<Animal>; const d: H<Dog> = h;` |
+| **Invariant** | Neither direction is safe -- the only sound rule for something you both read *and* write | the rule a mutable container's type parameter *should* follow; TypeScript does not enforce it for ordinary object properties | `Box<Dog>` should **not** be assignable to `Box<Animal>` if `Box` has a settable `.value` -- but TypeScript allows it anyway |
+| **Bivariant** | Both directions are accepted -- known, deliberate unsoundness | a method written with **shorthand** syntax (`push(item: T): void`), including every mutating method on `Map`/`Set` in `lib.d.ts` | `class C<T> { m(x: T) {} }` lets `C<Dog>` and `C<Animal>` assign to each other freely |
+
+<Mermaid title="Four variances, one question: which positions does T occupy?" code={fourVarianceDiagram} />
+
+export const fourVarianceDiagram = `flowchart TB
+  q{"Where does T appear inside the generic type?"}
+  q -->|"only positions you READ"| co["Covariant\nBox of Dog fits Box of Animal\n(same direction as T)"]
+  q -->|"only positions you WRITE, under strictFunctionTypes"| contra["Contravariant\na Handler of Animal fits\nwhere a Handler of Dog is needed\n(opposite direction)"]
+  q -->|"BOTH read and written"| inv["Invariant -- the sound rule\nneither direction should be safe\nTypeScript mostly does not enforce this"]
+  q -->|"a method using SHORTHAND syntax"| biv["Bivariant -- known unsoundness\nTypeScript allows BOTH directions"]`;
+
+## Contravariance depends on `strictFunctionTypes`
+
+The contravariant row above is not the language's default behavior for every function-shaped position -- it is what `strictFunctionTypes` (bundled into `--strict`) turns *on* specifically for standalone function types (not methods). Assign a `Dog`-only handler where an `Animal`-handling one is required, and the direction is checked correctly, rejecting it:
+
+```ts
+// @expect-error TS2322
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+type Handler = (a: Animal) => void;
+const handleDog = (d: Dog) => console.log(d.bark());
+const h: Handler = handleDog;
+```
+
+```text
+error TS2322: Type '(d: Dog) => void' is not assignable to type 'Handler'.
+  Types of parameters 'd' and 'a' are incompatible.
+    Property 'bark' is missing in type 'Animal' but required in type 'Dog'.
+```
+
+Read this the same way any nested TypeScript error reads: the top line names the *whole* mismatch (one function type against another), the next line narrows to *which* parameter disagreed, and the last line gives the concrete, structural reason -- `Dog` demands a `bark` method that `Animal` doesn't promise. Three lines, each one level more specific than the last.
+
+Turn `strictFunctionTypes` off and this exact code compiles, because parameter checking for standalone function types falls back to the same bivariant rule methods already get:
+
+```bash
+node_modules/typescript/bin/tsc --strict --strictFunctionTypes false --noEmit handler.ts
+```
+
+```text
+(no output -- zero diagnostics)
+```
+
+That single flag is the entire difference between "contravariant" and "bivariant" for this exact code. With it off, every function-typed position in the file -- parameters included -- is checked the same permissive way method shorthand always is.
+
+## `in`/`out`: declaring variance, and the checker holding you to it
+
+TypeScript 4.7+ lets a generic type declare its variance with `in` (contravariant -- only input positions) and `out` (covariant -- only output positions) on the type parameter. Declare the direction that matches how `T` is actually used, and it's silently accepted:
+
+```ts
+interface Source<out T> {
+  next(): T; // T appears only in an output position -- out is correct
+}
+```
+
+Declare the *wrong* direction and the checker rejects the annotation itself, independently of any call site:
+
+```ts
+// @expect-error TS2636
+interface Emitter<in T> {
+  emit(): T; // T appears only in an output position -- declaring in is a lie
+}
+```
+
+```text
+error TS2636: Type 'Emitter<super-T>' is not assignable to type 'Emitter<sub-T>' as implied by variance annotation.
+  The types returned by 'emit()' are incompatible between these types.
+    Type 'super-T' is not assignable to type 'sub-T'.
+```
+
+This is the mirror image of the `Consumer<out T>` mistake from the previous lesson (declaring `out` on a contravariant-only member): here `in` is declared on a member that's covariant-only, and the checker catches the reverse mistake with the same `TS2636` machinery. Either direction, wrong on purpose, gets caught before anyone ever writes a call site.
+
+This is genuinely useful for three reasons: it **documents intent** directly in a `.d.ts` file so a reader doesn't have to trace every member to know a type only ever produces `T`; it **speeds up and sharpens checking of recursive generic types**, where computing variance structurally from scratch on every use is expensive and an explicit annotation short-circuits that work; and it **catches accidental misuse** the moment a type's shape changes -- add an input-position member to a type annotated `out T` and `TS2636` fires immediately, long before some distant call site would have surfaced the same mistake as a confusing assignability error.
+
+What it does **not** do is make method-shorthand bivariance sound. The annotation is checked against the compiler's own *measured* variance -- and that measurement inherits the exact same shorthand blind spot as ordinary assignability:
+
+```ts
+// @run
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+class Queue<out T> {
+  private items: T[] = [];
+  enqueue(item: T): void { this.items.push(item); }
+  dequeue(): T | undefined { return this.items.shift(); }
+}
+
+const dogQueue = new Queue<Dog>();
+const animalQueue: Queue<Animal> = dogQueue; // out T said this assignment is fine
+animalQueue.enqueue(new Cat()); // the hole: enqueue is method shorthand, so bivariant underneath
+console.log(dogQueue.dequeue()!.bark());
+```
+
+```text
+TypeError: dogQueue.dequeue(...).bark is not a function
+```
+
+`Queue<out T>` compiles with **zero diagnostics**, and the annotation is a *correct* description of what the checker itself measured for `enqueue` (method shorthand, bivariant, so it passes the `out`-compatible test the same way it passes ordinary assignability). Declaring `out T` didn't add a new check on top -- it asked the existing measurement a question, and the existing measurement already had this blind spot. Rewriting `enqueue` as a property function (`enqueue: (item: T) => void`) makes `TS2636` fire immediately, for the identical reason the direct `Stack<Dog>`-to-`Stack<Animal>` assignment was rejected for property functions in the previous lesson.
+
+## `Promise<T>`: safe covariance because there's no way to write back in
+
+A `Promise<T>` only ever *produces* a `T` -- there's no method that lets you push a different type into an already-created promise -- so covariance here is completely sound, not a compromise:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare const dogPromise: Promise<Dog>;
+const animalPromise: Promise<Animal> = dogPromise; // covariant -- safe, Promise only ever produces
+```
+
+Compare this with `Array<T>`, which is *also* covariant in TypeScript but is **not** sound the same way, precisely because arrays do have a write side (`push`) that a caller holding the wider type can reach.
+
+## `Map<K, V>` and `Set<T>`: covariant to read, unsound to write
+
+The real declaration for `Map` in `lib.es2015.collection.d.ts` writes every mutating method with shorthand syntax:
+
+```text
+set(key: K, value: V): this;
+```
+
+Method shorthand means bivariant, exactly like `push` on the `Stack` from the previous lesson -- so `Map<string, Dog>` is accepted where `Map<string, Animal>` is expected, and the widened reference's `.set` accepts *any* `Animal`, including a `Cat`, silently corrupting the map both variables point at:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+const dogsByName = new Map<string, Dog>([["rex", new Dog()]]);
+const animalsByName: Map<string, Animal> = dogsByName; // allowed -- Map's methods are shorthand, so bivariant
+animalsByName.set("rex", new Cat()); // overwrites the real Dog entry with a Cat
+```
+
+<TSPlayground code={mapSetCode} id="variance-map-set" title="Map<K, V> covariance: safe to read, unsound to write through set" />
+
+export const mapSetCode = `class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+const dogsByName = new Map<string, Dog>([["rex", new Dog()]]);
+const animalsByName: Map<string, Animal> = dogsByName; // allowed -- Map's methods are shorthand, so bivariant
+animalsByName.set("rex", new Cat()); // overwrites the real Dog entry with a Cat
+console.log(dogsByName.get("rex")!.bark()); // dogsByName's "rex" entry is now a Cat -- crash`;
+
+Click **Check types**: zero diagnostics -- the same `set` signature that makes this useful for ordinary code (assigning a `Map<string, Dog>` where a `Map<string, Animal>` is expected is genuinely convenient) is what makes it exploitable. Click **Run**: it crashes with `TypeError: dogsByName.get(...).bark is not a function`, because `animalsByName.set("rex", new Cat())` wrote through to the exact same `Map` object `dogsByName` still points at. If `set` had been declared as a property function (`set: (key: K, value: V) => this`) instead of shorthand, the assignment `Map<string, Dog>` to `Map<string, Animal>` would be rejected outright, the same way `StackProp` was in the previous lesson -- but it isn't, and changing a standard-library declaration is not something application code can do.
+
+`Set<T>` has exactly the same shape and the same hole, since `add` is declared the same way:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+declare const dogSet: Set<Dog>;
+const animalSet: Set<Animal> = dogSet; // covariant to read
+animalSet.add(new Cat()); // Set.add is method shorthand too -- same hole as Map.set
+```
+
+## `Array<T>` vs `ReadonlyArray<T>`
+
+The previous lesson already proved mutable `Array<T>` is covariant and unsound (`push`ing a `Cat` through a widened `Animal[]` reference). `ReadonlyArray<T>` closes that specific hole differently from `in`/`out` or property-function syntax: it doesn't narrow *how* a mutating method is checked, it removes the mutating method from the type entirely, so there's nothing bivariant left to exploit:
+
+```ts
+// @expect-error TS2339
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+declare const dogsRO: ReadonlyArray<Dog>;
+const animalsRO: ReadonlyArray<Animal> = dogsRO; // ✅ covariant -- nothing to write through
+animalsRO.push(new Dog()); // ❌ no push on ReadonlyArray at all -- the method doesn't exist to be bivariant
+```
+
+```text
+error TS2339: Property 'push' does not exist on type 'readonly Animal[]'.
+```
+
+`readonly T[]` and `ReadonlyArray<T>` are covariant *and* sound, for the same reason `Promise<T>` is: no write side means no direction can ever be exploited, whether that write side would have been checked contravariantly, invariantly, or (as with a real mutating method) bivariantly.
+
+## Function types side by side: return covariant, parameter contravariant
+
+`Producer<T>` (a `T` in return position only) and `Consumer<T>` (a `T` in parameter position only) sit right next to each other, and each is checked in the direction its position requires:
+
+```ts
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+type Producer<T> = () => T;      // T only in an output position -- covariant
+type Consumer<T> = (x: T) => void; // T only in an input position -- contravariant
+
+declare const makeDog: Producer<Dog>;
+const makeAnimal: Producer<Animal> = makeDog; // ✅ covariant -- a Dog-maker IS an Animal-maker
+
+declare const handleAnimal: Consumer<Animal>;
+const handleDog: Consumer<Dog> = handleAnimal; // ✅ contravariant -- an Animal-handler can certainly handle a Dog
+```
+
+Reverse the `Consumer` assignment and it fails, because a `Dog`-only handler cannot be trusted with every `Animal`:
+
+```ts
+// @expect-error TS2322
+class Animal { name = "animal"; }
+class Dog extends Animal { bark() { return "woof"; } }
+
+type Consumer<T> = (x: T) => void;
+
+declare const handleDog: Consumer<Dog>;
+const handleAnimal: Consumer<Animal> = handleDog; // ❌ reversed -- a Dog-only handler can't take every Animal
+```
+
+`Producer` and `Consumer` move in *opposite* directions from the same type argument, and both directions are sound -- unlike the `Map`/`Set`/method-shorthand cases above, there's no bivariance here because these are standalone function types, not methods.
+
+<Callout title="The one-line takeaway">
+TypeScript has exactly four variance behaviors -- covariant, contravariant, invariant, bivariant -- and which one applies to a given position is decided by *how that position is used and spelled*, not by the generic type's name: `readonly` arrays, `Promise`, and `ReadonlyArray` are covariant and sound because they have no write side; standalone function parameters are contravariant and sound under `strictFunctionTypes`; every mutating method written with shorthand syntax on `Map`, `Set`, and your own classes is bivariant and unsound, whether or not you've declared `in`/`out` on top of it.
+</Callout>
+
+## Mental Model
+
+Ask one question of any position `T` occupies, in order: **(1)** Is this a method written with shorthand syntax? If yes, stop -- it's bivariant, full stop, `in`/`out` or not. **(2)** Otherwise, is there any way to write through this position at all (a settable property, a property-function, a mutating method that isn't shorthand)? If no, it's safely covariant, the way `Promise<T>` and `ReadonlyArray<T>` are. **(3)** If there is a write side and it's a standalone function parameter, `strictFunctionTypes` makes it soundly contravariant. **(4)** If there is a write side and it's an ordinary settable property (not a method), TypeScript checks it covariantly anyway -- which is where the real, structural unsoundness this course keeps returning to actually lives.
+
+<Mermaid title="One question decides which of the four variances applies" code={varianceMentalDiagram} />
+
+export const varianceMentalDiagram = `flowchart TD
+  m{"Is this position a method\nwritten with shorthand syntax?"}
+  m -->|"yes"| biv["Bivariant -- unsound,\nregardless of in/out"]
+  m -->|"no"| w{"Is there any write side\nat this position?"}
+  w -->|"no"| co["Covariant -- sound\n(Promise, ReadonlyArray)"]
+  w -->|"yes, a function parameter"| contra["Contravariant under\nstrictFunctionTypes -- sound"]
+  w -->|"yes, a settable property"| unsound["Covariant anyway -- unsound\n(the Map.set / plain field hole)"]`;
+
+## Trade-offs
+
+| Choice | Benefit | Cost |
+|---|---|---|
+| Covariant-only design (`Promise`, `ReadonlyArray`, `readonly T[]`) | Fully sound -- widening is always safe because there is no write side to exploit | Loses mutation entirely; a caller that genuinely needs to write must convert to a mutable type first |
+| Property-function methods (contravariant) | Catches real substitution bugs at the call site, exactly like a standalone function parameter | More verbose than shorthand; loses some class-override ergonomics |
+| Method shorthand (bivariant) | Concise, and required for ordinary OOP overriding to typecheck at all | Every mutating method on `Map`, `Set`, and your own classes inherits this hole -- not an edge case, the default |
+| `in`/`out` annotations | Documents intent, speeds up checking of recursive generics, and catches a variance *contradiction* the moment the type's shape changes | Checked against the same measured variance as ordinary assignability -- inherits the shorthand blind spot rather than closing it |
+
+## Common Misconceptions
+
+- **`Map<string, Dog>` being assignable to `Map<string, Animal>` is a special-cased convenience for dictionaries.** It's the identical mechanism as method-shorthand bivariance on any class -- `Map`'s mutating methods just happen to be declared with shorthand syntax in `lib.d.ts`, the same choice that made `Stack`'s `push` bivariant in the previous lesson.
+- **`ReadonlyArray<T>` is covariant because TypeScript specially reasons about "read-only" as a concept.** It's covariant for the same structural reason `Promise<T>` is: there is no method at all through which a wider reference could write back in, so there's nothing for any variance rule -- sound or unsound -- to get wrong.
+- **Declaring `out T` on a class makes every member of that class covariant.** The annotation is checked once, against the type parameter as a whole, using the compiler's *existing* per-member measurement -- it doesn't re-derive or override that measurement, so a bivariant shorthand method still measures as compatible with an `out` (or `in`) declaration.
+- **Turning off `strictFunctionTypes` only affects code that explicitly opts out.** It changes how *every* standalone function-typed position in the compiled program is checked, including ones deep inside library type declarations you didn't write, making them as permissive as method shorthand already was.
+
+## Reading AI-generated code
+
+Generated code that takes a wide container type as a parameter and then writes a narrower-looking value into it compiles clean far more often than it should, because the covariance that makes the parameter type convenient to pass is the exact same covariance that makes the write inside unsound. Check every one of these before trusting a generated function:
+
+- **`Array<Base>` parameter, subtype array argument, write inside.** A function typed to take `Array<Base>` and told to "add a new item" will happily `push` a sibling type through the parameter -- see the puzzle below for exactly this shape.
+- **`Record<string, Base>` parameter with a write-through.** The same hole, spelled as a plain object type instead of an array:
+
+  ```ts
+  class Animal { name = "animal"; }
+  class Dog extends Animal { bark() { return "woof"; } }
+  class Cat extends Animal { meow() { return "meow"; } }
+
+  // AI smell: Record<string, Base> parameter, written into with a subtype map's values
+  function tagAnimal(registry: Record<string, Animal>, key: string): void {
+    registry[key] = new Cat(); // looks fine -- registry is "just" a string-to-Animal map
+  }
+
+  declare const dogRegistry: Record<string, Dog>;
+  tagAnimal(dogRegistry, "rex"); // compiles: Record is a plain object type, covariant per property
+  ```
+
+- **A callback parameter typed narrower than the API actually promises to call it with.** This is the `Consumer<Dog>`-where-`Consumer<Animal>`-is-needed mistake from the "Function types side by side" section above, just arriving as generated code instead of a hand-written mistake -- and `TS2322`/`TS2345` catch it *only* if the callback isn't itself wrapped in a shorthand method first.
+- **`as` used to silence a variance error instead of fixing it.** Casting a too-narrow handler to the wider function type removes the diagnostic without changing what the handler can actually do -- the risk that was caught at compile time moves to runtime, uncaught:
+
+  ```ts
+  class Animal { name = "animal"; }
+  class Dog extends Animal { bark() { return "woof"; } }
+
+  declare function forEachAnimal(cb: (a: Animal) => void): void;
+  const handleDog = (d: Dog) => console.log(d.bark());
+  forEachAnimal(handleDog as (a: Animal) => void); // "as" doesn't fix it -- it hides it
+  ```
+
+  This compiles with **zero diagnostics** -- the same call that correctly produced `TS2345` two lessons ago now produces nothing, because the cast tells the checker to stop looking, not because `handleDog` became any safer.
+
+<SpotTheBug code={`class Animal { sound() { return "..."; } }
+class Dog extends Animal { bark() { return "woof"; } }
+class Cat extends Animal { meow() { return "meow"; } }
+
+function stockShelter(cages: Array<Animal>): void {
+  cages.push(new Cat());
+}
+
+const dogCages: Dog[] = [new Dog(), new Dog()];
+stockShelter(dogCages);
+console.log(dogCages[2].bark());`}>
+This compiles with zero errors and crashes at runtime with `TypeError: dogCages[2].bark is not a function`. `stockShelter` is typed to take `Array<Animal>`, which reads as "just give me a list of animals" -- but `Dog[]` is covariantly assignable to `Array<Animal>` the same unsound way every mutable array is, so `dogCages` itself (not a copy) is what `stockShelter` receives and pushes a `Cat` into. `dogCages` is statically typed `Dog[]`, so `dogCages[2]` is typed `Dog` and `.bark()` type-checks -- but the value actually sitting there at runtime is the `Cat` that `stockShelter` just added. The fix is the same principle as `ReadonlyArray` above: if a function only needs to *read* the animals, type the parameter `ReadonlyArray<Animal>` so there's no `push` to misuse; if it genuinely needs to add animals of a specific kind, it should take that kind directly (`Array<Animal>` as a fresh array it owns, or a factory that returns the new animal instead of mutating the caller's array).
+</SpotTheBug>
+
+export const quizVariance = [
+  {
+    q: 'Which pairing matches TypeScript’s actual behavior?',
+    options: [
+      'readonly arrays: contravariant; callback parameters: covariant; method shorthand: invariant',
+      'readonly arrays: covariant; callback parameters (under strictFunctionTypes): contravariant; method-shorthand parameters: bivariant',
+      'readonly arrays: invariant; callback parameters: bivariant; method-shorthand parameters: covariant',
+      'All three are invariant in TypeScript, matching a language like Java',
+    ],
+    answer: 1,
+    explain: 'readonly arrays have no write side so widening is safely covariant; strictFunctionTypes makes a standalone function parameter soundly contravariant; a method written with shorthand syntax is checked bivariantly regardless of strictFunctionTypes.',
+  },
+  {
+    q: '```ts\ninterface Emitter<in T> {\n  emit(): T;\n}\n```\nWhat happens when this compiles, and why?',
+    options: [
+      'Nothing -- `in` is accepted for any position',
+      '`TS2636`, because `T` appears only in an output position (`emit`’s return type) but `in` declares it contravariant -- a contradiction the checker verifies against actual usage',
+      '`TS2345`, because `emit` has no parameters',
+      'It silently changes `emit` to take a `T` parameter',
+    ],
+    answer: 1,
+    explain: 'in/out annotations are checked as assertions against the compiler’s own structural measurement of variance. T is only ever produced here (covariant), so declaring in (contravariant) is a direct contradiction, and TS2636 fires on the declaration itself -- no call site needed.',
+  },
+  {
+    q: '```ts\nclass Queue<out T> {\n  private items: T[] = [];\n  enqueue(item: T): void { this.items.push(item); }\n  dequeue(): T | undefined { return this.items.shift(); }\n}\n\nconst dogQueue = new Queue<Dog>();\nconst animalQueue: Queue<Animal> = dogQueue;\nanimalQueue.enqueue(new Cat());\nconsole.log(dogQueue.dequeue()!.bark());\n```\nAssuming `Dog` and `Cat` both extend `Animal`, what happens when this runs?',
+    options: [
+      'It fails to compile with TS2636, because `out T` forbids `enqueue`',
+      'It compiles with zero diagnostics, then throws `TypeError: ... .bark is not a function` at runtime, because `enqueue` is method shorthand and stays bivariant regardless of the `out` annotation',
+      'It compiles and runs correctly -- `out T` fully closes the hole',
+      'It fails to compile with TS2322 on the `animalQueue.enqueue(new Cat())` line',
+    ],
+    answer: 1,
+    explain: 'out T is a correct description of what the checker measured for this class, because enqueue’s shorthand syntax already made it bivariant-compatible in both directions -- the annotation documents that measurement, it does not add a stricter one on top of it.',
+  },
+  {
+    q: 'Why is `Map<string, Dog>` assignable to `Map<string, Animal>`, and why is that unsound?',
+    options: [
+      'Because Map is declared `readonly` internally, so no write is possible',
+      'Because every mutating method on `Map` (`set`, and `Set`’s `add`) is declared with method-shorthand syntax in lib.d.ts, so it is checked bivariantly -- the same mechanism as a hand-written class’s shorthand method, not a dictionary-specific rule',
+      'Because `string` keys make the value type irrelevant to assignability',
+      'It is not actually unsound -- TypeScript specially guards Map.set',
+    ],
+    answer: 1,
+    explain: 'set(key: K, value: V): this is shorthand syntax in the real lib.d.ts declaration, so it inherits the identical bivariant checking as any method shorthand -- letting a widened Map reference’s set() accept a sibling type and corrupt the shared underlying Map.',
+  },
+  {
+    q: 'What does setting `strictFunctionTypes: false` actually change?',
+    options: [
+      'It disables generics entirely',
+      'It makes standalone function-typed parameters checked bivariantly instead of contravariantly -- the same permissive rule method shorthand already uses, applied everywhere a function type appears',
+      'It makes `readonly` arrays mutable',
+      'It disables `in`/`out` annotation checking',
+    ],
+    answer: 1,
+    explain: 'strictFunctionTypes is specifically the flag that makes standalone function type parameters checked contravariantly (the sound rule); turning it off falls back to the bivariant check that method shorthand always gets, everywhere in the compiled program.',
+  },
+  {
+    q: 'Why does `readonlyAnimals.push(new Dog())` fail to compile at all, while a `Dog[]` passed where `Animal[]` is expected lets `.push(new Cat())` through with zero errors?',
+    options: [
+      '`ReadonlyArray<T>` is checked invariantly, so the whole assignment is rejected',
+      '`ReadonlyArray<T>` simply has no `push` method in its type at all, so there is no bivariant method left to exploit -- while `Array<T>`’s `push` exists and is checked the same bivariant way any method shorthand is',
+      '`push` on `ReadonlyArray` requires a type argument',
+      'Both actually fail to compile',
+    ],
+    answer: 1,
+    explain: 'The fix ReadonlyArray provides is structural, not a stricter variance check: removing the mutating method removes the write side entirely, so covariance becomes sound rather than merely permissive.',
+  },
+  {
+    q: 'An AI assistant "fixes" a `TS2345` error on `forEachAnimal(handleDog)` by writing `forEachAnimal(handleDog as (a: Animal) => void)`. What actually happened?',
+    options: [
+      'The underlying type mismatch was fixed -- `handleDog` can now safely handle any `Animal`',
+      'The cast only silences the diagnostic; `handleDog` still cannot handle every `Animal` (e.g. a `Cat`), so the exact risk `TS2345` caught at compile time now exists uncaught at runtime',
+      '`TS2345` becomes a different, more specific error',
+      'Nothing changes -- the cast has no effect either way',
+    ],
+    answer: 1,
+    explain: 'as does not change what handleDog’s body can actually do -- it only tells the checker to stop verifying the assignment. The variance mismatch TS2345 correctly reported is still there; it just no longer produces a compile-time diagnostic.',
+  },
+];
+
+<Quiz client:visible id="generics/variance" questions={quizVariance} />
+
+<ProgressTracker client:visible id="generics/variance" />
