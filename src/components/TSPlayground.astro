@@ -10,7 +10,7 @@ interface Props {
 const { code, id, title } = Astro.props;
 ---
 
-<div class="tsp" data-code={code} id={id}>
+<div class="tsp not-content" data-code={code} id={id}>
   {title && <p class="tsp__title">{title}</p>}
   <Code code={code} lang="ts" />
   <div class="tsp__bar">
