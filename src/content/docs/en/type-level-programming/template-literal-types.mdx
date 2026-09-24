@@ -336,7 +336,11 @@ export const quizTemplate = [
     explain: '"click" does not start with the literal "on" prefix the pattern requires, so the conditional falls to its else branch, never.',
   },
   {
-    q: '```ts\ntype Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";\ntype Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;\n```\nWhy does this fail to compile?',
+    q: `\`\`\`ts
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+type Big = \`\${Digit}\${Digit}\${Digit}\${Digit}\${Digit}\`;
+\`\`\`
+Why does this fail to compile?`,
     options: [
       'Template literal types cannot use numeric-looking unions',
       'Five interpolated positions of a 10-member union multiply to 10^5 = 100,000 combinations, crossing TypeScript\'s union-size ceiling (TS2590)',
@@ -347,7 +351,11 @@ export const quizTemplate = [
     explain: 'Union sizes multiply across interpolated positions rather than adding -- ten possibilities repeated five times is 10 to the 5th power, comfortably over the ~100,000-member ceiling that produces TS2590.',
   },
   {
-    q: '```ts\ntype StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;\ntype R = StartsWithSlash<"/users" | "profile">;\n```\nWhat is `R`, and how would you make it answer "does the whole union match" instead?',
+    q: `\`\`\`ts
+type StartsWithSlash<T extends string> = T extends \`/\${string}\` ? true : false;
+type R = StartsWithSlash<"/users" | "profile">;
+\`\`\`
+What is \`R\`, and how would you make it answer "does the whole union match" instead?`,
     options: [
       '`true` -- and there is no way to change this behavior',
       '`boolean` (distributes per member); wrapping both sides as `[T] extends [\\`/${string}\\`]` tests the whole union at once instead',

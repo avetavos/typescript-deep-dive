@@ -509,7 +509,20 @@ export const quizNarrow = [
     explain: 'การ infer ระมัดระวังและเจาะจง: ไม่มี return type annotation, return เดียวพอดี, boolean ผูกกับ parameter และ parameter ไม่ถูก assign ใหม่ — อะไรที่ซับซ้อนกว่านั้นยังต้องเขียน predicate เอง',
   },
   {
-    q: '```ts\nfunction isString(x: unknown): x is string {\n  return true;\n}\n\nfunction shout(x: unknown) {\n  if (isString(x)) {\n    console.log(x.toUpperCase());\n  }\n}\n\nshout(42);\n```\nโค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?',
+    q: `\`\`\`ts
+function isString(x: unknown): x is string {
+  return true;
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase());
+  }
+}
+
+shout(42);
+\`\`\`
+โค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?`,
     options: [
       'compile error — predicate ต้องเช็ค typeof x === "string" จริง ๆ',
       'compile ผ่าน แต่ throw ตอน runtime -- predicate ถูกเชื่อจาก signature ไม่เคยเช็คกับ body',
@@ -520,7 +533,19 @@ export const quizNarrow = [
     explain: 'compiler เชื่อ signature ของ type predicate ไม่ใช่ implementation ของมัน เลย guard ที่ return true เสมอ compile ผ่านโดยไม่มี error เรียก shout(42) แล้ว crash ด้วย "x.toUpperCase is not a function" ตรงจุดที่ compiler บอกว่าปลอดภัยพอดี',
   },
   {
-    q: '```ts\ninterface State { id: string | number }\nasync function corrupt(state: State) {\n  state.id = 42;\n}\nasync function run(state: State) {\n  if (typeof state.id === "string") {\n    await corrupt(state);\n    state.id.toUpperCase();\n  }\n}\n```\n`run` compile ผ่านไหม และ narrowing หลัง `await corrupt(state)` ปลอดภัยจริงหรือเปล่า?',
+    q: `\`\`\`ts
+interface State { id: string | number }
+async function corrupt(state: State) {
+  state.id = 42;
+}
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state);
+    state.id.toUpperCase();
+  }
+}
+\`\`\`
+\`run\` compile ผ่านไหม และ narrowing หลัง \`await corrupt(state)\` ปลอดภัยจริงหรือเปล่า?`,
     options: [
       'compile ไม่ผ่าน -- await ล้าง narrowing เสมอ',
       'compile ผ่าน แต่ narrowing ไม่ sound -- corrupt mutate state.id ได้ระหว่างที่ run ถูกพักไว้ และ compiler ไม่มีทางรู้',

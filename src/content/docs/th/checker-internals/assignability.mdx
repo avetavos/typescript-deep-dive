@@ -262,7 +262,15 @@ export const quizAssignability = [
     explain: 'การเทียบขับเคลื่อนด้วย target: มันเดินตาม required property ของ target แล้วเช็คแต่ละตัวกับ source source ที่มี property เพิ่มที่ target ไม่เคยถามก็ยัง assignable ได้',
   },
   {
-    q: '```ts\ninterface Mutable { x: number }\ninterface ReadonlyPoint { readonly x: number }\ndeclare const m: Mutable;\ndeclare const r: ReadonlyPoint;\nconst a: ReadonlyPoint = m;\nconst b: Mutable = r;\n```\nทั้งสองการ assign compile ผ่านไหม?',
+    q: `\`\`\`ts
+interface Mutable { x: number }
+interface ReadonlyPoint { readonly x: number }
+declare const m: Mutable;
+declare const r: ReadonlyPoint;
+const a: ReadonlyPoint = m;
+const b: Mutable = r;
+\`\`\`
+ทั้งสองการ assign compile ผ่านไหม?`,
     options: [
       'ไม่ -- การ assign value ที่ type readonly ให้ตัวแปรที่ type Mutable เป็น error เสมอ',
       'ใช่ ทั้งคู่ compile ผ่านโดยไม่มี error เลย -- readonly ไม่มีบทบาทใน assignability ทั้งสองทิศทาง',
@@ -295,7 +303,13 @@ export const quizAssignability = [
     explain: '`any` assignable ให้อะไรก็ได้ และอะไรก็ได้ assignable ให้มัน -- ทั้งสองทิศทางไม่ถูกเช็ค `unknown` รับ value เข้าอย่างเดียว (ไม่มีอะไรออกโดยไม่ narrow); `never` ไหลออกอย่างเดียว (ไม่มีอะไรนอกจาก never assign เข้าไปได้)',
   },
   {
-    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const takes: (p: Point) => void;\nconst obj = { x: 1, y: 2, z: 3 };\ntakes(obj);\n```\nอันนี้ compile ผ่านไหม ทั้งที่ `obj` มี property `z` เกินที่ `Point` ไม่ได้ประกาศ?',
+    q: `\`\`\`ts
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+const obj = { x: 1, y: 2, z: 3 };
+takes(obj);
+\`\`\`
+อันนี้ compile ผ่านไหม ทั้งที่ \`obj\` มี property \`z\` เกินที่ \`Point\` ไม่ได้ประกาศ?`,
     options: [
       'ไม่ -- เป็น excess-property error เดียวกับการส่ง literal ตรง ๆ',
       'ใช่ -- excess-property check ใช้แค่กับ object literal ที่ FRESH เขียนตรง ๆ ณ ตำแหน่งที่ถูกเช็คเท่านั้น พอถูกเก็บในตัวแปรแล้ว structural assignability ปกติใช้แทน และ property เกินได้รับอนุญาต',
@@ -306,7 +320,12 @@ export const quizAssignability = [
     explain: 'verify แล้ว: การส่ง literal ตรง ๆ (`takes({ x: 1, y: 2, z: 3 })`) trigger TS2353 แต่การเก็บมันใน `obj` ก่อนแล้วส่ง `obj` compile สะอาด -- excess-property check แคบกว่า assignability ปกติและทำงานแค่ตอน freshness เท่านั้น',
   },
   {
-    q: '```ts\ndeclare const x: "a" | "b";\ndeclare const y: "c" | "d";\nif (x === y) {}\n```\nเกิดอะไรขึ้น และทำไมนี่ถึงเป็นเช็คที่ต่างจาก assignability?',
+    q: `\`\`\`ts
+declare const x: "a" | "b";
+declare const y: "c" | "d";
+if (x === y) {}
+\`\`\`
+เกิดอะไรขึ้น และทำไมนี่ถึงเป็นเช็คที่ต่างจาก assignability?`,
     options: [
       'compile ผ่านสบาย -- string literal union เทียบกันได้เสมอ',
       'มันคือ TS2367 "no overlap" -- comparability เช็คว่า type สองตัวแชร์ value ที่เป็นไปได้กันได้ไหม ซึ่งเข้มกว่า assignability ตรงนี้ ทั้งที่ `"a" | "b"` ก็ไม่ assignable ให้ `"c" | "d"` ด้วยเหตุผลอื่นที่ไม่เกี่ยวกันเช่นกัน',

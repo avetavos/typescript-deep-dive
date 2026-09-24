@@ -360,7 +360,15 @@ export const quizNull = [
     explain: 'เมื่อทุกเคสที่มีชื่อถูกจัดการแล้ว สิ่งที่เหลือคือ never พอเพิ่ม variant โดยไม่มี case คู่กัน value ที่เหลือนั้นไม่ใช่ never อีกต่อไป การ assign เข้าตัวแปรที่ type เป็น never จึง compile ไม่ผ่าน',
   },
   {
-    q: '```ts\ninterface ServerConfig { timeout?: number }\nfunction withDefaults(cfg: ServerConfig) {\n  const timeout = cfg.timeout || 30;\n  return timeout;\n}\nconsole.log(withDefaults({ timeout: 0 }));\n```\nโค้ดนี้พิมพ์อะไร และทำไม?',
+    q: `\`\`\`ts
+interface ServerConfig { timeout?: number }
+function withDefaults(cfg: ServerConfig) {
+  const timeout = cfg.timeout || 30;
+  return timeout;
+}
+console.log(withDefaults({ timeout: 0 }));
+\`\`\`
+โค้ดนี้พิมพ์อะไร และทำไม?`,
     options: [
       '0 -- || แทนที่แค่ null กับ undefined',
       '30 -- 0 เป็น falsy || จึงถือว่ามันหายไปแล้วแทนที่ด้วย default',
@@ -371,7 +379,19 @@ export const quizNull = [
     explain: '|| fallback กับ falsy value อะไรก็ได้ และ 0 เป็น falsy ใน JavaScript ดังนั้น timeout ที่ valid สมบูรณ์ค่า 0 ที่ส่งมาชัดเจนจึงถูกแทนที่ด้วย default อย่างเงียบ ๆ ถ้าใช้ ?? แทน 0 จะรอดอยู่',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; r: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(s: Shape): number {\n  if (s.kind === "circle") return Math.PI * s.r ** 2;\n  if (s.kind === "square") return s.side ** 2;\n  throw new Error("unhandled shape");\n}\n```\nโค้ดนี้ compile ผ่านไหม ทั้งที่ `triangle` ไม่เคยถูกจัดการ?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  throw new Error("unhandled shape");
+}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม ทั้งที่ \`triangle\` ไม่เคยถูกจัดการ?`,
     options: [
       'ไม่ผ่าน -- compiler บังคับให้ทุก kind มี branch ชัดเจน',
       'ผ่าน ไม่มี error เลย -- throw เปล่า ๆ ไม่ถูกเช็คกับ union เลย ดังนั้นเคส triangle ที่หายไปคือช่องว่างเงียบ ๆ',

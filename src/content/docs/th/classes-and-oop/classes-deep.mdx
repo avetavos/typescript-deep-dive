@@ -640,7 +640,15 @@ export const quizDeep = [
     explain: 'access modifier บน constructor parameter เป็น shorthand ของการ declare field แล้วเขียน `this.id = id;` ใน constructor body — แต่การทำแบบนี้ต้องให้ compiler emit code ให้ ซึ่งเป็นเหตุผลที่มันพังภายใต้ setting แบบ erasable-syntax-only',
   },
   {
-    q: '```ts\nclass Animal {\n  speak() { return "..."; } // renamed from makeSound\n}\nclass Dog extends Animal {\n  override makeSound() { return "Woof"; }\n}\n```\nเกิดอะไรขึ้นตรงนี้ แล้วทำไม?',
+    q: `\`\`\`ts
+class Animal {
+  speak() { return "..."; } // renamed from makeSound
+}
+class Dog extends Animal {
+  override makeSound() { return "Woof"; }
+}
+\`\`\`
+เกิดอะไรขึ้นตรงนี้ แล้วทำไม?`,
     options: [
       'compile ผ่าน — `override` เป็นแค่ documentation',
       'TS4113: `override` ถูก reject เพราะ `Animal` ไม่มี member `makeSound` ให้ `Dog` override อีกต่อไป — เช็คนี้เปิดตลอดไม่ต้องใช้ flag',
@@ -662,7 +670,19 @@ export const quizDeep = [
     explain: 'เช็คกลับด้าน — flag override ที่ขาด keyword `override` — ถูก gate ไว้หลัง flag opt-in `noImplicitOverride` ทั้งหมด ซึ่ง strict mode ไม่ได้เปิดให้ source เดียวกันเป๊ะ compile ผ่านสะอาดโดยไม่มี flag และพังด้วย TS4114 ทันทีที่เปิด flag',
   },
   {
-    q: '```ts\nclass RecordBase {\n  constructor(data: Record<string, unknown>) {\n    Object.assign(this, data);\n  }\n}\nclass UserRecord extends RecordBase {\n  name: string = "";\n}\nconst u = new UserRecord({ name: "Ada" });\nconsole.log(u.name);\n```\nอันนี้ log อะไร แล้วทำไม?',
+    q: `\`\`\`ts
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  name: string = "";
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+\`\`\`
+อันนี้ log อะไร แล้วทำไม?`,
     options: [
       '`"Ada"` — `Object.assign` ใน base constructor set มัน',
       '`""` — field initializer ของ `UserRecord` เองรันหลัง `super()` return และ re-define `name` กลับเป็น default เขียนทับสิ่งที่ `Object.assign` เพิ่ง set ไป',

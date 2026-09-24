@@ -343,7 +343,14 @@ export const quizPerf = [
     explain: 'as ไม่ทำ runtime check หรือแปลงอะไรเลย มันแค่บอก checker ให้เลิก verify ซึ่งซ่อนความไม่ตรงกันจริงไว้ ถ้า cast นั้นผิด',
   },
   {
-    q: '```ts\ntype Flags = "a" | "b" | /* ...18 more */ "t";\ntype PowerSet<T extends string> = T extends unknown\n  ? T | `${T}-${PowerSet<Exclude<Flags, T>>}`\n  : never;\ntype All = PowerSet<Flags>;\n```\nTypeScript 7.0.2 รายงานอะไรสำหรับโค้ดนี้ และทำไม?',
+    q: `\`\`\`ts
+type Flags = "a" | "b" | /* ...18 more */ "t";
+type PowerSet<T extends string> = T extends unknown
+  ? T | \`\${T}-\${PowerSet<Exclude<Flags, T>>}\`
+  : never;
+type All = PowerSet<Flags>;
+\`\`\`
+TypeScript 7.0.2 รายงานอะไรสำหรับโค้ดนี้ และทำไม?`,
     options: [
       '`TS2590` เพราะ union ซับซ้อนเกินจะแทนได้',
       '`TS2589` เพราะ recursion แบบ combinatorial เกิน instantiation-depth limit',
@@ -354,7 +361,15 @@ export const quizPerf = [
     explain: 'นี่เป็น recursive ไม่ใช่แค่ใหญ่ — แต่ละ flag ใน 20 ตัว recurse เข้า flag ที่เหลือ จึงชน depth guard (TS2589) แทนที่จะเป็น size guard (TS2590) ที่แยกกัน ซึ่ง union ใหญ่แบบไม่ recursive จะชนแทน',
   },
   {
-    q: '```ts\nfunction saveAll(ids: string[]) {\n  ids.forEach(async (id) => {\n    await save(id);\n  });\n  console.log("saveAll returned");\n}\n```\n`tsc --strict` flag อะไรตรงนี้ไหม แล้วตอนรันจริงเกิดอะไรขึ้น?',
+    q: `\`\`\`ts
+function saveAll(ids: string[]) {
+  ids.forEach(async (id) => {
+    await save(id);
+  });
+  console.log("saveAll returned");
+}
+\`\`\`
+\`tsc --strict\` flag อะไรตรงนี้ไหม แล้วตอนรันจริงเกิดอะไรขึ้น?`,
     options: [
       'tsc รายงาน floating-promise error และ code รอทุก save เสร็จก่อน',
       'tsc ไม่รายงาน error เลย และ "saveAll returned" log ก่อน save() ตัวไหนจะเสร็จ',

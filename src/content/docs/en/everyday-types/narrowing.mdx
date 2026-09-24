@@ -509,7 +509,20 @@ export const quizNarrow = [
     explain: 'The inference is conservative and specific: no explicit return type, exactly one return, the boolean tied to the parameter, and the parameter never reassigned — anything fancier still needs an explicit predicate.',
   },
   {
-    q: '```ts\nfunction isString(x: unknown): x is string {\n  return true;\n}\n\nfunction shout(x: unknown) {\n  if (isString(x)) {\n    console.log(x.toUpperCase());\n  }\n}\n\nshout(42);\n```\nDoes this compile, and what happens when it runs?',
+    q: `\`\`\`ts
+function isString(x: unknown): x is string {
+  return true;
+}
+
+function shout(x: unknown) {
+  if (isString(x)) {
+    console.log(x.toUpperCase());
+  }
+}
+
+shout(42);
+\`\`\`
+Does this compile, and what happens when it runs?`,
     options: [
       'Compile error — the predicate must actually check typeof x === "string"',
       'Compiles fine, but throws at runtime -- the predicate is trusted from the signature, never checked against the body',
@@ -520,7 +533,19 @@ export const quizNarrow = [
     explain: 'The compiler trusts a type predicate\'s signature, not its implementation, so a guard that always returns true compiles with zero errors. Calling shout(42) then crashes with "x.toUpperCase is not a function" exactly where the compiler said it was safe.',
   },
   {
-    q: '```ts\ninterface State { id: string | number }\nasync function corrupt(state: State) {\n  state.id = 42;\n}\nasync function run(state: State) {\n  if (typeof state.id === "string") {\n    await corrupt(state);\n    state.id.toUpperCase();\n  }\n}\n```\nDoes `run` compile, and is the narrowing after `await corrupt(state)` actually safe?',
+    q: `\`\`\`ts
+interface State { id: string | number }
+async function corrupt(state: State) {
+  state.id = 42;
+}
+async function run(state: State) {
+  if (typeof state.id === "string") {
+    await corrupt(state);
+    state.id.toUpperCase();
+  }
+}
+\`\`\`
+Does \`run\` compile, and is the narrowing after \`await corrupt(state)\` actually safe?`,
     options: [
       'Does not compile -- await always clears narrowing',
       'Compiles, but the narrowing is unsound -- corrupt can mutate state.id while run is suspended, and the compiler has no way to know',

@@ -52,8 +52,8 @@ req(method2); // ❌ string is too wide for "GET" | "POST"
 <Mermaid title="const keeps the literal; let widens" code={widenDiagram} />
 
 export const widenDiagram = `flowchart LR
-  lit["literal value\n\"GET\""] -->|const: can't change| keep["type: \"GET\"\n(narrow)"]
-  lit -->|let: might change| wide["type: string\n(widened)"]`;
+  lit["literal value<br/>#quot;GET#quot;"] -->|const: can't change| keep["type: #quot;GET#quot;<br/>(narrow)"]
+  lit -->|let: might change| wide["type: string<br/>(widened)"]`;
 
 When you want a literal type from a `let` or an object property, use a **const assertion** (`as const`) — a whole topic in the next module.
 
@@ -298,7 +298,11 @@ export const quizInference = [
     explain: 'The compiler forms a union that covers every element rather than picking one and erroring on the rest — this is the "best common type."',
   },
   {
-    q: '```ts\nconst obj = { x: "hi" };\ntype ObjX = typeof obj.x;\n```\nWhat is `ObjX`, and why?',
+    q: `\`\`\`ts
+const obj = { x: "hi" };
+type ObjX = typeof obj.x;
+\`\`\`
+What is \`ObjX\`, and why?`,
     options: [
       '`"hi"` — const always preserves literals all the way through',
       '`string` — const only protects the binding `obj` from reassignment; the property `obj.x` is still mutable, so it widens like any other property',
@@ -309,7 +313,15 @@ export const quizInference = [
     explain: '`const` is a property of the variable, not a deep freeze of the value. `obj.x = "bye"` is legal, so the compiler correctly widens the inferred type of `obj.x` to `string` even though `obj` itself was declared `const`.',
   },
   {
-    q: '```ts\nfunction parseAmount(input: string) {\n  const n = Number(input);\n  if (Number.isNaN(n)) return;\n  return n;\n}\nconst total = parseAmount("42").toFixed(2);\n```\nWhere does the resulting compile error appear, and why is that significant?',
+    q: `\`\`\`ts
+function parseAmount(input: string) {
+  const n = Number(input);
+  if (Number.isNaN(n)) return;
+  return n;
+}
+const total = parseAmount("42").toFixed(2);
+\`\`\`
+Where does the resulting compile error appear, and why is that significant?`,
     options: [
       'Inside `parseAmount`, on the `return;` line, because there is no return-type annotation',
       'At the call site — `parseAmount("42").toFixed(2)` — because `parseAmount`\'s inferred return type silently widened to `number | undefined` and nothing at the function itself flags that change',

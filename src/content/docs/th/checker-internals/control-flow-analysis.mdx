@@ -326,7 +326,15 @@ export const quizCFA = [
     explain: 'นี่คือความไม่สมมาตรจริงที่มีเอกสารรองรับ: await เก็บ value ที่เชื่อไว้ข้ามการพักที่โค้ดอะไรก็ได้อาจ mutate มันได้ (unsound) ในขณะที่ closure boundary ถูกปฏิบัติแบบระมัดระวังเพราะ checker ไม่มีทางรู้ว่ามันจะรันเมื่อไหร่',
   },
   {
-    q: '```ts\nfunction area(shape: Shape) {\n  let isCircle = shape.kind === "circle";\n  if (isCircle) {\n    return shape.radius; // does this narrow?\n  }\n}\n```\naliased-condition narrowing จาก TypeScript 4.4 ใช้ตรงนี้ได้ไหม?',
+    q: `\`\`\`ts
+function area(shape: Shape) {
+  let isCircle = shape.kind === "circle";
+  if (isCircle) {
+    return shape.radius; // does this narrow?
+  }
+}
+\`\`\`
+aliased-condition narrowing จาก TypeScript 4.4 ใช้ตรงนี้ได้ไหม?`,
     options: [
       'ได้ -- local ไหนก็ได้ที่ถือ boolean condition narrow แบบเดียวกัน',
       'ไม่ได้ -- aliased-condition narrowing เชื่อแค่ `const`; `let` ที่ถือ condition เดียวกันเป๊ะไม่ narrow ด้วยเหตุผล reassignability เดียวกับที่ mutable property หาย narrowing ข้าม closure',
@@ -348,7 +356,15 @@ export const quizCFA = [
     explain: 'Verify ตรงแล้ว: chain ของ const alias ห้าอัน (a ถึง e) ยัง narrow ถูกต้อง; เพิ่มอีกหนึ่งระดับ (f) ทำให้พัง ให้ TS2339 จริงสองอันบนฟังก์ชันที่เหมือนกันเป๊ะ',
   },
   {
-    q: '```ts\nfunction helper(x: unknown): boolean {\n  return typeof x === "string";\n}\nfunction isStringIndirect(x: unknown) {\n  return helper(x);\n}\n```\nTypeScript 5.5 infer type predicate ให้ `isStringIndirect` ไหม?',
+    q: `\`\`\`ts
+function helper(x: unknown): boolean {
+  return typeof x === "string";
+}
+function isStringIndirect(x: unknown) {
+  return helper(x);
+}
+\`\`\`
+TypeScript 5.5 infer type predicate ให้ \`isStringIndirect\` ไหม?`,
     options: [
       'ได้ -- ฟังก์ชันที่ return boolean ที่สุดท้าย narrow ได้นับหมด',
       'ไม่ได้ -- inferred predicate ทำงานแค่ตอนที่ body ของฟังก์ชัน*เอง*ทำ narrowing check ตรง ๆ บน parameter ของตัวเอง; การ delegate ให้ฟังก์ชันอื่นไม่เข้าเกณฑ์ verify ได้จาก parameter ที่ยังเป็น `unknown` (TS18046 จริง) ที่ call site',

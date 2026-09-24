@@ -223,7 +223,18 @@ export const quizStructural = [
     explain: 'A branded type intersects a primitive with a marker property that never exists at runtime, purely to make an otherwise-identical shape fail the structural check against a same-shaped-but-different value.',
   },
   {
-    q: '```ts\nclass Point2D {\n  constructor(public x: number, public y: number) {}\n}\nclass Coordinate {\n  constructor(public x: number, public y: number) {}\n}\n\nconst p = new Point2D(1, 2);\nconst c: Coordinate = p;\n```\nDoes this compile?',
+    q: `\`\`\`ts
+class Point2D {
+  constructor(public x: number, public y: number) {}
+}
+class Coordinate {
+  constructor(public x: number, public y: number) {}
+}
+
+const p = new Point2D(1, 2);
+const c: Coordinate = p;
+\`\`\`
+Does this compile?`,
     options: [
       'No — `Point2D` and `Coordinate` are unrelated classes',
       'Yes — classes are structural too, and an unrelated class with an identical public shape is interchangeable',
@@ -245,7 +256,15 @@ export const quizStructural = [
     explain: 'This is the one deliberate exception to plain shape-matching: a `private`/`protected` member ties compatibility to *where* it was declared, not just its name and type, which is why the error is specifically "separate declarations of a private property."',
   },
   {
-    q: '```ts\ntype UserId = string & { readonly __brand: "UserId" };\ntype OrderId = string & { readonly __brand: "OrderId" };\n\nfunction getUser(id: UserId) {}\ndeclare const orderId: OrderId;\ngetUser(orderId);\n```\nWhy does this fail to compile, even though both are ultimately strings?',
+    q: `\`\`\`ts
+type UserId = string & { readonly __brand: "UserId" };
+type OrderId = string & { readonly __brand: "OrderId" };
+
+function getUser(id: UserId) {}
+declare const orderId: OrderId;
+getUser(orderId);
+\`\`\`
+Why does this fail to compile, even though both are ultimately strings?`,
     options: [
       'It does not fail — both are strings, so it compiles',
       'The `__brand` marker property has a different literal value on each type ("UserId" vs "OrderId"), so the two intersections are no longer structurally identical',

@@ -343,7 +343,15 @@ export const quizMapped = [
     explain: 'key ที่ remap เป็น never จะไม่ปรากฏใน object type ผลลัพธ์เลย — never คือวิธีมาตรฐานในการ filter key ออกจาก mapped type',
   },
   {
-    q: '```ts\ninterface Source { readonly a: string; b?: number; }\ntype Copy<T> = { [K in keyof T]: T[K] };\ntype FromKeys<K extends string, V> = { [P in K]: V };\n\ntype R1 = Copy<Source>;\ntype R2 = FromKeys<keyof Source, Source[keyof Source]>;\n```\n`R1`/`R2` ตัวไหนที่เก็บ `a` เป็น readonly และ `b` เป็น optional?',
+    q: `\`\`\`ts
+interface Source { readonly a: string; b?: number; }
+type Copy<T> = { [K in keyof T]: T[K] };
+type FromKeys<K extends string, V> = { [P in K]: V };
+
+type R1 = Copy<Source>;
+type R2 = FromKeys<keyof Source, Source[keyof Source]>;
+\`\`\`
+\`R1\`/\`R2\` ตัวไหนที่เก็บ \`a\` เป็น readonly และ \`b\` เป็น optional?`,
     options: [
       'ทั้งคู่ — ใช้ keyof Source ทั้งสองตัว',
       'แค่ R1 — มันเป็น homomorphic (map ตรง ๆ บน keyof T ของ T เปลือย ๆ ตัวเดียว); R2 ไม่ใช่ เพราะ K ของมันเป็น parameter แยกที่ไม่เชื่อมกับ Source',
@@ -365,7 +373,13 @@ export const quizMapped = [
     explain: 'Record นิยามเป็น { [P in K]: V } — P ไล่ผ่าน key union ธรรมดา ไม่ใช่ keyof T ของ object T ในอันเดียวกัน มันเลยไม่ homomorphic และสืบทอด modifier ที่มันไม่มีทางเห็นไม่ได้',
   },
   {
-    q: '```ts\ninterface A { a: number }\ninterface B { b: string }\ntype Boxed<T> = { [K in keyof T]: T[K][] };\ntype Result = Boxed<A | B>;\n```\n`Result` คืออะไร?',
+    q: `\`\`\`ts
+interface A { a: number }
+interface B { b: string }
+type Boxed<T> = { [K in keyof T]: T[K][] };
+type Result = Boxed<A | B>;
+\`\`\`
+\`Result\` คืออะไร?`,
     options: [
       '`{}` — เพราะ keyof (A | B) คือ never ไม่มี key ร่วมกัน',
       '`{ a: number[] } | { b: string[] }` — mapped type homomorphic distribute ผ่าน union ก่อนคำนวณ keyof ต่อ member',

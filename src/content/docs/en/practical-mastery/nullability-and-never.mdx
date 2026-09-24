@@ -360,7 +360,15 @@ export const quizNull = [
     explain: 'Once every named case is handled, whatever is left over is never. Adding a variant without a matching case means that leftover value is no longer never, so the assignment to a never-typed variable fails to compile.',
   },
   {
-    q: '```ts\ninterface ServerConfig { timeout?: number }\nfunction withDefaults(cfg: ServerConfig) {\n  const timeout = cfg.timeout || 30;\n  return timeout;\n}\nconsole.log(withDefaults({ timeout: 0 }));\n```\nWhat does this print, and why?',
+    q: `\`\`\`ts
+interface ServerConfig { timeout?: number }
+function withDefaults(cfg: ServerConfig) {
+  const timeout = cfg.timeout || 30;
+  return timeout;
+}
+console.log(withDefaults({ timeout: 0 }));
+\`\`\`
+What does this print, and why?`,
     options: [
       '0 -- || only replaces null and undefined',
       '30 -- 0 is falsy, so || treats it as absent and substitutes the default',
@@ -371,7 +379,19 @@ export const quizNull = [
     explain: '|| falls back on any falsy value, and 0 is falsy in JavaScript, so an explicitly-passed, perfectly valid timeout of 0 gets silently replaced by the default. ?? would have left it as 0.',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; r: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(s: Shape): number {\n  if (s.kind === "circle") return Math.PI * s.r ** 2;\n  if (s.kind === "square") return s.side ** 2;\n  throw new Error("unhandled shape");\n}\n```\nDoes this compile, given that `triangle` is never handled?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(s: Shape): number {
+  if (s.kind === "circle") return Math.PI * s.r ** 2;
+  if (s.kind === "square") return s.side ** 2;
+  throw new Error("unhandled shape");
+}
+\`\`\`
+Does this compile, given that \`triangle\` is never handled?`,
     options: [
       'No -- the compiler requires every kind to have an explicit branch',
       'Yes, with zero errors -- a bare throw is not checked against the union at all, so the missing triangle case is a silent gap',

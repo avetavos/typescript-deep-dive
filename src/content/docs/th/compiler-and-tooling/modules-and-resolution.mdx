@@ -258,7 +258,11 @@ export const quizModules = [
     explain: 'JSON module มีแค่ default export และ attribute with (ไม่ใช่ assert ที่ deprecate แล้ว) จำเป็นภายใต้ nodenext',
   },
   {
-    q: '```ts\nconst data = require("node:fs");\nconsole.log(data);\n```\nไฟล์แบบ ESM `tsc --strict` รายงาน `TS2591` เมื่อไม่โหลด Node types แต่รายงาน **ไม่มี error เลย** บน code เดียวกันเป๊ะเมื่อตั้ง `"types": ["node"]` แล้ว ทำไมถึงต่างกัน และเกิดอะไรขึ้นจริงตอนไฟล์นี้รัน?',
+    q: `\`\`\`ts
+const data = require("node:fs");
+console.log(data);
+\`\`\`
+ไฟล์แบบ ESM \`tsc --strict\` รายงาน \`TS2591\` เมื่อไม่โหลด Node types แต่รายงาน **ไม่มี error เลย** บน code เดียวกันเป๊ะเมื่อตั้ง \`"types": ["node"]\` แล้ว ทำไมถึงต่างกัน และเกิดอะไรขึ้นจริงตอนไฟล์นี้รัน?`,
     options: [
       'TypeScript re-check module format ใหม่เมื่อมี @types/node แล้วอนุญาต require ใน ESM อย่างถูกต้อง',
       '`@types/node` ประกาศ `require` เป็น ambient global ธรรมดาโดยไม่รู้เลยว่าไฟล์ปัจจุบันเป็น module format ไหน checker เลยพอใจทั้งสองแบบ -- แต่ Node เองยัง throw `ReferenceError: require is not defined in ES module scope` ทันทีที่ไฟล์นี้รัน',

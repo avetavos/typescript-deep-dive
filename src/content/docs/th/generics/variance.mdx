@@ -331,7 +331,12 @@ export const quizVariance = [
     explain: 'readonly array ไม่มีฝั่งเขียนดังนั้น widen ปลอดภัยแบบ covariant; strictFunctionTypes ทำให้ parameter ของ function เดี่ยว contravariant แบบ sound; method ที่เขียนด้วย shorthand syntax ถูกตรวจแบบ bivariant ไม่ว่า strictFunctionTypes จะเปิดหรือปิด',
   },
   {
-    q: '```ts\ninterface Emitter<in T> {\n  emit(): T;\n}\n```\nโค้ดนี้เกิดอะไรขึ้นตอน compile และทำไม?',
+    q: `\`\`\`ts
+interface Emitter<in T> {
+  emit(): T;
+}
+\`\`\`
+โค้ดนี้เกิดอะไรขึ้นตอน compile และทำไม?`,
     options: [
       'ไม่มีอะไรเกิดขึ้น -- `in` ถูกยอมรับกับทุกตำแหน่ง',
       '`TS2636` เพราะ `T` ปรากฏแค่ในตำแหน่ง output (return type ของ `emit`) แต่ `in` ประกาศว่า contravariant -- ความขัดแย้งที่ checker ตรวจเทียบกับการใช้งานจริง',
@@ -342,7 +347,19 @@ export const quizVariance = [
     explain: 'annotation in/out ถูกตรวจในฐานะ assertion เทียบกับการวัด variance แบบ structural ของ compiler เอง T ถูก produce อย่างเดียวตรงนี้ (covariant) ดังนั้นประกาศ in (contravariant) คือความขัดแย้งตรง ๆ และ TS2636 ยิงที่ตัว declaration เลย ไม่ต้องมี call site',
   },
   {
-    q: '```ts\nclass Queue<out T> {\n  private items: T[] = [];\n  enqueue(item: T): void { this.items.push(item); }\n  dequeue(): T | undefined { return this.items.shift(); }\n}\n\nconst dogQueue = new Queue<Dog>();\nconst animalQueue: Queue<Animal> = dogQueue;\nanimalQueue.enqueue(new Cat());\nconsole.log(dogQueue.dequeue()!.bark());\n```\nถ้า `Dog` กับ `Cat` extend `Animal` ทั้งคู่ โค้ดนี้เกิดอะไรขึ้นตอนรัน?',
+    q: `\`\`\`ts
+class Queue<out T> {
+  private items: T[] = [];
+  enqueue(item: T): void { this.items.push(item); }
+  dequeue(): T | undefined { return this.items.shift(); }
+}
+
+const dogQueue = new Queue<Dog>();
+const animalQueue: Queue<Animal> = dogQueue;
+animalQueue.enqueue(new Cat());
+console.log(dogQueue.dequeue()!.bark());
+\`\`\`
+ถ้า \`Dog\` กับ \`Cat\` extend \`Animal\` ทั้งคู่ โค้ดนี้เกิดอะไรขึ้นตอนรัน?`,
     options: [
       'compile ไม่ผ่านด้วย TS2636 เพราะ `out T` ห้าม `enqueue`',
       'compile ผ่านด้วย diagnostic เป็นศูนย์ แล้ว throw `TypeError: ... .bark is not a function` ตอน runtime เพราะ `enqueue` เป็น method shorthand และยังคง bivariant ไม่ว่าจะมี annotation `out` หรือไม่',

@@ -640,7 +640,15 @@ export const quizDeep = [
     explain: 'The access modifier on a constructor parameter is shorthand for declaring a field and writing `this.id = id;` in the constructor body -- but doing so requires the compiler to emit code, which is why it fails under erasable-syntax-only settings.',
   },
   {
-    q: '```ts\nclass Animal {\n  speak() { return "..."; } // renamed from makeSound\n}\nclass Dog extends Animal {\n  override makeSound() { return "Woof"; }\n}\n```\nWhat happens here, and why?',
+    q: `\`\`\`ts
+class Animal {
+  speak() { return "..."; } // renamed from makeSound
+}
+class Dog extends Animal {
+  override makeSound() { return "Woof"; }
+}
+\`\`\`
+What happens here, and why?`,
     options: [
       'Compiles fine — `override` is just documentation',
       'TS4113: `override` is rejected because `Animal` no longer has a `makeSound` member for `Dog` to override — this check runs with no flag required',
@@ -662,7 +670,19 @@ export const quizDeep = [
     explain: 'The mirror check -- flagging an override that is missing its `override` keyword -- is gated entirely behind the opt-in `noImplicitOverride` flag, which strict mode does not enable. The identical source compiles clean without the flag and fails with TS4114 once it is turned on.',
   },
   {
-    q: '```ts\nclass RecordBase {\n  constructor(data: Record<string, unknown>) {\n    Object.assign(this, data);\n  }\n}\nclass UserRecord extends RecordBase {\n  name: string = "";\n}\nconst u = new UserRecord({ name: "Ada" });\nconsole.log(u.name);\n```\nWhat does this log, and why?',
+    q: `\`\`\`ts
+class RecordBase {
+  constructor(data: Record<string, unknown>) {
+    Object.assign(this, data);
+  }
+}
+class UserRecord extends RecordBase {
+  name: string = "";
+}
+const u = new UserRecord({ name: "Ada" });
+console.log(u.name);
+\`\`\`
+What does this log, and why?`,
     options: [
       '`"Ada"` — `Object.assign` in the base constructor sets it',
       '`""` — `UserRecord`\'s own field initializer runs after `super()` returns and re-defines `name` back to its default, overwriting what `Object.assign` just set',

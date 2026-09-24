@@ -307,7 +307,14 @@ export const quizBuild = [
     explain: 'A type-only import is guaranteed erasure -- it can never accidentally create a real runtime module dependency out of what was only ever a compile-time type relationship.',
   },
   {
-    q: '```ts\nenum Color { Red, Green }\n\nclass Point {\n  constructor(public x: number, public y: number) {}\n}\n```\nVerified across four tools, which one rejects this file outright, and why don\'t the others catch the same problem?',
+    q: `\`\`\`ts
+enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+\`\`\`
+Verified across four tools, which one rejects this file outright, and why don't the others catch the same problem?`,
     options: [
       'tsc --noEmit -- it never allows enum',
       '`node --experimental-strip-types` -- it only deletes type annotations and cannot transform an enum into a real object or a parameter property into a real assignment, unlike tsc/tsx/esbuild, which understand the syntax well enough to transform it',

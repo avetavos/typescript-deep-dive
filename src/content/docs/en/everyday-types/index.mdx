@@ -187,7 +187,13 @@ export const quizIndex = [
     explain: 'Every feature in this module — literal, union, intersection, tuple — is just a way of describing or shrinking a set of possible values.',
   },
   {
-    q: '```ts\nfunction area(s: Shape) {\n  if (s.kind === "circle") return Math.PI * s.radius ** 2;\n  if (s.kind === "square") return s.side ** 2;\n}\n```\nWhy does `area(s).toFixed(2)` fail to compile even though every `Shape` case is handled by an `if`?',
+    q: `\`\`\`ts
+function area(s: Shape) {
+  if (s.kind === "circle") return Math.PI * s.radius ** 2;
+  if (s.kind === "square") return s.side ** 2;
+}
+\`\`\`
+Why does \`area(s).toFixed(2)\` fail to compile even though every \`Shape\` case is handled by an \`if\`?`,
     options: [
       'It does not fail — this compiles cleanly',
       'The two `if` statements are not recognized as exhaustive, so the inferred return type includes `undefined`',
@@ -198,7 +204,22 @@ export const quizIndex = [
     explain: 'Two separate `if` statements (no `else`, no exhaustive `switch`) leave a path where nothing returns. TypeScript infers `number | undefined`, and `TS2532: Object is possibly \'undefined\'` fires on the call site.',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case "circle": return Math.PI * s.radius ** 2;\n    case "square": return s.side ** 2;\n    default:\n      const _exhaustive: never = s;\n      return _exhaustive;\n  }\n}\n```\nWhat happens if a new `{ kind: "triangle"; ... }` member is added to `Shape` but no new `case` is added?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2;
+    case "square": return s.side ** 2;
+    default:
+      const _exhaustive: never = s;
+      return _exhaustive;
+  }
+}
+\`\`\`
+What happens if a new \`{ kind: "triangle"; ... }\` member is added to \`Shape\` but no new \`case\` is added?`,
     options: [
       'Nothing — the default branch silently handles it at runtime',
       'The assignment `const _exhaustive: never = s` fails to compile, pointing at the missing case',

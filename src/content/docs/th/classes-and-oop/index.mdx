@@ -214,7 +214,19 @@ export const quizIndex = [
     explain: '`#private` field เป็น ECMAScript syntax ของจริงที่ JS engine บังคับ จึง emit ออกมาตรง ๆ ส่วน `private`, `implements`, `abstract` เป็น annotation ของ TypeScript ล้วน ๆ ที่ erase ตอน compile',
   },
   {
-    q: '```ts\nclass ApiClient {\n  private token: string;\n  constructor(token: string) { this.token = token; }\n}\nclass FakeApiClient {\n  private token: string;\n  constructor() { this.token = "fake"; }\n}\nfunction useClient(client: ApiClient) { /* ... */ }\nuseClient(new FakeApiClient());\n```\nอันนี้ compile ผ่านไหม?',
+    q: `\`\`\`ts
+class ApiClient {
+  private token: string;
+  constructor(token: string) { this.token = token; }
+}
+class FakeApiClient {
+  private token: string;
+  constructor() { this.token = "fake"; }
+}
+function useClient(client: ApiClient) { /* ... */ }
+useClient(new FakeApiClient());
+\`\`\`
+อันนี้ compile ผ่านไหม?`,
     options: [
       'ผ่าน — ทั้งสอง class มี structural shape เหมือนกันเป๊ะ',
       'ไม่ผ่าน — `private` member ทำให้การเทียบเป็น nominal และสอง class มี declaration ของ `token` แยกกัน',
@@ -225,7 +237,16 @@ export const quizIndex = [
     explain: 'TypeScript เป็น structural สำหรับ public member แต่ `private` (หรือ `#private`) member ผูกการเทียบกับ class ที่ประกาศมันเป๊ะ ๆ สอง class ที่ shape เหมือนกันเป๊ะ รวมถึง private field ชื่อเดียวกัน ก็ยังไม่ assign เข้าหากันได้: TS2345, "Types have separate declarations of a private property \'token\'."',
   },
   {
-    q: '```ts\nclass Wallet {\n  #balance = 0;\n  static isWallet(obj: unknown): obj is Wallet {\n    return typeof obj === "object" && obj !== null && #balance in obj;\n  }\n}\nconsole.log(Wallet.isWallet({ balance: 0 }));\n```\nอันนี้ print อะไร แล้วทำไม?',
+    q: `\`\`\`ts
+class Wallet {
+  #balance = 0;
+  static isWallet(obj: unknown): obj is Wallet {
+    return typeof obj === "object" && obj !== null && #balance in obj;
+  }
+}
+console.log(Wallet.isWallet({ balance: 0 }));
+\`\`\`
+อันนี้ print อะไร แล้วทำไม?`,
     options: [
       '`true` — object มี property `balance` ที่ตรงกัน',
       '`false` — `#balance` เป็น private slot ที่แยกต่างหาก ที่ object literal ธรรมดาไม่มีทางมีได้ ไม่ว่าจะมี public property อะไรก็ตาม',

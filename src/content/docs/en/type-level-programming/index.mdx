@@ -228,7 +228,11 @@ export const quizIndex = [
     explain: 'Box<T> takes a type argument and produces a type -- exactly the shape of a function, just evaluated by the compiler instead of at runtime.',
   },
   {
-    q: '```ts\ntype EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;\ntype R = EqualNaive<any, string>;\n```\nWhat is `R`, and why is that a problem for a type-level test?',
+    q: `\`\`\`ts
+type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+type R = EqualNaive<any, string>;
+\`\`\`
+What is \`R\`, and why is that a problem for a type-level test?`,
     options: [
       '`false` — correct, since any and string are different types',
       '`true` — because any is compatible with everything',
@@ -239,7 +243,12 @@ export const quizIndex = [
     explain: 'any makes both directions of the naive mutual-extends check succeed, so the conditional cannot resolve to a single literal -- it collapses to boolean, meaning the "test" would accept either answer.',
   },
   {
-    q: '```ts\ntype Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;\ntype Expect<T extends true> = T;\ntype Case = Expect<Equal<any, string>>;\n```\nDoes this compile, and why?',
+    q: `\`\`\`ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+type Case = Expect<Equal<any, string>>;
+\`\`\`
+Does this compile, and why?`,
     options: [
       'Yes -- any is assignable to everything',
       'No, TS2344 -- Equal<any, string> correctly resolves to the literal false, which does not satisfy the true constraint on Expect',

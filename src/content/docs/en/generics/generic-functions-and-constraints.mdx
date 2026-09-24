@@ -271,7 +271,11 @@ export const quizConstraints = [
     explain: 'The smell is about links, not raw counts. `T` connects the argument to the return type here, so a caller misusing the result is still caught — unlike `logLoose<T>(x: T): void`, where `T` links nothing.',
   },
   {
-    q: '```ts\nfunction both<T>(a: T, b: T): T { return a; }\nconst y = both(1, "two");\n```\nWhat does the resulting error say, and why is it confusing?',
+    q: `\`\`\`ts
+function both<T>(a: T, b: T): T { return a; }
+const y = both(1, "two");
+\`\`\`
+What does the resulting error say, and why is it confusing?`,
     options: [
       '"Argument of type string is not assignable to parameter of type number" — perfectly clear',
       '"Argument of type \'\\"two\\"\' is not assignable to parameter of type \'1\'" — confusing because it names the literal type 1, not number, since T was pinned to the first argument\'s literal type',

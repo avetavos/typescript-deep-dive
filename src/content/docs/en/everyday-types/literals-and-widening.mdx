@@ -75,8 +75,8 @@ send(config.method); // ✅ now "GET" survives
 <Mermaid title="Widening vs as const" code={widenDiagram} />
 
 export const widenDiagram = `flowchart TB
-  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }\n(widened, mutable)"]
-  val -->|as const| narrow["type: { readonly method: 'GET' }\n(literal, readonly)"]`;
+  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }<br/>(widened, mutable)"]
+  val -->|as const| narrow["type: { readonly method: 'GET' }<br/>(literal, readonly)"]`;
 
 ## A very common use: literal config objects
 
@@ -268,7 +268,17 @@ export const quizLit = [
     explain: 'A literal union is the precise set of allowed values, checked at every call site — a typo like `"GTE"` fails to compile instead of silently reaching the server as a plain `string` would.',
   },
   {
-    q: '```ts\ntype Channel = string | number[];\n\nlet palette = {\n  red: [255, 0, 0],\n  note: "middle-c",\n} satisfies Record<string, Channel>;\n\npalette.red = "not an array anymore";\n```\nDoes this compile, and why?',
+    q: `\`\`\`ts
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red = "not an array anymore";
+\`\`\`
+Does this compile, and why?`,
     options: [
       'Yes — satisfies widens palette to Record<string, Channel>, and string is a valid Channel',
       'No — satisfies keeps palette.red at its narrower inferred type, number[], so assigning a string fails',
@@ -279,7 +289,15 @@ export const quizLit = [
     explain: '`satisfies` only checks the literal against `Record<string, Channel>` once — it never becomes the variable\'s type. `palette.red`\'s real type stays the inferred `number[]`, so `TS2322: Type \'string\' is not assignable to type \'number[]\'` fires. A plain `: Record<string, Channel>` annotation would have allowed the reassignment.',
   },
   {
-    q: '```ts\nconst defaultConfig = { method: "GET", retries: 3 };\nfunction send(m: "GET" | "POST") {}\nfunction withOverrides(overrides: Partial<typeof defaultConfig>) {\n  const merged = { ...defaultConfig, ...overrides };\n  send(merged.method);\n}\n```\nWhy does `send(merged.method)` fail to compile?',
+    q: `\`\`\`ts
+const defaultConfig = { method: "GET", retries: 3 };
+function send(m: "GET" | "POST") {}
+function withOverrides(overrides: Partial<typeof defaultConfig>) {
+  const merged = { ...defaultConfig, ...overrides };
+  send(merged.method);
+}
+\`\`\`
+Why does \`send(merged.method)\` fail to compile?`,
     options: [
       'send does not accept objects',
       'defaultConfig has no as const, so method widened to string at declaration, and spreading never recovers the literal',

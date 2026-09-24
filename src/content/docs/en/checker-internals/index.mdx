@@ -158,7 +158,12 @@ export const quizIndex = [
     explain: 'TS4xxx fires when checking succeeded but the compiler cannot print a type in the shape a .d.ts file needs -- for example TS4094, when an exported anonymous class type has a private or protected member.',
   },
   {
-    q: '```text\nfunction handler(req) {\n  return req.method;\n}\n```\nUnder `strict`, what family does the resulting diagnostic belong to, and why?',
+    q: `\`\`\`text
+function handler(req) {
+  return req.method;
+}
+\`\`\`
+Under \`strict\`, what family does the resulting diagnostic belong to, and why?`,
     options: [
       'TS1xxx, because `req` has no type annotation at all',
       'TS7xxx -- `noImplicitAny` (part of the strict family) specifically flags a parameter with no inferable type as implicitly `any`',
@@ -169,7 +174,18 @@ export const quizIndex = [
     explain: 'Missing a parameter annotation is grammatically valid TypeScript (no TS1xxx) and does not affect declaration emit (no TS4xxx) -- it is exactly the case noImplicitAny exists to catch, reported as TS7006 in the TS7xxx family.',
   },
   {
-    q: '```text\n// liby.ts (private class NOT exported -- only the factory is)\nclass InternalOnly { private secret = 1; }\nexport function make() { return new InternalOnly(); }\n\n// usey.ts\nimport { make } from "./liby";\nexport function reExport() {\n  return { wrapped: make() };\n}\n```\nCompiling `usey.ts` with `--declaration` (verified on 7.0.2) reports `TS4094: Property \'secret\' of exported anonymous class type may not be private or protected.` If `InternalOnly` were also `export`ed from `liby.ts`, does the same code still error?',
+    q: `\`\`\`text
+// liby.ts (private class NOT exported -- only the factory is)
+class InternalOnly { private secret = 1; }
+export function make() { return new InternalOnly(); }
+
+// usey.ts
+import { make } from "./liby";
+export function reExport() {
+  return { wrapped: make() };
+}
+\`\`\`
+Compiling \`usey.ts\` with \`--declaration\` (verified on 7.0.2) reports \`TS4094: Property 'secret' of exported anonymous class type may not be private or protected.\` If \`InternalOnly\` were also \`export\`ed from \`liby.ts\`, does the same code still error?`,
     options: [
       'Yes -- private members always break declaration emit, regardless of what is exported',
       'No -- once `InternalOnly` is exported, `usey.d.ts` can reference it by name (`import { InternalOnly } from "./liby"`); the error only appears when the class has no exported name to reference, forcing the printer to inline it as a structural type instead, which cannot carry a private member',

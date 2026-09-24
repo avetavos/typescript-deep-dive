@@ -343,7 +343,15 @@ export const quizMapped = [
     explain: 'A key remapped to never simply does not appear in the resulting object type -- never is the standard way to filter a key out of a mapped type.',
   },
   {
-    q: '```ts\ninterface Source { readonly a: string; b?: number; }\ntype Copy<T> = { [K in keyof T]: T[K] };\ntype FromKeys<K extends string, V> = { [P in K]: V };\n\ntype R1 = Copy<Source>;\ntype R2 = FromKeys<keyof Source, Source[keyof Source]>;\n```\nWhich of `R1`/`R2` keeps `a` readonly and `b` optional?',
+    q: `\`\`\`ts
+interface Source { readonly a: string; b?: number; }
+type Copy<T> = { [K in keyof T]: T[K] };
+type FromKeys<K extends string, V> = { [P in K]: V };
+
+type R1 = Copy<Source>;
+type R2 = FromKeys<keyof Source, Source[keyof Source]>;
+\`\`\`
+Which of \`R1\`/\`R2\` keeps \`a\` readonly and \`b\` optional?`,
     options: [
       'Both -- keyof Source is used in both',
       'Only R1 -- it is homomorphic (maps directly over keyof T for a single bare T); R2 is not, because its K is a separate parameter with no connection to Source',
@@ -365,7 +373,13 @@ export const quizMapped = [
     explain: 'Record is defined as { [P in K]: V } -- P ranges over a plain key union, not keyof T for some object T in the same alias, so it is not homomorphic and cannot inherit modifiers it has no way to see.',
   },
   {
-    q: '```ts\ninterface A { a: number }\ninterface B { b: string }\ntype Boxed<T> = { [K in keyof T]: T[K][] };\ntype Result = Boxed<A | B>;\n```\nWhat is `Result`?',
+    q: `\`\`\`ts
+interface A { a: number }
+interface B { b: string }
+type Boxed<T> = { [K in keyof T]: T[K][] };
+type Result = Boxed<A | B>;
+\`\`\`
+What is \`Result\`?`,
     options: [
       '`{}` — because keyof (A | B) is never, there being no shared key',
       '`{ a: number[] } | { b: string[] }` — the homomorphic mapped type distributes over the union before computing keyof per member',

@@ -254,7 +254,12 @@ export const quizIndex = [
     explain: 'compiler สีเขียวพิสูจน์แค่ internal consistency กับ type ที่คุณให้ ไม่ใช่ความถูกต้องเทียบกับความจริงตอน runtime — ช่องว่างนั้นแหละที่ any, as ที่ผิด, หรือ input ที่ไม่ได้ validate ซ่อนไว้ได้',
   },
   {
-    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const p: Point;\nconst keys = Object.keys(p);\n```\n`keys` มี type อะไร?',
+    q: `\`\`\`ts
+interface Point { x: number; y: number }
+declare const p: Point;
+const keys = Object.keys(p);
+\`\`\`
+\`keys\` มี type อะไร?`,
     options: [
       '`("x" | "y")[]`',
       '`string[]` — value ที่ structurally-compatible กันอาจมี property เพิ่มที่ `Point` ไม่ได้พูดถึง',
@@ -265,7 +270,13 @@ export const quizIndex = [
     explain: 'Object.keys คืน string[] เสมอ เพราะ structural typing แปลว่า binding ที่ type เป็น Point อาจมี key เพิ่มตอน runtime จริง ๆ — ("x" | "y")[] จะเป็นสัญญาที่ compiler รับประกันไม่ได้',
   },
   {
-    q: '```ts\nfunction merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }\nconst payload: Record<string, unknown> = JSON.parse(\'{"__proto__":{"polluted":"yes"}}\');\nmerge({}, payload);\nconsole.log(({} as Record<string, unknown>).polluted);\n```\nโค้ดนี้ compile ผ่านภายใต้ `--strict` ไหม แล้วพิมพ์อะไร?',
+    q: `\`\`\`ts
+function merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted);
+\`\`\`
+โค้ดนี้ compile ผ่านภายใต้ \`--strict\` ไหม แล้วพิมพ์อะไร?`,
     options: [
       'compile error — `__proto__` ไม่ใช่ key ที่ valid ของ Record',
       'compile ผ่านไม่มี error เลย และพิมพ์ `"yes"` — recursive merge รั่วเข้า Object.prototype ที่ใช้ร่วมกัน',

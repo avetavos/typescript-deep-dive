@@ -256,7 +256,13 @@ export const quizIndex = [
     explain: '`tsc --noEmit` runs the real whole-program checker and produces no output -- exactly the "check" half of the two jobs, run independently of whatever tool does the emit.',
   },
   {
-    q: '```ts\nfunction double(items) {\n  return items.map((n) => n * 2);\n}\nconsole.log(double([1, 2, 3]));\n```\nUnder `strict`, what does `tsc --noEmit` report here, and why would a bundler stay silent?',
+    q: `\`\`\`ts
+function double(items) {
+  return items.map((n) => n * 2);
+}
+console.log(double([1, 2, 3]));
+\`\`\`
+Under \`strict\`, what does \`tsc --noEmit\` report here, and why would a bundler stay silent?`,
     options: [
       'Nothing -- this code is fine',
       'TS7006 on `items` and `n` (implicit `any`) -- a bundler deletes annotations without ever inspecting a parameter\'s shape, so it has nothing to flag',

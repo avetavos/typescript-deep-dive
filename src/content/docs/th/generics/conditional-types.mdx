@@ -283,7 +283,16 @@ export const quizConditional = [
     explain: 'เพราะ T naked อยู่ฝั่งที่ถูกตรวจ conditional รันครั้งเดียวต่อ union member แล้ว union ผลของแต่ละกิ่งเข้าด้วยกัน แทนที่จะให้ array ของ union ทั้งก้อน',
   },
   {
-    q: '```ts\ntype Naked<T> = T extends string ? "str" : "other";\ntype Wrapped<T> = [T] extends [string] ? "str" : "other";\ntype ArrWrapped<T> = T[] extends string[] ? "str" : "other";\n\ntype N = Naked<"a" | 42>;\ntype W = Wrapped<"a" | 42>;\ntype A = ArrWrapped<"a" | 42>;\n```\n`N`, `W`, `A` ได้อะไร?',
+    q: `\`\`\`ts
+type Naked<T> = T extends string ? "str" : "other";
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type N = Naked<"a" | 42>;
+type W = Wrapped<"a" | 42>;
+type A = ArrWrapped<"a" | 42>;
+\`\`\`
+\`N\`, \`W\`, \`A\` ได้อะไร?`,
     options: [
       'ทั้งสามตัวเป็น `"other"`',
       '`N` เป็น `"str" | "other"` (distribute); `W` กับ `A` เป็น `"other"` ทั้งคู่ (ห่อด้วย tuple หรือ array เลยไม่ distribute)',

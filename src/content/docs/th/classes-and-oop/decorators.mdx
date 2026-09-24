@@ -364,7 +364,16 @@ export const quizDecorators = [
     explain: 'context object อธิบาย member ที่ถูก decorate (kind, name, static, private) พก metadata object ที่แชร์กันให้ decorator เติมได้ และมี addInitializer สำหรับงาน setup',
   },
   {
-    q: '```ts\nfunction logged(value: any, context: ClassMethodDecoratorContext) {\n  return value;\n}\nclass Service {\n  @logged\n  fetch() { return "ok"; }\n}\n```\nอันนี้ compile ผ่านสะอาดภายใต้ `--erasableSyntaxOnly` และ `--strict` ทำไมมันยัง throw `SyntaxError` เมื่อรันด้วย `node --experimental-strip-types`?',
+    q: `\`\`\`ts
+function logged(value: any, context: ClassMethodDecoratorContext) {
+  return value;
+}
+class Service {
+  @logged
+  fetch() { return "ok"; }
+}
+\`\`\`
+อันนี้ compile ผ่านสะอาดภายใต้ \`--erasableSyntaxOnly\` และ \`--strict\` ทำไมมันยัง throw \`SyntaxError\` เมื่อรันด้วย \`node --experimental-strip-types\`?`,
     options: [
       'ไม่จริง — เป็นความเข้าใจผิด',
       '`--erasableSyntaxOnly` เช็คแค่ว่า compiler ต้อง transform syntax หรือเปล่า มันไม่บอกอะไรเลยว่า V8 เอง implement syntax นี้หรือยัง ซึ่งยังไม่ implement สำหรับ stage-3 decorator',
@@ -397,7 +406,18 @@ export const quizDecorators = [
     explain: '`transpileModule` ทำ compiler transform จริง เขียน syntax `@decorator` ใหม่ให้เป็นการเรียก `__esDecorate`/`__runInitializers` — JavaScript ธรรมดาที่รองรับอยู่แล้ว `node --experimental-strip-types` ไม่ transpile มันแค่ลบ type annotation ทิ้งแบบ textual ปล่อย JavaScript-level syntax ที่ไม่รองรับอย่าง decorator ไว้เฉย ๆ (แล้วก็ parse ไม่ได้)',
   },
   {
-    q: '```ts\nfunction Injectable(): ClassDecorator {\n  return (target) => {};\n}\nclass Logger {}\n@Injectable()\nclass UserService {\n  logger: Logger;\n  constructor(logger: Logger) { this.logger = logger; }\n}\n```\ncompile อันนี้ด้วย stage-3 settings ธรรมดา เทียบกับด้วย `--experimentalDecorators --emitDecoratorMetadata` ได้ output ต่างกันมาก ทำไม NestJS และ Angular ยังต้องใช้คู่ legacy แทนที่จะใช้ stage-3 อย่างเดียว?',
+    q: `\`\`\`ts
+function Injectable(): ClassDecorator {
+  return (target) => {};
+}
+class Logger {}
+@Injectable()
+class UserService {
+  logger: Logger;
+  constructor(logger: Logger) { this.logger = logger; }
+}
+\`\`\`
+compile อันนี้ด้วย stage-3 settings ธรรมดา เทียบกับด้วย \`--experimentalDecorators --emitDecoratorMetadata\` ได้ output ต่างกันมาก ทำไม NestJS และ Angular ยังต้องใช้คู่ legacy แทนที่จะใช้ stage-3 อย่างเดียว?`,
     options: [
       'stage-3 decorator ยังไม่มีอยู่จริง',
       'มีแค่คู่ legacy เท่านั้นที่ emit `design:paramtypes` — parameter type จริงที่ประกาศไว้ของ constructor ฝังเข้า output อัตโนมัติ — ซึ่ง dependency injection ของพวกเขาสร้างขึ้นมาบนสิ่งนี้ และ `context.metadata` ของ stage-3 ที่ decorator เติมเองไม่มีอะไรเทียบเท่า',

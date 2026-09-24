@@ -217,7 +217,11 @@ export const quizInference = [
     explain: 'Verified: `identity<string | number>(42)` produces `string | number`, not `number` -- the explicit type argument overrides what the literal `42` argument would otherwise have contributed, and this priority is strict, not a merge.',
   },
   {
-    q: '```ts\nconst obj = { method: "GET" };\nobj.method = "POST";\n```\nThis compiles with zero errors. What does that prove about `obj.method`\'s inferred type?',
+    q: `\`\`\`ts
+const obj = { method: "GET" };
+obj.method = "POST";
+\`\`\`
+This compiles with zero errors. What does that prove about \`obj.method\`'s inferred type?`,
     options: [
       'It proves nothing unusual -- object literal properties are always widened',
       'It proves `obj.method` was inferred as `string`, not the literal `"GET"` -- a MUTABLE property widens even though `obj` itself is declared with `const`',
@@ -228,7 +232,14 @@ export const quizInference = [
     explain: 'Widening tracks reassignability of the specific binding, not the outer variable\'s keyword -- `obj` being `const` only prevents rebinding `obj` itself; the mutable property `method` inside it can still be reassigned, so it widens to `string` at inference time.',
   },
   {
-    q: '```ts\nfunction classify(n: number) {\n  if (n > 0) return "positive";\n  if (n < 0) return "negative";\n  return 0;\n}\n```\nWith no return-type annotation, what is the inferred return type?',
+    q: `\`\`\`ts
+function classify(n: number) {
+  if (n > 0) return "positive";
+  if (n < 0) return "negative";
+  return 0;
+}
+\`\`\`
+With no return-type annotation, what is the inferred return type?`,
     options: [
       'string -- all string-like returns are merged',
       '"positive" | "negative" | 0 -- the union of every reachable return statement\'s type, verified by assigning the result to that exact union',
@@ -261,7 +272,16 @@ export const quizInference = [
     explain: 'The underlying two-pass mechanism (defer what depends on unresolved types, resolve the rest first, then check deferred bodies) is unchanged -- 6.0 narrowed WHICH functions get flagged as needing deferral in the first place, which is a strictly narrower and more precise definition, not a new opt-in behavior.',
   },
   {
-    q: '```ts\ntype Colors = "red" | "green" | "blue";\nconst paletteAnnotated: Record<Colors, string | number[]> = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n};\nconst paletteSatisfies = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n} satisfies Record<Colors, string | number[]>;\n```\nWhy does `paletteAnnotated.red.push(0)` fail with `TS2339`, while `paletteSatisfies.red.push(0)` compiles?',
+    q: `\`\`\`ts
+type Colors = "red" | "green" | "blue";
+const paletteAnnotated: Record<Colors, string | number[]> = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+};
+const paletteSatisfies = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+} satisfies Record<Colors, string | number[]>;
+\`\`\`
+Why does \`paletteAnnotated.red.push(0)\` fail with \`TS2339\`, while \`paletteSatisfies.red.push(0)\` compiles?`,
     options: [
       'It is a coincidence -- both should behave identically',
       'The direct annotation forces EVERY value to the declared union `string | number[]`, so `.red` loses its more specific `number[]` shape; `satisfies` only validates against that union without feeding it back in as the expression\'s own type, so `.red` keeps its own inferred `number[]`',

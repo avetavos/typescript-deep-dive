@@ -269,7 +269,15 @@ export const quizDecl = [
     explain: 'declaration: true emit .d.ts ไว้ข้าง ๆ .js แต่ละไฟล์; การชี้ types ไปที่ entry declaration คือกลไกเดียวกับที่ทั้ง ecosystem ใช้',
   },
   {
-    q: '```text\n$ tsc --noEmit --strict\nnode_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must\nhave the same type. Property \'retries\' must be of type \'number\', but here has type \'string\'.\n\n$ tsc --noEmit --strict --skipLibCheck\n                                       # zero output\n```\nการรันคู่นี้จริง ๆ พิสูจน์อะไรเกี่ยวกับ `skipLibCheck`?',
+    q: `\`\`\`text
+$ tsc --noEmit --strict
+node_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must
+have the same type. Property 'retries' must be of type 'number', but here has type 'string'.
+
+$ tsc --noEmit --strict --skipLibCheck
+                                       # zero output
+\`\`\`
+การรันคู่นี้จริง ๆ พิสูจน์อะไรเกี่ยวกับ \`skipLibCheck\`?`,
     options: [
       'skipLibCheck มีผลแค่กับไฟล์ lib.*.d.ts built-in ไม่เคยแตะ type ของ dependency เอง',
       'skipLibCheck ข้ามการ check ทุก .d.ts ในโปรแกรม รวมถึง bug จริงของ declaration ที่ขัดแย้งกันที่ ship มาข้างใน dependency จริง -- เป็นข้อแลกเปลี่ยนจริง ไม่ใช่แค่สวิตช์ความเร็ว',
@@ -280,7 +288,14 @@ export const quizDecl = [
     explain: 'ตรวจใน scratch แล้วด้วย package node_modules จริงที่มี declaration ของ property เดียวกันขัดแย้งกันสองที่: ปิด tsc รายงาน TS2717 จริง; เปิด conflict ถูกยอมรับเงียบ ๆ -- พิสูจน์ว่า flag นี้ซ่อนปัญหาจริง ไม่ใช่แค่ปัญหาที่ช้า',
   },
   {
-    q: '```ts\ndeclare module "legacy-lib" {\n  export function parse(input: string): { ok: boolean };\n}\n\nimport { parse } from "legacy-lib";\n```\nอันนี้ fail ด้วย `TS2664: Invalid module name in augmentation, module \'legacy-lib\' cannot be found` ทำไม ทั้งที่ `declare module` block เดียวกันทำงานได้ปกติใน `.d.ts` เฉพาะทาง?',
+    q: `\`\`\`ts
+declare module "legacy-lib" {
+  export function parse(input: string): { ok: boolean };
+}
+
+import { parse } from "legacy-lib";
+\`\`\`
+อันนี้ fail ด้วย \`TS2664: Invalid module name in augmentation, module 'legacy-lib' cannot be found\` ทำไม ทั้งที่ \`declare module\` block เดียวกันทำงานได้ปกติใน \`.d.ts\` เฉพาะทาง?`,
     options: [
       'declare module เป็น syntax ที่ผิดเสมอในไฟล์ .ts',
       'ไฟล์นี้มี import จริงอยู่แล้ว ทำให้มันเป็น module แทนที่จะเป็น script -- ข้างในโมดูล `declare module "x" { ... }` แปลว่า "augment module x ที่มีอยู่แล้ว" ไม่ใช่ "ประกาศตัวใหม่" และไม่มี module "legacy-lib" จริงให้ augment',

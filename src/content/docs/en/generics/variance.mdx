@@ -331,7 +331,12 @@ export const quizVariance = [
     explain: 'readonly arrays have no write side so widening is safely covariant; strictFunctionTypes makes a standalone function parameter soundly contravariant; a method written with shorthand syntax is checked bivariantly regardless of strictFunctionTypes.',
   },
   {
-    q: '```ts\ninterface Emitter<in T> {\n  emit(): T;\n}\n```\nWhat happens when this compiles, and why?',
+    q: `\`\`\`ts
+interface Emitter<in T> {
+  emit(): T;
+}
+\`\`\`
+What happens when this compiles, and why?`,
     options: [
       'Nothing -- `in` is accepted for any position',
       '`TS2636`, because `T` appears only in an output position (`emit`’s return type) but `in` declares it contravariant -- a contradiction the checker verifies against actual usage',
@@ -342,7 +347,19 @@ export const quizVariance = [
     explain: 'in/out annotations are checked as assertions against the compiler’s own structural measurement of variance. T is only ever produced here (covariant), so declaring in (contravariant) is a direct contradiction, and TS2636 fires on the declaration itself -- no call site needed.',
   },
   {
-    q: '```ts\nclass Queue<out T> {\n  private items: T[] = [];\n  enqueue(item: T): void { this.items.push(item); }\n  dequeue(): T | undefined { return this.items.shift(); }\n}\n\nconst dogQueue = new Queue<Dog>();\nconst animalQueue: Queue<Animal> = dogQueue;\nanimalQueue.enqueue(new Cat());\nconsole.log(dogQueue.dequeue()!.bark());\n```\nAssuming `Dog` and `Cat` both extend `Animal`, what happens when this runs?',
+    q: `\`\`\`ts
+class Queue<out T> {
+  private items: T[] = [];
+  enqueue(item: T): void { this.items.push(item); }
+  dequeue(): T | undefined { return this.items.shift(); }
+}
+
+const dogQueue = new Queue<Dog>();
+const animalQueue: Queue<Animal> = dogQueue;
+animalQueue.enqueue(new Cat());
+console.log(dogQueue.dequeue()!.bark());
+\`\`\`
+Assuming \`Dog\` and \`Cat\` both extend \`Animal\`, what happens when this runs?`,
     options: [
       'It fails to compile with TS2636, because `out T` forbids `enqueue`',
       'It compiles with zero diagnostics, then throws `TypeError: ... .bark is not a function` at runtime, because `enqueue` is method shorthand and stays bivariant regardless of the `out` annotation',

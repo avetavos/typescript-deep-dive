@@ -75,8 +75,8 @@ send(config.method); // ✅ now "GET" survives
 <Mermaid title="widening เทียบ as const" code={widenDiagram} />
 
 export const widenDiagram = `flowchart TB
-  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }\n(widened, mutable)"]
-  val -->|as const| narrow["type: { readonly method: 'GET' }\n(literal, readonly)"]`;
+  val["value: { method: 'GET' }"] -->|default| wide["type: { method: string }<br/>(widened, mutable)"]
+  val -->|as const| narrow["type: { readonly method: 'GET' }<br/>(literal, readonly)"]`;
 
 ## use case ที่พบบ่อยมาก: literal config object
 
@@ -268,7 +268,17 @@ export const quizLit = [
     explain: 'literal union คือเซตค่าที่อนุญาตแบบเจาะจง ถูกเช็คทุก call site — typo อย่าง `"GTE"` compile ไม่ผ่านแทนที่จะหลุดไปถึง server แบบ `string` ธรรมดา',
   },
   {
-    q: '```ts\ntype Channel = string | number[];\n\nlet palette = {\n  red: [255, 0, 0],\n  note: "middle-c",\n} satisfies Record<string, Channel>;\n\npalette.red = "not an array anymore";\n```\nโค้ดนี้ compile ผ่านไหม เพราะอะไร?',
+    q: `\`\`\`ts
+type Channel = string | number[];
+
+let palette = {
+  red: [255, 0, 0],
+  note: "middle-c",
+} satisfies Record<string, Channel>;
+
+palette.red = "not an array anymore";
+\`\`\`
+โค้ดนี้ compile ผ่านไหม เพราะอะไร?`,
     options: [
       'ผ่าน — satisfies widen palette เป็น Record<string, Channel> และ string เป็น Channel ที่ valid',
       'ไม่ผ่าน — satisfies เก็บ palette.red ไว้ที่ type แคบกว่าที่ infer ได้คือ number[] เลย assign string ไม่ได้',
@@ -279,7 +289,15 @@ export const quizLit = [
     explain: '`satisfies` เช็ค literal กับ `Record<string, Channel>` แค่ครั้งเดียว — มันไม่เคยกลายเป็น type ของตัวแปร type จริงของ `palette.red` ยังเป็น `number[]` ที่ infer ได้ เลยยิง `TS2322: Type \'string\' is not assignable to type \'number[]\'` annotation ธรรมดา `: Record<string, Channel>` จะยอมให้ reassign ได้',
   },
   {
-    q: '```ts\nconst defaultConfig = { method: "GET", retries: 3 };\nfunction send(m: "GET" | "POST") {}\nfunction withOverrides(overrides: Partial<typeof defaultConfig>) {\n  const merged = { ...defaultConfig, ...overrides };\n  send(merged.method);\n}\n```\nทำไม `send(merged.method)` compile ไม่ผ่าน?',
+    q: `\`\`\`ts
+const defaultConfig = { method: "GET", retries: 3 };
+function send(m: "GET" | "POST") {}
+function withOverrides(overrides: Partial<typeof defaultConfig>) {
+  const merged = { ...defaultConfig, ...overrides };
+  send(merged.method);
+}
+\`\`\`
+ทำไม \`send(merged.method)\` compile ไม่ผ่าน?`,
     options: [
       'send ไม่รับ object',
       'defaultConfig ไม่มี as const ทำให้ method widen เป็น string ตั้งแต่ตอนประกาศ และ spread ก็ไม่ทำให้ literal กลับมา',

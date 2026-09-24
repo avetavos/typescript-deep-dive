@@ -400,7 +400,13 @@ export const quizUtility = [
     explain: 'Omit ลบ K ด้วยการคำนวณ keyof T ลบ K ก่อน (ผ่าน Exclude) แล้ว Pick key ที่เหลือพอดี',
   },
   {
-    q: '```ts\ninterface Circle { kind: "circle"; radius: number; }\ninterface Square { kind: "square"; side: number; }\ntype Shape = Circle | Square;\ntype R = Omit<Shape, "kind">;\n```\n`R` คืออะไร และทำไม?',
+    q: `\`\`\`ts
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+type R = Omit<Shape, "kind">;
+\`\`\`
+\`R\` คืออะไร และทำไม?`,
     options: [
       '`{ radius: number } | { side: number }` — Omit ลบ kind ออกจากแต่ละกิ่ง',
       '`{}` — kind คือ key เดียวที่ทั้งสอง member ของ union มีร่วมกัน ดังนั้น keyof Shape คือแค่ "kind"; ลบมันทิ้งเหลือ keyof Shape เป็น never และ Omit ยุบเหลือ empty object type',
@@ -422,7 +428,12 @@ export const quizUtility = [
     explain: 'การห่อ Omit ด้วย conditional ที่มี checked type naked บังคับให้ distribute ทีละ member แบบเดียวกับที่เห็นในบท Conditional Types แต่ละ union member เลยเก็บ property ที่ไม่ใช่ K ของตัวเองไว้ แทนที่จะให้ union ทั้งก้อนถูกลดเหลือ key ร่วมกันก่อน',
   },
   {
-    q: '```ts\ntype Loose = { a?: number | undefined };\ntype R = Required<Loose>;\ntype AType = R["a"];\n```\n`AType` เป็น `number` หรือ `number | undefined` และขึ้นอยู่กับอะไร?',
+    q: `\`\`\`ts
+type Loose = { a?: number | undefined };
+type R = Required<Loose>;
+type AType = R["a"];
+\`\`\`
+\`AType\` เป็น \`number\` หรือ \`number | undefined\` และขึ้นอยู่กับอะไร?`,
     options: [
       'เป็น `number` เสมอ — Required ลบ undefined เสมอ',
       'เป็น `number | undefined` เสมอ — Required ไม่แตะ value type เลย',

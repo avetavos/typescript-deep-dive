@@ -343,7 +343,22 @@ export const quizFn = [
     explain: '`forEach` types its callback as returning `void`; because `void` return types accept any actual return value, a callback that happens to return `push`\'s result compiles fine.',
   },
   {
-    q: '```ts\ninterface ShelterMethod {\n  handle(a: Animal): void;\n}\ninterface ShelterProp {\n  handle: (a: Animal) => void;\n}\n\nconst byMethod: ShelterMethod = {\n  handle(a: Dog) { console.log(a.breed); },\n};\nconst byProp: ShelterProp = {\n  handle: (a: Dog) => { console.log(a.breed); },\n};\n```\nUnder `--strict`, which one compiles?',
+    q: `\`\`\`ts
+interface ShelterMethod {
+  handle(a: Animal): void;
+}
+interface ShelterProp {
+  handle: (a: Animal) => void;
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); },
+};
+const byProp: ShelterProp = {
+  handle: (a: Dog) => { console.log(a.breed); },
+};
+\`\`\`
+Under \`--strict\`, which one compiles?`,
     options: [
       'Both fail — narrowing the parameter is always an error',
       'Only byMethod compiles — method shorthand is checked bivariantly, byProp is checked contravariantly and fails',
@@ -354,7 +369,17 @@ export const quizFn = [
     explain: 'strictFunctionTypes enforces normal contravariant parameter checking for property-typed functions (`byProp` fails with TS2322), but method-shorthand members keep a bivariant carve-out for backward compatibility, so `byMethod` compiles despite being equally unsound.',
   },
   {
-    q: '```ts\nclass Counter {\n  count = 0;\n  increment(this: Counter) { this.count++; }\n}\nconst c = new Counter();\nconst handlers: Array<() => void> = [];\nhandlers.push(c.increment);\nfor (const h of handlers) h();\n```\nDoes this compile, and what happens when it runs?',
+    q: `\`\`\`ts
+class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+const c = new Counter();
+const handlers: Array<() => void> = [];
+handlers.push(c.increment);
+for (const h of handlers) h();
+\`\`\`
+Does this compile, and what happens when it runs?`,
     options: [
       'Compile error — increment\'s this: Counter is incompatible with () => void',
       'Compiles fine, but throws at runtime because increment loses its Counter receiver',

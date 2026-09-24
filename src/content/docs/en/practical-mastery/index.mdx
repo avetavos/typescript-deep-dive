@@ -254,7 +254,12 @@ export const quizIndex = [
     explain: 'A green compiler proves internal consistency with the types you supplied, not correctness against runtime reality — that gap is exactly what an any, a wrong as, or unvalidated input can hide.',
   },
   {
-    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const p: Point;\nconst keys = Object.keys(p);\n```\nWhat is the type of `keys`?',
+    q: `\`\`\`ts
+interface Point { x: number; y: number }
+declare const p: Point;
+const keys = Object.keys(p);
+\`\`\`
+What is the type of \`keys\`?`,
     options: [
       '`("x" | "y")[]`',
       '`string[]` — a structurally-compatible value could have extra properties `Point` never mentions',
@@ -265,7 +270,13 @@ export const quizIndex = [
     explain: 'Object.keys always returns string[] because structural typing means a Point-typed binding might actually hold an object with extra keys at runtime — ("x" | "y")[] would be a promise the compiler cannot back up.',
   },
   {
-    q: '```ts\nfunction merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }\nconst payload: Record<string, unknown> = JSON.parse(\'{"__proto__":{"polluted":"yes"}}\');\nmerge({}, payload);\nconsole.log(({} as Record<string, unknown>).polluted);\n```\nDoes this compile under `--strict`, and what does it print?',
+    q: `\`\`\`ts
+function merge(target: Record<string, unknown>, source: Record<string, unknown>) { /* recursive merge */ }
+const payload: Record<string, unknown> = JSON.parse('{"__proto__":{"polluted":"yes"}}');
+merge({}, payload);
+console.log(({} as Record<string, unknown>).polluted);
+\`\`\`
+Does this compile under \`--strict\`, and what does it print?`,
     options: [
       'Compile error — `__proto__` is not a valid Record key',
       'Compiles with zero errors and prints `"yes"` — the recursive merge pollutes the shared Object.prototype',

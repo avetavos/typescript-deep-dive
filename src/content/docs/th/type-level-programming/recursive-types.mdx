@@ -464,7 +464,11 @@ export const quizRecursive = [
     explain: 'conditional แบบ tail-recursive — ที่ recursive call เป็นผลลัพธ์ทั้งหมด โดยมี accumulator ถือคำตอบไว้ — ให้ compiler optimize recursion ได้ ดันเพดานจากประมาณ 47 ไปเป็น 999',
   },
   {
-    q: '```ts\ntype A = B;\ntype B = A;\n```\nทำไมอันนี้พัง และต่างจากการชนเพดาน instantiation-depth อย่างไร?',
+    q: `\`\`\`ts
+type A = B;
+type B = A;
+\`\`\`
+ทำไมอันนี้พัง และต่างจากการชนเพดาน instantiation-depth อย่างไร?`,
     options: [
       'มันชน TS2589 หลัง 47 ระดับ เหมือน naive recursion ทั่วไป',
       'มันพังทันทีด้วย TS2456 — bare alias-to-alias reference ไม่มี deferred position (ไม่มี object, array หรือ function) ให้ compiler วาง cycle ไว้ก่อนแล้ว resolve แบบ lazy',
@@ -475,7 +479,13 @@ export const quizRecursive = [
     explain: 'object property, array element และ function signature เป็น deferred position resolve แบบ lazy การอ้างอิง alias-to-alias เปล่า ๆ ไม่มีตำแหน่งแบบนั้นเลย compiler เลยต้อง resolve ทันทีและตรวจพบ cycle ทันทีเป็น TS2456 ไม่ใช่ depth-limit error',
   },
   {
-    q: '```ts\ntype Prev = [never, 0, 1, 2, 3, 4, 5];\ntype Paths<T, D extends number = 5> = [D] extends [never] ? never : T extends object ? /* ...recurse with Prev[D]... */ never : never;\ninterface Self { name: string; self: Self; }\ntype P = Paths<Self>;\n```\n`Paths<Self>` compile ผ่านไหม และทำไม?',
+    q: `\`\`\`ts
+type Prev = [never, 0, 1, 2, 3, 4, 5];
+type Paths<T, D extends number = 5> = [D] extends [never] ? never : T extends object ? /* ...recurse with Prev[D]... */ never : never;
+interface Self { name: string; self: Self; }
+type P = Paths<Self>;
+\`\`\`
+\`Paths<Self>\` compile ผ่านไหม และทำไม?`,
     options: [
       'ไม่ผ่าน — type ที่อ้างถึงตัวเองใช้กับ generic recursive ไม่ได้เลย',
       'ผ่าน — guard [D] extends [never] ที่ลดค่าผ่าน Prev ทุก call บังคับให้ recursion หยุดหลังจำนวนระดับคงที่ ไม่ว่า Self จะซ้อนเข้าตัวเองลึกแค่ไหนจริง ๆ',

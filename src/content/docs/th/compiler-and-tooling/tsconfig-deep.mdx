@@ -379,7 +379,19 @@ export const quizTsconfig = [
     explain: '`baseUrl` ถูกถอดใน TypeScript 7 (hard error ไม่ใช่ no-op เงียบ ๆ) — ของแทนตรง ๆ คือยุบ prefix เดียวกันเข้าไปในแต่ละ entry ของ paths',
   },
   {
-    q: '```json\n{\n  "extends": "./tsconfig.base.json",\n  "compilerOptions": {\n    "rootDir": "./src",\n    "outDir": "./dist",\n    "paths": { "@utils/*": ["./src/utils/*"] }\n  },\n  "include": ["src/**/*"],\n  "files": ["src/extra-entry.ts"]\n}\n```\nหลัง build `tsc` แบบสะอาด รัน `node dist/index.js` (ที่ import จาก `@utils/math`) throw `Cannot find module \'@utils/math\'` ทำไม ทั้งที่ `tsc` compile ผ่านไม่มี error เลย?',
+    q: `\`\`\`json
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "paths": { "@utils/*": ["./src/utils/*"] }
+  },
+  "include": ["src/**/*"],
+  "files": ["src/extra-entry.ts"]
+}
+\`\`\`
+หลัง build \`tsc\` แบบสะอาด รัน \`node dist/index.js\` (ที่ import จาก \`@utils/math\`) throw \`Cannot find module '@utils/math'\` ทำไม ทั้งที่ \`tsc\` compile ผ่านไม่มี error เลย?`,
     options: [
       'build จริง ๆ พังเงียบ ๆ',
       '`paths` บอกแค่ checker ว่า specifier resolve ไปที่ไหนสำหรับ type-checking — มันไม่เคยเขียน import ที่ emit ใหม่เลย ดังนั้น runtime ที่ไม่รู้จัก `@utils/*` จึงหา module ไม่เจอ',
@@ -390,7 +402,12 @@ export const quizTsconfig = [
     explain: 'ตรวจใน scratch แล้ว: tsc emit `import { add } from "@utils/math"` เหมือนเดิมทุกตัวอักษร bundler ที่อ่าน paths ด้วยจะเขียนมันใหม่ แต่ pipeline ที่มีแค่ tsc + node ไม่มีอะไรทำแบบนั้น Node จึง throw MODULE_NOT_FOUND บน alias ที่ไม่ถูกแตะเลย',
   },
   {
-    q: '```text\nFiles:              83\nInstantiations:  34403\nCheck time:      0.107s\n```\nตัวเลขไหนของ `--extendedDiagnostics` มีประโยชน์ที่สุดในการจับ generic หรือ recursive conditional type ที่วิ่งเถลไถล?',
+    q: `\`\`\`text
+Files:              83
+Instantiations:  34403
+Check time:      0.107s
+\`\`\`
+ตัวเลขไหนของ \`--extendedDiagnostics\` มีประโยชน์ที่สุดในการจับ generic หรือ recursive conditional type ที่วิ่งเถลไถล?`,
     options: [
       '`Files`',
       '`Instantiations` — มันนับทุกครั้งที่มีการแทนค่าจริงเข้า generic และระเบิดเมื่อคำนวณซ้ำ แม้ `Types`/`Files` จะยังดูปกติ',

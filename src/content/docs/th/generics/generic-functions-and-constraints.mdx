@@ -271,7 +271,11 @@ export const quizConstraints = [
     explain: 'กลิ่นไม่ดีอยู่ที่การเชื่อม ไม่ใช่จำนวนที่ปรากฏดิบ ๆ `T` ผูก argument กับ return type ตรงนี้ ดังนั้นผู้เรียกที่ใช้ผลลัพธ์ผิดก็ยังถูกจับได้ — ต่างจาก `logLoose<T>(x: T): void` ที่ `T` ไม่ได้เชื่อมอะไรเลย',
   },
   {
-    q: '```ts\nfunction both<T>(a: T, b: T): T { return a; }\nconst y = both(1, "two");\n```\nerror ที่ได้บอกว่าอะไร และทำไมมันงง?',
+    q: `\`\`\`ts
+function both<T>(a: T, b: T): T { return a; }
+const y = both(1, "two");
+\`\`\`
+error ที่ได้บอกว่าอะไร และทำไมมันงง?`,
     options: [
       '"Argument of type string is not assignable to parameter of type number" — ชัดเจนมาก',
       '"Argument of type \'\\"two\\"\' is not assignable to parameter of type \'1\'" — งงเพราะระบุ type เป็น literal 1 ไม่ใช่ number เพราะ T ถูกตรึงกับ literal type ของ argument แรก',

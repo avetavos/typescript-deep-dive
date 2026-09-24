@@ -347,7 +347,11 @@ export const quizMixins = [
     explain: '`typeof ClassName` ตั้งชื่อ type ของ constructor value ซึ่งเป็น category เดียวกับที่ `Constructor<T>` helper ทุกอันในบทนี้ generalize ไว้ `InstanceType<typeof User>` ดึง instance type กลับมาจากมัน',
   },
   {
-    q: '```ts\ntype Constructor<T = {}> = new (...args: any[]) => T;\ntype WithSecret = Constructor<{ private secret: string }>;\n```\nอันนี้ compile ผ่านไหม?',
+    q: `\`\`\`ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+type WithSecret = Constructor<{ private secret: string }>;
+\`\`\`
+อันนี้ compile ผ่านไหม?`,
     options: [
       'ผ่าน — mixin เรียกร้อง private member แบบนี้ได้',
       'ไม่ผ่าน — TS1070: `private` อยู่บน type member ไม่ได้; object type literal ไม่มีทางแสดง access modifier เลย',
@@ -369,7 +373,14 @@ export const quizMixins = [
     explain: '`Constructor<T>` ธรรมดาสัญญาว่า argument ของมันเรียก `new` ตรงได้ ซึ่ง constructor type ของ `abstract` class ไม่ใช่แบบนั้น — assign มันจะได้ "Cannot assign an abstract constructor type to a non-abstract constructor type." รูปแบบ abstract-constructor-typed ไม่สัญญาแบบนั้น จึงรับ base ได้ทั้งที่ concrete และ abstract',
   },
   {
-    q: '```ts\nfunction Serializable<TBase extends Constructor>(Base: TBase) {\n  return class extends Base {\n    serialize() { return JSON.stringify(this.toPayload()); }\n  };\n}\n```\n(`Constructor<T = {}>` ตามที่นิยามไว้ก่อนหน้าในบทนี้) ทำไม `this.toPayload()` compile ไม่ผ่าน?',
+    q: `\`\`\`ts
+function Serializable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    serialize() { return JSON.stringify(this.toPayload()); }
+  };
+}
+\`\`\`
+(\`Constructor<T = {}>\` ตามที่นิยามไว้ก่อนหน้าในบทนี้) ทำไม \`this.toPayload()\` compile ไม่ผ่าน?`,
     options: [
       'JSON.stringify เรียกข้างใน mixin ไม่ได้',
       '`Constructor` ที่ไม่มี type argument default เป็น `Constructor<{}>` ดังนั้นไม่มีอะไรใน constraint บอกว่า base มี `toPayload` — วิธีแก้คือ constrain มันตรง ๆ เช่น `Constructor<{ toPayload(): unknown }>`',

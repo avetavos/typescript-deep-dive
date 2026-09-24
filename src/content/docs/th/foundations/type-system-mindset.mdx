@@ -255,7 +255,14 @@ export const quizMindset = [
     explain: '`unknown` ยังอยู่ใน model เซตในฐานะ top type — ทุกอย่างพอดีเข้าไปได้ แต่ต้อง narrow ก่อนทำอะไรกับมัน `any` ปิด model แทนที่จะอยู่ปลายด้านใดด้านหนึ่งของมัน',
   },
   {
-    q: '```ts\nconst withAny: any = "42";\nwithAny.toFixed(2);\n\nconst withUnknown: unknown = "42";\nwithUnknown.toFixed(2);\n```\n`tsc` รายงานอะไรสำหรับสองบรรทัดนี้?',
+    q: `\`\`\`ts
+const withAny: any = "42";
+withAny.toFixed(2);
+
+const withUnknown: unknown = "42";
+withUnknown.toFixed(2);
+\`\`\`
+\`tsc\` รายงานอะไรสำหรับสองบรรทัดนี้?`,
     options: [
       'ทั้งคู่ compile ผ่านไม่มี error',
       'บรรทัด `any` compile ผ่านไม่มี error; บรรทัด `unknown` พังด้วย `TS18046` เพราะ `unknown` ต้องถูก narrow ก่อนเข้าถึง property ใด ๆ',
@@ -266,7 +273,23 @@ export const quizMindset = [
     explain: '`any` assign ให้และรับจากอะไรก็ได้โดยไม่เช็คเลย ดังนั้น `.toFixed` บนมันถูกยอมแม้จะพังตอน runtime `unknown` คือเซตของ value ทั้งหมดแต่รักษา model ไว้ compiler จึงปฏิเสธ `.toFixed` จนกว่า value จะถูก narrow',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case "circle": return Math.PI * shape.radius ** 2;\n    case "square": return shape.side ** 2;\n    default:\n      const exhaustive: never = shape;\n      throw new Error(`Unhandled: ${exhaustive}`);\n  }\n}\n```\nโค้ดนี้ compile ผ่านไหม เพราะอะไร?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle": return Math.PI * shape.radius ** 2;
+    case "square": return shape.side ** 2;
+    default:
+      const exhaustive: never = shape;
+      throw new Error(\`Unhandled: \${exhaustive}\`);
+  }
+}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม เพราะอะไร?`,
     options: [
       'ผ่าน — `never` รับ value ที่เหลืออะไรก็ได้',
       'ไม่ผ่าน — ใน branch `default` `shape` ยังอาจเป็น case `triangle` ได้ เซตของ value ที่เป็นไปได้ของมันจึงไม่ว่าง และไม่พอดีกับ `never` อีกต่อไป',

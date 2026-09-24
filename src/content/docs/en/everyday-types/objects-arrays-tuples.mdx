@@ -558,7 +558,14 @@ export const quizOAT = [
     explain: 'Iterator helpers return the built-in `IteratorObject<T>` type, distinct from an `Array` — call `.toArray()` if you need a real array.',
   },
   {
-    q: '```ts\ninterface Options { width: number; height?: number }\nfunction create(opts: Options) {}\n\nconst o = { width: 100, heigth: 200 };\ncreate(o);\n```\nDoes this compile?',
+    q: `\`\`\`ts
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+const o = { width: 100, heigth: 200 };
+create(o);
+\`\`\`
+Does this compile?`,
     options: [
       'No — heigth is not a known property of Options',
       'Yes — the excess property check only applies to a fresh object literal, and o is a variable',
@@ -569,7 +576,16 @@ export const quizOAT = [
     explain: 'Passing a fresh literal (`create({ width: 100, heigth: 200 })`) would trigger `TS2561`. Once the same object goes through a variable first, the excess property check no longer applies — only structural compatibility is checked, and `o` does have a `width: number`.',
   },
   {
-    q: '```ts\nlet a: object;\nlet b: Object;\nlet c: {};\n\na = 5;\nb = 5;\nc = 5;\n```\nWhich assignments compile?',
+    q: `\`\`\`ts
+let a: object;
+let b: Object;
+let c: {};
+
+a = 5;
+b = 5;
+c = 5;
+\`\`\`
+Which assignments compile?`,
     options: [
       'All three compile',
       'Only b = 5 and c = 5 compile -- object specifically excludes primitives',
@@ -580,7 +596,20 @@ export const quizOAT = [
     explain: '`object` was introduced specifically to mean "not a primitive," so `a = 5` fails with `TS2322`. `Object` and `{}` are far more permissive and accept primitives, so `b = 5` and `c = 5` both compile.',
   },
   {
-    q: '```ts\nenum Status { Pending, Active, Closed }\nfunction label(s: Status): string {\n  switch (s) {\n    case Status.Pending: return "pending";\n    case Status.Active: return "active";\n    case Status.Closed: return "closed";\n  }\n}\nfunction fromApi(rawStatus: number): string {\n  return label(rawStatus);\n}\n```\nDoes `fromApi` compile, and is it safe to call with any number?',
+    q: `\`\`\`ts
+enum Status { Pending, Active, Closed }
+function label(s: Status): string {
+  switch (s) {
+    case Status.Pending: return "pending";
+    case Status.Active: return "active";
+    case Status.Closed: return "closed";
+  }
+}
+function fromApi(rawStatus: number): string {
+  return label(rawStatus);
+}
+\`\`\`
+Does \`fromApi\` compile, and is it safe to call with any number?`,
     options: [
       'It does not compile -- label is missing a default case',
       'It compiles, but is unsafe -- a numeric enum parameter does not range-check a plain number argument',

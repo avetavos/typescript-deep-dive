@@ -326,7 +326,15 @@ export const quizCFA = [
     explain: 'This is a real, documented asymmetry: await keeps a value trusted across a suspension where arbitrary code could have mutated it (unsound), while a closure boundary is treated conservatively precisely because the checker has no way to know when it will run.',
   },
   {
-    q: '```ts\nfunction area(shape: Shape) {\n  let isCircle = shape.kind === "circle";\n  if (isCircle) {\n    return shape.radius; // does this narrow?\n  }\n}\n```\nDoes the aliased-condition narrowing from TypeScript 4.4 apply here?',
+    q: `\`\`\`ts
+function area(shape: Shape) {
+  let isCircle = shape.kind === "circle";
+  if (isCircle) {
+    return shape.radius; // does this narrow?
+  }
+}
+\`\`\`
+Does the aliased-condition narrowing from TypeScript 4.4 apply here?`,
     options: [
       'Yes -- any local holding a boolean condition narrows the same way',
       'No -- aliased-condition narrowing only trusts a `const`; a `let` holding the identical condition does not narrow, for the same reassignability reason a mutable property loses narrowing across a closure',
@@ -348,7 +356,15 @@ export const quizCFA = [
     explain: 'Verified directly: a chain of five const aliases (a through e) still narrows correctly; adding one more level (f) breaks it, producing two real TS2339 diagnostics on an otherwise-identical function.',
   },
   {
-    q: '```ts\nfunction helper(x: unknown): boolean {\n  return typeof x === "string";\n}\nfunction isStringIndirect(x: unknown) {\n  return helper(x);\n}\n```\nDoes TypeScript 5.5 infer a type predicate for `isStringIndirect`?',
+    q: `\`\`\`ts
+function helper(x: unknown): boolean {
+  return typeof x === "string";
+}
+function isStringIndirect(x: unknown) {
+  return helper(x);
+}
+\`\`\`
+Does TypeScript 5.5 infer a type predicate for \`isStringIndirect\`?`,
     options: [
       'Yes -- any boolean-returning function that eventually narrows counts',
       'No -- inferred predicates only fire when the function\'s OWN body performs a direct narrowing check on its own parameter; delegating to another function does not qualify, verified by the parameter staying `unknown` (real TS18046) at the call site',

@@ -297,7 +297,13 @@ export const quizKeyof = [
     explain: 'A JavaScript property key can only ever be a string, a number, or a symbol, so keyof any -- "the keys of anything at all" -- is exactly that union. This is also the constraint on Record\'s key parameter.',
   },
   {
-    q: '```ts\nfunction describe<T extends object>(t: T) {\n  const keys: (keyof T)[] = Object.keys(t);\n  return keys;\n}\n```\nDoes this compile, and why?',
+    q: `\`\`\`ts
+function describe<T extends object>(t: T) {
+  const keys: (keyof T)[] = Object.keys(t);
+  return keys;
+}
+\`\`\`
+Does this compile, and why?`,
     options: [
       'Yes -- Object.keys always matches keyof T exactly',
       'No, TS2322 -- Object.keys(t) is typed as string[], and keyof T stays deferred (effectively unresolved) inside a generic body, so string[] cannot be proven assignable to (keyof T)[]',
@@ -308,7 +314,11 @@ export const quizKeyof = [
     explain: 'Object.keys returns string[] deliberately -- a value typed as T can carry extra keys at runtime beyond what T declares, so the compiler cannot promise the result matches keyof T, and keyof T itself has no concrete keys to check against until T is instantiated.',
   },
   {
-    q: '```ts\ntype Data = { type: "a"; value: string } | { type: "b"; value: number };\ntype V = Data["value"];\n```\nWhat is `V`?',
+    q: `\`\`\`ts
+type Data = { type: "a"; value: string } | { type: "b"; value: number };
+type V = Data["value"];
+\`\`\`
+What is \`V\`?`,
     options: [
       '`string` only, from the first member',
       '`string | number` — indexed access on a union distributes over each member and unions the value types',

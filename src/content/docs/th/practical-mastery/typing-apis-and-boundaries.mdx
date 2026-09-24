@@ -398,7 +398,11 @@ export const quizBoundaries = [
     explain: 'type predicate คือสัญญาณตอน compile-time ให้ตัว narrow ไม่ใช่การแปลงตอน runtime — มันบอก TypeScript ว่าจะ narrow value ที่เช็คอย่างไรเมื่อ function return true',
   },
   {
-    q: '```ts\nconst port = Number(process.env.PORT);\nconsole.log(`listening on port ${port}`);\n```\nเมื่อไม่ตั้ง `PORT` โค้ดนี้ compile ผ่านไหม แล้วพิมพ์อะไร?',
+    q: `\`\`\`ts
+const port = Number(process.env.PORT);
+console.log(\`listening on port \${port}\`);
+\`\`\`
+เมื่อไม่ตั้ง \`PORT\` โค้ดนี้ compile ผ่านไหม แล้วพิมพ์อะไร?`,
     options: [
       'compile error — process.env.PORT ไม่ใช่ตัวเลข',
       'compile ผ่านไม่มี error เลย และพิมพ์ "listening on port NaN"',
@@ -409,7 +413,13 @@ export const quizBoundaries = [
     explain: 'process.env.PORT เป็น string | undefined และ Number(undefined) คือ NaN — value ที่ type number ยอมรับอย่างสบายใจ ไม่มีอะไรตรงนี้เป็น type error เลย bug อยู่ที่ validation ที่หายไปทั้งหมด',
   },
   {
-    q: '```ts\ninterface Config { readonly name: string; limits: { max: number } }\nfunction tweak(cfg: Config) {\n  cfg.limits.max = 999;\n}\n```\nโค้ดนี้ compile ผ่านไหม?',
+    q: `\`\`\`ts
+interface Config { readonly name: string; limits: { max: number } }
+function tweak(cfg: Config) {
+  cfg.limits.max = 999;
+}
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       'ไม่ผ่าน — readonly ควรปกป้อง object ทั้งหมด',
       'ผ่าน — readonly ปกป้องแค่ binding "limits" เอง ไม่ใช่ object ที่มันชี้ไปหา',

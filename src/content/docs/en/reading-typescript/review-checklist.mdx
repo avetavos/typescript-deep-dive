@@ -123,7 +123,11 @@ export const quizReviewChecklist = [
     explain: "A phrased question forces a concrete answer: either e is narrowed nearby, or it is not. A vague reminder like 'be careful' has no pass/fail condition, so a reviewer can feel like they followed it without actually resolving anything."
   },
   {
-    q: "```ts\ntype Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };\ntype Bare = Omit<Shape, \"kind\">;\n```\nWhich checklist group's question would catch that `Bare` might not mean what its author intended?",
+    q: `\`\`\`ts
+type Shape = { kind: "circle"; radius: number } | { kind: "square"; side: number };
+type Bare = Omit<Shape, "kind">;
+\`\`\`
+Which checklist group's question would catch that \`Bare\` might not mean what its author intended?`,
     options: [
       "Async",
       "Generics & variance -- \"every Omit/Pick/Exclude applied to something that might be a union: has it actually been checked to distribute the way the author assumed?\"",

@@ -558,7 +558,14 @@ export const quizOAT = [
     explain: 'iterator helper return type ในตัว `IteratorObject<T>` ต่างจาก `Array` — เรียก `.toArray()` ถ้าต้องการ array จริง ๆ',
   },
   {
-    q: '```ts\ninterface Options { width: number; height?: number }\nfunction create(opts: Options) {}\n\nconst o = { width: 100, heigth: 200 };\ncreate(o);\n```\nโค้ดนี้ compile ผ่านไหม?',
+    q: `\`\`\`ts
+interface Options { width: number; height?: number }
+function create(opts: Options) {}
+
+const o = { width: 100, heigth: 200 };
+create(o);
+\`\`\`
+โค้ดนี้ compile ผ่านไหม?`,
     options: [
       'ไม่ผ่าน — heigth ไม่ใช่ property ที่รู้จักของ Options',
       'ผ่าน — excess property check ใช้ได้แค่กับ object literal แบบ fresh และ o เป็นตัวแปร',
@@ -569,7 +576,16 @@ export const quizOAT = [
     explain: 'ส่ง literal แบบ fresh (`create({ width: 100, heigth: 200 })`) จะ trigger `TS2561` พอ object เดียวกันผ่านตัวแปรมาก่อน excess property check ก็ไม่ทำงานอีกต่อไป — เช็คแค่ความเข้ากันได้เชิง structural เท่านั้น และ `o` ก็มี `width: number` จริง',
   },
   {
-    q: '```ts\nlet a: object;\nlet b: Object;\nlet c: {};\n\na = 5;\nb = 5;\nc = 5;\n```\nการ assign ตัวไหน compile ผ่าน?',
+    q: `\`\`\`ts
+let a: object;
+let b: Object;
+let c: {};
+
+a = 5;
+b = 5;
+c = 5;
+\`\`\`
+การ assign ตัวไหน compile ผ่าน?`,
     options: [
       'ผ่านทั้งสามตัว',
       'ผ่านแค่ b = 5 กับ c = 5 -- object ปฏิเสธ primitive โดยเฉพาะ',
@@ -580,7 +596,20 @@ export const quizOAT = [
     explain: '`object` ถูกสร้างขึ้นมาเพื่อหมายถึง "ไม่ใช่ primitive" โดยเฉพาะ `a = 5` เลย fail ด้วย `TS2322` `Object` กับ `{}` หลวมกว่ามากและรับ primitive ได้ เลย `b = 5` กับ `c = 5` compile ผ่านทั้งคู่',
   },
   {
-    q: '```ts\nenum Status { Pending, Active, Closed }\nfunction label(s: Status): string {\n  switch (s) {\n    case Status.Pending: return "pending";\n    case Status.Active: return "active";\n    case Status.Closed: return "closed";\n  }\n}\nfunction fromApi(rawStatus: number): string {\n  return label(rawStatus);\n}\n```\n`fromApi` compile ผ่านไหม และเรียกด้วย number อะไรก็ได้ปลอดภัยหรือเปล่า?',
+    q: `\`\`\`ts
+enum Status { Pending, Active, Closed }
+function label(s: Status): string {
+  switch (s) {
+    case Status.Pending: return "pending";
+    case Status.Active: return "active";
+    case Status.Closed: return "closed";
+  }
+}
+function fromApi(rawStatus: number): string {
+  return label(rawStatus);
+}
+\`\`\`
+\`fromApi\` compile ผ่านไหม และเรียกด้วย number อะไรก็ได้ปลอดภัยหรือเปล่า?`,
     options: [
       'ไม่ผ่าน -- label ขาด default case',
       'ผ่าน แต่ไม่ปลอดภัย -- parameter ของ numeric enum ไม่เช็ค range กับ number ธรรมดาที่ส่งเข้ามา',

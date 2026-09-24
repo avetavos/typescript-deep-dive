@@ -379,7 +379,19 @@ export const quizTsconfig = [
     explain: '`baseUrl` is removed in TypeScript 7 (a hard error, not a silent no-op) -- the direct replacement is folding the same prefix into each paths entry.',
   },
   {
-    q: '```json\n{\n  "extends": "./tsconfig.base.json",\n  "compilerOptions": {\n    "rootDir": "./src",\n    "outDir": "./dist",\n    "paths": { "@utils/*": ["./src/utils/*"] }\n  },\n  "include": ["src/**/*"],\n  "files": ["src/extra-entry.ts"]\n}\n```\nAfter a clean `tsc` build of this project, running `node dist/index.js` (which imports from `@utils/math`) throws `Cannot find module \'@utils/math\'`. Why, if `tsc` compiled it with zero errors?',
+    q: `\`\`\`json
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "paths": { "@utils/*": ["./src/utils/*"] }
+  },
+  "include": ["src/**/*"],
+  "files": ["src/extra-entry.ts"]
+}
+\`\`\`
+After a clean \`tsc\` build of this project, running \`node dist/index.js\` (which imports from \`@utils/math\`) throws \`Cannot find module '@utils/math'\`. Why, if \`tsc\` compiled it with zero errors?`,
     options: [
       'The build actually failed silently',
       '`paths` only tells the checker where a specifier resolves for type-checking -- it never rewrites the emitted import, so a runtime with no knowledge of `@utils/*` cannot find the module',
@@ -390,7 +402,12 @@ export const quizTsconfig = [
     explain: 'Verified in scratch: tsc emits `import { add } from "@utils/math"` completely unchanged. A bundler that also reads paths would rewrite it; a bare tsc + node pipeline has nothing that does, so Node throws MODULE_NOT_FOUND on the untouched alias.',
   },
   {
-    q: '```text\nFiles:              83\nInstantiations:  34403\nCheck time:      0.107s\n```\nWhich `--extendedDiagnostics` number is most useful for spotting a runaway generic or recursive conditional type specifically?',
+    q: `\`\`\`text
+Files:              83
+Instantiations:  34403
+Check time:      0.107s
+\`\`\`
+Which \`--extendedDiagnostics\` number is most useful for spotting a runaway generic or recursive conditional type specifically?`,
     options: [
       '`Files`',
       '`Instantiations` — it counts every concrete substitution into a generic, and explodes on repeated re-computation even when `Types`/`Files` still look normal',

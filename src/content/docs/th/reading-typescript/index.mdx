@@ -132,7 +132,12 @@ send({ retries: 3 });`}>
 
 export const quizReadingTypescriptIndex = [
   {
-    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\n`tsc --strict` รายงานอะไรกับไฟล์นี้ ไม่ว่า `raw` จะมีค่าจริงเป็นอะไรก็ตาม?",
+    q: `\`\`\`ts
+interface User { id: number; name: string }
+const user = JSON.parse(raw) as User;
+console.log(user.name.toUpperCase());
+\`\`\`
+\`tsc --strict\` รายงานอะไรกับไฟล์นี้ ไม่ว่า \`raw\` จะมีค่าจริงเป็นอะไรก็ตาม?`,
     options: [
       "error เพราะ JSON.parse ไม่มีทางคืน type User ได้เลย",
       "ไม่มี error เลย -- `as User` บอก checker ให้หยุดตรวจ shape ของค่าที่ parse ออกมา",

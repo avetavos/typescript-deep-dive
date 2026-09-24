@@ -307,7 +307,14 @@ export const quizBuild = [
     explain: 'type-only import การันตี erasure แน่นอน -- มันไม่มีทางแอบสร้าง runtime module dependency จริงจากสิ่งที่ตั้งใจให้เป็นแค่ความสัมพันธ์ระดับ type ตอน compile-time',
   },
   {
-    q: '```ts\nenum Color { Red, Green }\n\nclass Point {\n  constructor(public x: number, public y: number) {}\n}\n```\nตรวจข้ามสี่เครื่องมือแล้ว ตัวไหนปฏิเสธไฟล์นี้ตรง ๆ และทำไมตัวอื่นถึงจับปัญหาเดียวกันไม่ได้?',
+    q: `\`\`\`ts
+enum Color { Red, Green }
+
+class Point {
+  constructor(public x: number, public y: number) {}
+}
+\`\`\`
+ตรวจข้ามสี่เครื่องมือแล้ว ตัวไหนปฏิเสธไฟล์นี้ตรง ๆ และทำไมตัวอื่นถึงจับปัญหาเดียวกันไม่ได้?`,
     options: [
       'tsc --noEmit -- มันไม่เคยอนุญาต enum เลย',
       '`node --experimental-strip-types` -- มันแค่ลบ type annotation ทิ้ง transform enum ให้เป็น object จริงหรือ parameter property ให้เป็น assignment จริงไม่ได้ ต่างจาก tsc/tsx/esbuild ที่เข้าใจ syntax พอจะ transform ได้',

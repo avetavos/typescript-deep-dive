@@ -262,7 +262,15 @@ export const quizAssignability = [
     explain: 'The comparison is driven by the target: it walks the target\'s required properties and checks each one against the source. A source with additional properties the target never asked about is still assignable.',
   },
   {
-    q: '```ts\ninterface Mutable { x: number }\ninterface ReadonlyPoint { readonly x: number }\ndeclare const m: Mutable;\ndeclare const r: ReadonlyPoint;\nconst a: ReadonlyPoint = m;\nconst b: Mutable = r;\n```\nDo both assignments compile?',
+    q: `\`\`\`ts
+interface Mutable { x: number }
+interface ReadonlyPoint { readonly x: number }
+declare const m: Mutable;
+declare const r: ReadonlyPoint;
+const a: ReadonlyPoint = m;
+const b: Mutable = r;
+\`\`\`
+Do both assignments compile?`,
     options: [
       'No -- assigning a readonly-typed value to a Mutable-typed variable is always an error',
       'Yes, both compile with zero errors -- readonly plays no role in assignability in either direction',
@@ -295,7 +303,13 @@ export const quizAssignability = [
     explain: '`any` is assignable to anything and anything is assignable to it -- both directions are unchecked. `unknown` only accepts values in (nothing comes out without narrowing); `never` only flows out (nothing but never can be assigned into it).',
   },
   {
-    q: '```ts\ninterface Point { x: number; y: number }\ndeclare const takes: (p: Point) => void;\nconst obj = { x: 1, y: 2, z: 3 };\ntakes(obj);\n```\nDoes this compile, even though `obj` has an extra `z` property `Point` doesn\'t declare?',
+    q: `\`\`\`ts
+interface Point { x: number; y: number }
+declare const takes: (p: Point) => void;
+const obj = { x: 1, y: 2, z: 3 };
+takes(obj);
+\`\`\`
+Does this compile, even though \`obj\` has an extra \`z\` property \`Point\` doesn't declare?`,
     options: [
       'No -- this is the same excess-property error as passing the literal directly',
       'Yes -- the excess-property check only applies to a FRESH object literal written directly at the checked position; once stored in a variable, ordinary structural assignability applies and extra properties are allowed',
@@ -306,7 +320,12 @@ export const quizAssignability = [
     explain: 'Verified: passing the literal directly (`takes({ x: 1, y: 2, z: 3 })`) triggers TS2353, but storing it in `obj` first and passing `obj` compiles clean -- the excess-property check is narrower than ordinary assignability and only fires on freshness.',
   },
   {
-    q: '```ts\ndeclare const x: "a" | "b";\ndeclare const y: "c" | "d";\nif (x === y) {}\n```\nWhat happens, and why is this a different check than assignability?',
+    q: `\`\`\`ts
+declare const x: "a" | "b";
+declare const y: "c" | "d";
+if (x === y) {}
+\`\`\`
+What happens, and why is this a different check than assignability?`,
     options: [
       'It compiles fine -- string literal unions are always comparable',
       'It is TS2367, "no overlap" -- comparability checks whether two types could ever share a possible value, which is stricter than assignability here even though `"a" | "b"` isn\'t assignable to `"c" | "d"` for an unrelated reason too',

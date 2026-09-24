@@ -256,7 +256,13 @@ export const quizIndex = [
     explain: '`tsc --noEmit` รัน whole-program checker จริงและไม่ output อะไรออกมา — คือครึ่ง "check" ของสองงานพอดี รันแยกจากเครื่องมือไหนก็ตามที่ทำ emit',
   },
   {
-    q: '```ts\nfunction double(items) {\n  return items.map((n) => n * 2);\n}\nconsole.log(double([1, 2, 3]));\n```\nภายใต้ `strict`, `tsc --noEmit` รายงานอะไรตรงนี้ และทำไม bundler ถึงเงียบ?',
+    q: `\`\`\`ts
+function double(items) {
+  return items.map((n) => n * 2);
+}
+console.log(double([1, 2, 3]));
+\`\`\`
+ภายใต้ \`strict\`, \`tsc --noEmit\` รายงานอะไรตรงนี้ และทำไม bundler ถึงเงียบ?`,
     options: [
       'ไม่มีอะไร -- code นี้ปกติดี',
       'TS7006 บน `items` กับ `n` (implicit `any`) -- bundler ลบ annotation โดยไม่เคยดู shape ของ parameter เลย จึงไม่มีอะไรให้ flag',

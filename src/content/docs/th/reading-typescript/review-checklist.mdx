@@ -123,7 +123,11 @@ export const quizReviewChecklist = [
     explain: "คำถามที่เขียนเป็นรูปแบบบังคับให้มีคำตอบที่ชัดเจน: e ถูก narrow อยู่ใกล้ ๆ หรือไม่ถูก คำเตือนคลุมเครือแบบ 'ระวังไว้' ไม่มีเงื่อนไข pass/fail เลย reviewer เลยรู้สึกว่าทำตามแล้วได้ทั้งที่ไม่ได้แก้อะไรจริง"
   },
   {
-    q: "```ts\ntype Shape = { kind: \"circle\"; radius: number } | { kind: \"square\"; side: number };\ntype Bare = Omit<Shape, \"kind\">;\n```\ncำถามของ checklist กลุ่มไหนจะจับได้ว่า `Bare` อาจไม่ได้แปลว่าสิ่งที่ผู้เขียนตั้งใจไว้?",
+    q: `\`\`\`ts
+type Shape = { kind: "circle"; radius: number } | { kind: "square"; side: number };
+type Bare = Omit<Shape, "kind">;
+\`\`\`
+cำถามของ checklist กลุ่มไหนจะจับได้ว่า \`Bare\` อาจไม่ได้แปลว่าสิ่งที่ผู้เขียนตั้งใจไว้?`,
     options: [
       "Async",
       "Generics & variance -- \"ทุก Omit/Pick/Exclude ที่ใช้กับสิ่งที่อาจเป็น union: เคยถูกเช็คแล้วว่ามันกระจายตามที่ผู้เขียนสมมติไว้จริงหรือเปล่า?\"",

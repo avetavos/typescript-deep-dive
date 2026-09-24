@@ -375,7 +375,12 @@ export const quizInfer = [
     explain: 'ถ้าไม่มี constraint แบบ inline คุณจะต้องมี conditional ที่สองแยกต่างหากเพื่อเช็ค infer variable `infer F extends string` รวม structural match กับการเช็ค shape เข้าเป็นขั้นตอนเดียว',
   },
   {
-    q: '```ts\nfunction identity<T>(x: T): T { return x; }\nlet mode = "dark";\nconst r1 = identity(mode);\n```\n`r1` ได้ type อะไร และทำไมการห่อ call เป็น `identity(mode as const)` ถึงแก้ไม่ได้?',
+    q: `\`\`\`ts
+function identity<T>(x: T): T { return x; }
+let mode = "dark";
+const r1 = identity(mode);
+\`\`\`
+\`r1\` ได้ type อะไร และทำไมการห่อ call เป็น \`identity(mode as const)\` ถึงแก้ไม่ได้?`,
     options: [
       '`r1` คือ `"dark"`; `as const` ไม่จำเป็นแต่ไม่เสียหาย',
       '`r1` คือ `string` เพราะ `mode` ถูก widen เป็น `string` ไปแล้วตอนประกาศด้วย `let`; `mode as const` compile ไม่ผ่านด้วยซ้ำ (`TS1355`) เพราะ `as const` รับแค่ literal expression ไม่ใช่ reference ไปยัง mutable variable',
@@ -386,7 +391,12 @@ export const quizInfer = [
     explain: 'literal หายไปตั้งแต่ `let mode = "dark"` widen มัน ก่อนที่ `identity` จะถูกเรียกด้วยซ้ำ `as const` ต้องการ literal expression จริง ๆ ตรงตำแหน่งนั้น ดังนั้นการใส่มันกับ reference ไปยัง variable ที่ widen ไปแล้วเป็น compile error ไม่ใช่ทางแก้',
   },
   {
-    q: '```ts\nfunction make<T>(): T[] { return []; }\nconst arr: string[] = make();\nconst loose = make();\n```\n`arr` กับ `loose` ได้ type อะไร และทำไมถึงต่างกัน?',
+    q: `\`\`\`ts
+function make<T>(): T[] { return []; }
+const arr: string[] = make();
+const loose = make();
+\`\`\`
+\`arr\` กับ \`loose\` ได้ type อะไร และทำไมถึงต่างกัน?`,
     options: [
       'ทั้งคู่เป็น `unknown[]` — `make` ไม่มีอะไรให้ infer เลย',
       '`arr` คือ `string[]` — `T` ถูก infer จาก contextual type ของการ assign; `loose` คือ `unknown[]` — ไม่มี argument และไม่มี contextual type จึงไม่มีอะไรให้ infer `T` เลย',

@@ -464,7 +464,11 @@ export const quizRecursive = [
     explain: 'A tail-recursive conditional -- where the recursive call is the entire result, with an accumulator carrying the answer -- lets the compiler optimize the recursion, pushing the ceiling from roughly 47 to 999.',
   },
   {
-    q: '```ts\ntype A = B;\ntype B = A;\n```\nWhy does this fail, and how is it different from hitting the instantiation-depth ceiling?',
+    q: `\`\`\`ts
+type A = B;
+type B = A;
+\`\`\`
+Why does this fail, and how is it different from hitting the instantiation-depth ceiling?`,
     options: [
       'It hits TS2589 after 47 levels, same as any other naive recursion',
       'It fails immediately with TS2456 -- a bare alias-to-alias reference has no deferred position (no object, array, or function) to let the compiler set the cycle aside and resolve it lazily',
@@ -475,7 +479,13 @@ export const quizRecursive = [
     explain: 'Object properties, array elements, and function signatures are deferred positions, resolved lazily. A plain alias-to-alias reference has no such position, so the compiler must resolve it immediately and detects the cycle right away as TS2456, not as a depth-limit error.',
   },
   {
-    q: '```ts\ntype Prev = [never, 0, 1, 2, 3, 4, 5];\ntype Paths<T, D extends number = 5> = [D] extends [never] ? never : T extends object ? /* ...recurse with Prev[D]... */ never : never;\ninterface Self { name: string; self: Self; }\ntype P = Paths<Self>;\n```\nDoes `Paths<Self>` compile, and why?',
+    q: `\`\`\`ts
+type Prev = [never, 0, 1, 2, 3, 4, 5];
+type Paths<T, D extends number = 5> = [D] extends [never] ? never : T extends object ? /* ...recurse with Prev[D]... */ never : never;
+interface Self { name: string; self: Self; }
+type P = Paths<Self>;
+\`\`\`
+Does \`Paths<Self>\` compile, and why?`,
     options: [
       'No -- self-referential types can never be used with a recursive generic',
       'Yes -- the [D] extends [never] guard, decremented through Prev each call, forces the recursion to stop after a fixed number of levels regardless of how deeply Self actually nests into itself',

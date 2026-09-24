@@ -375,7 +375,12 @@ export const quizInfer = [
     explain: 'Without the inline constraint you would need a second, separate conditional to check the inferred variable. `infer F extends string` combines the structural match and the shape check into one step.',
   },
   {
-    q: '```ts\nfunction identity<T>(x: T): T { return x; }\nlet mode = "dark";\nconst r1 = identity(mode);\n```\nWhat type does `r1` get, and why does wrapping the call as `identity(mode as const)` fail to fix it?',
+    q: `\`\`\`ts
+function identity<T>(x: T): T { return x; }
+let mode = "dark";
+const r1 = identity(mode);
+\`\`\`
+What type does \`r1\` get, and why does wrapping the call as \`identity(mode as const)\` fail to fix it?`,
     options: [
       '`r1` is `"dark"`; `as const` is unnecessary but harmless',
       '`r1` is `string`, because `mode` was already widened to `string` at its own `let` declaration; `mode as const` does not even compile (`TS1355`), because `as const` only accepts a literal expression, not a reference to a mutable variable',
@@ -386,7 +391,12 @@ export const quizInfer = [
     explain: 'The literal is lost the moment `let mode = "dark"` widens it, long before `identity` is called. `as const` requires an actual literal expression at that position, so applying it to a reference to an already-widened variable is a compile error, not a fix.',
   },
   {
-    q: '```ts\nfunction make<T>(): T[] { return []; }\nconst arr: string[] = make();\nconst loose = make();\n```\nWhat are the types of `arr` and `loose`, and why do they differ?',
+    q: `\`\`\`ts
+function make<T>(): T[] { return []; }
+const arr: string[] = make();
+const loose = make();
+\`\`\`
+What are the types of \`arr\` and \`loose\`, and why do they differ?`,
     options: [
       'Both are `unknown[]` — `make` never has anything to infer from',
       '`arr` is `string[]` — `T` is inferred from the contextual type of the assignment; `loose` is `unknown[]` — with no argument and no contextual type, there is nothing to infer `T` from at all',

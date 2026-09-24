@@ -398,7 +398,11 @@ export const quizBoundaries = [
     explain: 'A type predicate is a compile-time signal to the narrower, not a runtime conversion -- it tells TypeScript how to narrow the checked value when the function returns true.',
   },
   {
-    q: '```ts\nconst port = Number(process.env.PORT);\nconsole.log(`listening on port ${port}`);\n```\nWith `PORT` unset, does this compile, and what does it print?',
+    q: `\`\`\`ts
+const port = Number(process.env.PORT);
+console.log(\`listening on port \${port}\`);
+\`\`\`
+With \`PORT\` unset, does this compile, and what does it print?`,
     options: [
       'Compile error — process.env.PORT is not a number',
       'Compiles with zero errors and prints "listening on port NaN"',
@@ -409,7 +413,13 @@ export const quizBoundaries = [
     explain: 'process.env.PORT is string | undefined, and Number(undefined) is NaN — a value the type number happily includes. Nothing here is a type error; the bug is entirely in the missing validation.',
   },
   {
-    q: '```ts\ninterface Config { readonly name: string; limits: { max: number } }\nfunction tweak(cfg: Config) {\n  cfg.limits.max = 999;\n}\n```\nDoes this compile?',
+    q: `\`\`\`ts
+interface Config { readonly name: string; limits: { max: number } }
+function tweak(cfg: Config) {
+  cfg.limits.max = 999;
+}
+\`\`\`
+Does this compile?`,
     options: [
       'No — readonly should protect the whole object',
       'Yes — readonly only protects the "limits" binding itself, not the object it points to',

@@ -347,7 +347,11 @@ export const quizMixins = [
     explain: '`typeof ClassName` names the type of the constructor value, the same category of type every `Constructor<T>` helper in this lesson is generalizing. `InstanceType<typeof User>` recovers the instance type from it.',
   },
   {
-    q: '```ts\ntype Constructor<T = {}> = new (...args: any[]) => T;\ntype WithSecret = Constructor<{ private secret: string }>;\n```\nDoes this compile?',
+    q: `\`\`\`ts
+type Constructor<T = {}> = new (...args: any[]) => T;
+type WithSecret = Constructor<{ private secret: string }>;
+\`\`\`
+Does this compile?`,
     options: [
       'Yes — mixins can require private members this way',
       'No — TS1070: `private` cannot appear on a type member; object type literals have no way to express access modifiers at all',
@@ -369,7 +373,14 @@ export const quizMixins = [
     explain: 'A plain `Constructor<T>` promises its argument is directly callable with `new`, which an `abstract` class\'s constructor type is not -- assigning one produces "Cannot assign an abstract constructor type to a non-abstract constructor type." The abstract-constructor-typed form makes no such promise, so it can accept both concrete and abstract bases.',
   },
   {
-    q: '```ts\nfunction Serializable<TBase extends Constructor>(Base: TBase) {\n  return class extends Base {\n    serialize() { return JSON.stringify(this.toPayload()); }\n  };\n}\n```\n(`Constructor<T = {}>` as defined earlier in this lesson.) Why does `this.toPayload()` fail to compile?',
+    q: `\`\`\`ts
+function Serializable<TBase extends Constructor>(Base: TBase) {
+  return class extends Base {
+    serialize() { return JSON.stringify(this.toPayload()); }
+  };
+}
+\`\`\`
+(\`Constructor<T = {}>\` as defined earlier in this lesson.) Why does \`this.toPayload()\` fail to compile?`,
     options: [
       'JSON.stringify cannot be called inside a mixin',
       '`Constructor` with no type argument defaults to `Constructor<{}>`, so nothing in the constraint says the base provides `toPayload` -- the fix is to constrain it explicitly, e.g. `Constructor<{ toPayload(): unknown }>`',

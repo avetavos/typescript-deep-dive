@@ -132,7 +132,12 @@ Read the types, then distrust every `as`/`any`/`!`/`@ts-ignore`, follow the boun
 
 export const quizReadingTypescriptIndex = [
   {
-    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\nWhat does `tsc --strict` report for this file, regardless of what `raw` actually contains?",
+    q: `\`\`\`ts
+interface User { id: number; name: string }
+const user = JSON.parse(raw) as User;
+console.log(user.name.toUpperCase());
+\`\`\`
+What does \`tsc --strict\` report for this file, regardless of what \`raw\` actually contains?`,
     options: [
       "An error, because JSON.parse's return type can never be a User",
       "Zero errors -- `as User` tells the checker to stop verifying the shape of the parsed value",

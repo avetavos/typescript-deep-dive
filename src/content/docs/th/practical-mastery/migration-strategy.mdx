@@ -252,7 +252,14 @@ export const quizMigrate = [
     explain: '@ts-expect-error แก้ตัวเองได้: พอ type ที่เป็นต้นเหตุถูกแก้ suppression ที่ไม่จำเป็นแล้วเองจะกลายเป็น build error บังคับให้ลบทิ้ง @ts-ignore ไม่มี check แบบนี้เลย เน่าเงียบ ๆ ได้ตลอดไป',
   },
   {
-    q: '```ts\n// @ts-nocheck\nexport function parseConfig(raw) {\n  const data = JSON.parse(raw);\n  return { port: data.port, host: data.host.toLowerCase() };\n}\n```\n`@ts-nocheck` ทำอะไรตรงนี้ แล้วความเสี่ยงคืออะไร?',
+    q: `\`\`\`ts
+// @ts-nocheck
+export function parseConfig(raw) {
+  const data = JSON.parse(raw);
+  return { port: data.port, host: data.host.toLowerCase() };
+}
+\`\`\`
+\`@ts-nocheck\` ทำอะไรตรงนี้ แล้วความเสี่ยงคืออะไร?`,
     options: [
       'suppress แค่บรรทัด JSON.parse -- ที่เหลือยังถูก check อยู่',
       'suppress error ทุกตัวในทั้งไฟล์ รวมถึง bug จริงที่เพิ่มเข้ามาทีหลัง จนกว่า directive จะถูกลบ',
@@ -263,7 +270,11 @@ export const quizMigrate = [
     explain: '@ts-nocheck ปิดการ check ทั้งไฟล์ ไม่ใช่แค่บรรทัดเดียว และต่างจาก @ts-expect-error มันไม่แก้ตัวเองเลย -- bug จริง (อย่าง host ที่เป็น undefined) อยู่ตรงนั้นได้ไม่มีกำหนดโดยไม่มี compiler warning เลย',
   },
   {
-    q: '```ts\nimport { User, makeUser } from "./types";\nconst u: User = makeUser(1, "Ada");\n```\nภายใต้ `verbatimModuleSyntax` เกิดอะไรขึ้น และทำไม `import type` ถึงสำคัญมากกว่าแค่ทำให้ flag พอใจ?',
+    q: `\`\`\`ts
+import { User, makeUser } from "./types";
+const u: User = makeUser(1, "Ada");
+\`\`\`
+ภายใต้ \`verbatimModuleSyntax\` เกิดอะไรขึ้น และทำไม \`import type\` ถึงสำคัญมากกว่าแค่ทำให้ flag พอใจ?`,
     options: [
       'ไม่มีอะไรเปลี่ยน -- verbatimModuleSyntax มีผลแค่กับ export statement',
       'TS1484 -- User ต้องเป็น type-only import; การแยกยังการันตีว่า type จะไม่มีทางแอบสร้าง runtime circular-import จริง (hazard ที่พบบ่อยของ barrel file)',

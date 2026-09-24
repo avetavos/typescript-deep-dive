@@ -297,7 +297,16 @@ export const quizThis = [
     explain: 'ถ้า type return เป็นชื่อ class ตรง ๆ มันจะ "ลืม" ว่า subclass instance เป็นคนเรียก method นี้ ทำให้ chain พังทันทีที่ method ที่มีแค่ใน subclass ถูกเรียกต่อ',
   },
   {
-    q: '```ts\nclass Counter {\n  count = 0;\n  increment() { this.count++; }\n}\nconst c = new Counter();\nconst fn = c.increment;\nfn();\n```\nโดย default (ไม่ประกาศ `this` parameter) จะเกิดอะไรขึ้น?',
+    q: `\`\`\`ts
+class Counter {
+  count = 0;
+  increment() { this.count++; }
+}
+const c = new Counter();
+const fn = c.increment;
+fn();
+\`\`\`
+โดย default (ไม่ประกาศ \`this\` parameter) จะเกิดอะไรขึ้น?`,
     options: [
       'compile error — `increment` assign ให้ตัวแปรไม่ได้',
       'type-check ผ่านโดยไม่มี diagnostic แล้วพังตอน runtime เพราะ `this` เป็น undefined ข้างใน `fn()`',
@@ -308,7 +317,17 @@ export const quizThis = [
     explain: '`increment` ไม่เคยประกาศว่าต้องการ `this` แบบไหน type checker เลยไม่มีอะไรให้เทียบ `this` context ของ `fn()` (ที่ขาดไป) ด้วย มัน compile ผ่านสะอาดแล้วพังตอน runtime — เหตุผลตรง ๆ ที่ `this` parameter หรือ arrow field มีไว้',
   },
   {
-    q: '```ts\nclass Base {\n  greet = () => "base";\n  constructor() { console.log(this.greet()); }\n}\nclass Derived extends Base {\n  override greet = () => "derived";\n}\nnew Derived();\n```\nอันนี้ log อะไร แล้วทำไม?',
+    q: `\`\`\`ts
+class Base {
+  greet = () => "base";
+  constructor() { console.log(this.greet()); }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+new Derived();
+\`\`\`
+อันนี้ log อะไร แล้วทำไม?`,
     options: [
       '`"derived"` — `override` ทำให้ arrow field dispatch แบบ virtual เหมือน method',
       '`"base"` — arrow field ของ `Base` เองรันระหว่าง constructor ของมัน ก่อนที่ field assignment ของ `Derived` (ที่เกิดหลัง `super()` return เท่านั้น) จะเกิดขึ้น',

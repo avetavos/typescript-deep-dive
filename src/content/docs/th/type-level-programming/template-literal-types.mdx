@@ -336,7 +336,11 @@ export const quizTemplate = [
     explain: '"click" ไม่ได้ขึ้นต้นด้วย literal prefix "on" ที่ pattern ต้องการ conditional เลยตกไปที่ branch else คือ never',
   },
   {
-    q: '```ts\ntype Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";\ntype Big = `${Digit}${Digit}${Digit}${Digit}${Digit}`;\n```\nทำไมอันนี้ compile ไม่ผ่าน?',
+    q: `\`\`\`ts
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+type Big = \`\${Digit}\${Digit}\${Digit}\${Digit}\${Digit}\`;
+\`\`\`
+ทำไมอันนี้ compile ไม่ผ่าน?`,
     options: [
       'template literal type ใช้ union ที่หน้าตาเป็นตัวเลขไม่ได้',
       'จุด interpolate 5 จุดของ union 10 member คูณกันเป็น 10 ยกกำลัง 5 = 100,000 การผสม ข้าม union-size ceiling ของ TypeScript (TS2590)',
@@ -347,7 +351,11 @@ export const quizTemplate = [
     explain: 'ขนาด union คูณกันข้ามจุด interpolate แทนที่จะบวก — 10 ความเป็นไปได้ทำซ้ำ 5 ครั้งคือ 10 ยกกำลัง 5 เกิน ceiling ประมาณ 100,000 member ที่ทำให้เกิด TS2590 ไปสบาย ๆ',
   },
   {
-    q: '```ts\ntype StartsWithSlash<T extends string> = T extends `/${string}` ? true : false;\ntype R = StartsWithSlash<"/users" | "profile">;\n```\n`R` คืออะไร และจะทำให้มันตอบ "union ทั้งก้อน match ไหม" แทนได้อย่างไร?',
+    q: `\`\`\`ts
+type StartsWithSlash<T extends string> = T extends \`/\${string}\` ? true : false;
+type R = StartsWithSlash<"/users" | "profile">;
+\`\`\`
+\`R\` คืออะไร และจะทำให้มันตอบ "union ทั้งก้อน match ไหม" แทนได้อย่างไร?`,
     options: [
       '`true` — และไม่มีทางเปลี่ยนพฤติกรรมนี้ได้',
       '`boolean` (distribute ทีละ member); ห่อทั้งสองฝั่งเป็น `[T] extends [\\`/${string}\\`]` เพื่อตรวจ union ทั้งก้อนทีเดียวแทน',

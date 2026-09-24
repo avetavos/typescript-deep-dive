@@ -158,7 +158,12 @@ export const quizIndex = [
     explain: 'TS4xxx เกิดเมื่อ checking ผ่านแล้วแต่ compiler พิมพ์ type ในรูปแบบที่ไฟล์ .d.ts ต้องการไม่ได้ — เช่น TS4094 เมื่อ exported anonymous class type มี private หรือ protected member',
   },
   {
-    q: '```text\nfunction handler(req) {\n  return req.method;\n}\n```\nภายใต้ `strict` diagnostic ที่ได้อยู่ family ไหน และทำไม?',
+    q: `\`\`\`text
+function handler(req) {
+  return req.method;
+}
+\`\`\`
+ภายใต้ \`strict\` diagnostic ที่ได้อยู่ family ไหน และทำไม?`,
     options: [
       'TS1xxx เพราะ `req` ไม่มี type annotation เลย',
       'TS7xxx -- `noImplicitAny` (ส่วนหนึ่งของ family strict) flag parameter ที่ไม่มี type ที่ infer ได้ว่าเป็น `any` แบบ implicit โดยเฉพาะ',
@@ -169,7 +174,18 @@ export const quizIndex = [
     explain: 'การไม่ annotate parameter ยังคง valid ตาม grammar (ไม่มี TS1xxx) และไม่กระทบ declaration emit (ไม่มี TS4xxx) — มันคือ case ที่ noImplicitAny มีไว้จับพอดี รายงานเป็น TS7006 ใน family TS7xxx',
   },
   {
-    q: '```text\n// liby.ts (private class NOT exported -- only the factory is)\nclass InternalOnly { private secret = 1; }\nexport function make() { return new InternalOnly(); }\n\n// usey.ts\nimport { make } from "./liby";\nexport function reExport() {\n  return { wrapped: make() };\n}\n```\nการ compile `usey.ts` ด้วย `--declaration` (verify กับ 7.0.2 แล้ว) รายงาน `TS4094: Property \'secret\' of exported anonymous class type may not be private or protected.` ถ้า `InternalOnly` ถูก `export` จาก `liby.ts` ด้วย โค้ดเดียวกันนี้ยัง error ไหม?',
+    q: `\`\`\`text
+// liby.ts (private class NOT exported -- only the factory is)
+class InternalOnly { private secret = 1; }
+export function make() { return new InternalOnly(); }
+
+// usey.ts
+import { make } from "./liby";
+export function reExport() {
+  return { wrapped: make() };
+}
+\`\`\`
+การ compile \`usey.ts\` ด้วย \`--declaration\` (verify กับ 7.0.2 แล้ว) รายงาน \`TS4094: Property 'secret' of exported anonymous class type may not be private or protected.\` ถ้า \`InternalOnly\` ถูก \`export\` จาก \`liby.ts\` ด้วย โค้ดเดียวกันนี้ยัง error ไหม?`,
     options: [
       'ยัง -- private member ทำให้ declaration emit พังเสมอ ไม่ว่าจะ export อะไร',
       'ไม่ -- พอ `InternalOnly` ถูก export แล้ว `usey.d.ts` reference มันด้วยชื่อได้ (`import { InternalOnly } from "./liby"`) error จะโผล่แค่ตอนที่ class ไม่มีชื่อที่ export ให้ reference ได้ บังคับให้ printer ต้อง inline มันเป็น structural type แทน ซึ่งใส่ private member ไม่ได้',

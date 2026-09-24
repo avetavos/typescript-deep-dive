@@ -343,7 +343,14 @@ export const quizPerf = [
     explain: 'as performs no runtime check or conversion at all -- it only tells the checker to stop verifying, which hides a real mismatch if the cast is wrong.',
   },
   {
-    q: '```ts\ntype Flags = "a" | "b" | /* ...18 more */ "t";\ntype PowerSet<T extends string> = T extends unknown\n  ? T | `${T}-${PowerSet<Exclude<Flags, T>>}`\n  : never;\ntype All = PowerSet<Flags>;\n```\nWhat does TypeScript 7.0.2 report for this, and why?',
+    q: `\`\`\`ts
+type Flags = "a" | "b" | /* ...18 more */ "t";
+type PowerSet<T extends string> = T extends unknown
+  ? T | \`\${T}-\${PowerSet<Exclude<Flags, T>>}\`
+  : never;
+type All = PowerSet<Flags>;
+\`\`\`
+What does TypeScript 7.0.2 report for this, and why?`,
     options: [
       '`TS2590`, because the union is too complex to represent',
       '`TS2589`, because the combinatorial recursion exceeds the instantiation-depth limit',
@@ -354,7 +361,15 @@ export const quizPerf = [
     explain: 'This is recursive, not just large -- each of 20 flags recurses into the remaining ones, so it hits the depth guard (TS2589) rather than the separate size guard (TS2590) that a flat, non-recursive huge union hits instead.',
   },
   {
-    q: '```ts\nfunction saveAll(ids: string[]) {\n  ids.forEach(async (id) => {\n    await save(id);\n  });\n  console.log("saveAll returned");\n}\n```\nDoes `tsc --strict` flag anything here, and what actually happens when it runs?',
+    q: `\`\`\`ts
+function saveAll(ids: string[]) {
+  ids.forEach(async (id) => {
+    await save(id);
+  });
+  console.log("saveAll returned");
+}
+\`\`\`
+Does \`tsc --strict\` flag anything here, and what actually happens when it runs?`,
     options: [
       'tsc reports a floating-promise error, and the code waits for every save to finish',
       'tsc reports zero errors, and "saveAll returned" logs before any save() call finishes',

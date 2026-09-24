@@ -202,7 +202,17 @@ export const quizIndex = [
     explain: 'Parametric polymorphism is one implementation that works uniformly across many types via a type parameter, as opposed to overloading (multiple signatures) or inheritance.',
   },
   {
-    q: '```ts\ninterface User { id: string; name: string }\n\nfunction parseAs<T>(json: string): T {\n  return JSON.parse(json);\n}\n\nconst user = parseAs<User>(\'{"id":"1"}\');\nconsole.log(user.name.toUpperCase());\n```\nDoes this compile, and why or why not?',
+    q: `\`\`\`ts
+interface User { id: string; name: string }
+
+function parseAs<T>(json: string): T {
+  return JSON.parse(json);
+}
+
+const user = parseAs<User>('{"id":"1"}');
+console.log(user.name.toUpperCase());
+\`\`\`
+Does this compile, and why or why not?`,
     options: [
       'Compile error — `T` cannot be used in a return type alone',
       'Compiles with zero errors — `T` appears only in the return position, so it is never checked against the actual argument or the real JSON shape',

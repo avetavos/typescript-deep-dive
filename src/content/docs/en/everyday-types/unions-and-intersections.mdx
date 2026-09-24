@@ -255,7 +255,15 @@ export const quizUI = [
     explain: 'A discriminated union — a union with a shared literal tag field — is the idiomatic way to model "one of several shapes" and switch safely between them.',
   },
   {
-    q: '```ts\ntype StrFn = (x: string) => string;\ntype NumFn = (x: number) => number;\ntype Overloaded = StrFn & NumFn;\n\ndeclare const fn: Overloaded;\nfn(5);\n```\nDoes `fn(5)` compile?',
+    q: `\`\`\`ts
+type StrFn = (x: string) => string;
+type NumFn = (x: number) => number;
+type Overloaded = StrFn & NumFn;
+
+declare const fn: Overloaded;
+fn(5);
+\`\`\`
+Does \`fn(5)\` compile?`,
     options: [
       'No — Overloaded is never because the parameter types conflict',
       'Yes — the intersection is callable as either signature, and 5 matches NumFn',
@@ -266,7 +274,18 @@ export const quizUI = [
     explain: 'Intersecting function types does not average their parameters — it produces a value callable as *either* full signature. `fn(5)` matches `NumFn`\'s `(x: number) => number`, so it compiles.',
   },
   {
-    q: '```ts\ninterface SuccessResult { data?: unknown; ok?: boolean }\ninterface ErrorResult { message?: string; ok?: boolean }\n\nfunction handle(result: SuccessResult | ErrorResult) {\n  console.log(result.ok);\n}\n\nconst response = { ok: true, dta: "typo" };\nhandle(response);\n```\nDoes the typo\'d `dta` property get caught?',
+    q: `\`\`\`ts
+interface SuccessResult { data?: unknown; ok?: boolean }
+interface ErrorResult { message?: string; ok?: boolean }
+
+function handle(result: SuccessResult | ErrorResult) {
+  console.log(result.ok);
+}
+
+const response = { ok: true, dta: "typo" };
+handle(response);
+\`\`\`
+Does the typo'd \`dta\` property get caught?`,
     options: [
       'Yes — TypeScript always rejects unrecognized properties on a union',
       'No — response is passed as a variable, not a fresh literal, and it shares "ok" with both members, so the "weak type" check is satisfied',

@@ -269,7 +269,15 @@ export const quizDecl = [
     explain: 'declaration: true emits a .d.ts next to each .js; pointing types at the entry declaration is the same mechanism the whole ecosystem runs on.',
   },
   {
-    q: '```text\n$ tsc --noEmit --strict\nnode_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must\nhave the same type. Property \'retries\' must be of type \'number\', but here has type \'string\'.\n\n$ tsc --noEmit --strict --skipLibCheck\n                                       # zero output\n```\nWhat does this pair of real runs prove about `skipLibCheck`?',
+    q: `\`\`\`text
+$ tsc --noEmit --strict
+node_modules/brokenlib/index.d.ts(6,3): error TS2717: Subsequent property declarations must
+have the same type. Property 'retries' must be of type 'number', but here has type 'string'.
+
+$ tsc --noEmit --strict --skipLibCheck
+                                       # zero output
+\`\`\`
+What does this pair of real runs prove about \`skipLibCheck\`?`,
     options: [
       'skipLibCheck only affects the built-in lib.*.d.ts files, never a dependency\'s own types',
       'skipLibCheck skips checking every .d.ts in the program, including a genuine conflicting-declaration bug shipped inside a real dependency -- a real trade-off, not just a speed switch',
@@ -280,7 +288,14 @@ export const quizDecl = [
     explain: 'Verified in scratch with a real node_modules package containing two conflicting declarations of the same property: off, tsc reports the real TS2717; on, the conflict is silently accepted -- proof the flag hides real problems, not only slow ones.',
   },
   {
-    q: '```ts\ndeclare module "legacy-lib" {\n  export function parse(input: string): { ok: boolean };\n}\n\nimport { parse } from "legacy-lib";\n```\nThis fails with `TS2664: Invalid module name in augmentation, module \'legacy-lib\' cannot be found`. Why, when the same `declare module` block works fine in a dedicated `.d.ts` file?',
+    q: `\`\`\`ts
+declare module "legacy-lib" {
+  export function parse(input: string): { ok: boolean };
+}
+
+import { parse } from "legacy-lib";
+\`\`\`
+This fails with \`TS2664: Invalid module name in augmentation, module 'legacy-lib' cannot be found\`. Why, when the same \`declare module\` block works fine in a dedicated \`.d.ts\` file?`,
     options: [
       'declare module is always invalid syntax inside a .ts file',
       'The file already has a real `import`, which makes it a module rather than a script -- inside a module, `declare module "x" { ... }` means "augment an existing module x," not "declare a fresh one," and there is no real "legacy-lib" module to augment',

@@ -187,7 +187,13 @@ export const quizIndex = [
     explain: 'ทุก feature ในโมดูลนี้ — literal, union, intersection, tuple — ล้วนเป็นแค่วิธีอธิบายหรือย่อเซตของ value ที่เป็นไปได้',
   },
   {
-    q: '```ts\nfunction area(s: Shape) {\n  if (s.kind === "circle") return Math.PI * s.radius ** 2;\n  if (s.kind === "square") return s.side ** 2;\n}\n```\nทำไม `area(s).toFixed(2)` compile ไม่ผ่าน ทั้งที่ `if` สองอันครอบคลุมทุก case ของ `Shape` แล้ว?',
+    q: `\`\`\`ts
+function area(s: Shape) {
+  if (s.kind === "circle") return Math.PI * s.radius ** 2;
+  if (s.kind === "square") return s.side ** 2;
+}
+\`\`\`
+ทำไม \`area(s).toFixed(2)\` compile ไม่ผ่าน ทั้งที่ \`if\` สองอันครอบคลุมทุก case ของ \`Shape\` แล้ว?`,
     options: [
       'ไม่ผ่านจริง — อันนี้ compile ผ่านสบาย ๆ',
       '`if` สองอันไม่ถูกมองว่า exhaustive เลย inferred return type เลยมี `undefined` รวมอยู่ด้วย',
@@ -198,7 +204,22 @@ export const quizIndex = [
     explain: '`if` สองอันแยกกัน (ไม่มี `else` ไม่มี `switch` แบบ exhaustive) เหลือ path ที่ไม่ return อะไรเลย TypeScript infer เป็น `number | undefined` แล้ว `TS2532: Object is possibly \'undefined\'` ก็ยิงตรง call site',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case "circle": return Math.PI * s.radius ** 2;\n    case "square": return s.side ** 2;\n    default:\n      const _exhaustive: never = s;\n      return _exhaustive;\n  }\n}\n```\nถ้าเพิ่ม member ใหม่ `{ kind: "triangle"; ... }` เข้าไปใน `Shape` แต่ไม่เพิ่ม `case` ใหม่ จะเกิดอะไรขึ้น?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.radius ** 2;
+    case "square": return s.side ** 2;
+    default:
+      const _exhaustive: never = s;
+      return _exhaustive;
+  }
+}
+\`\`\`
+ถ้าเพิ่ม member ใหม่ \`{ kind: "triangle"; ... }\` เข้าไปใน \`Shape\` แต่ไม่เพิ่ม \`case\` ใหม่ จะเกิดอะไรขึ้น?`,
     options: [
       'ไม่มีอะไรเกิดขึ้น — default branch จัดการแบบเงียบ ๆ ตอน runtime',
       'การ assign `const _exhaustive: never = s` compile ไม่ผ่าน ชี้ตรงไปที่ case ที่หายไป',

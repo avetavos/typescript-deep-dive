@@ -297,7 +297,13 @@ export const quizKeyof = [
     explain: 'property key ของ JavaScript เป็นได้แค่ string, number หรือ symbol เท่านั้น ดังนั้น keyof any — "key ของอะไรก็ได้เลย" — ก็คือ union นั้นเป๊ะ นี่ยังเป็น constraint ของ key parameter ของ Record ด้วย',
   },
   {
-    q: '```ts\nfunction describe<T extends object>(t: T) {\n  const keys: (keyof T)[] = Object.keys(t);\n  return keys;\n}\n```\nอันนี้ compile ผ่านไหม และทำไม?',
+    q: `\`\`\`ts
+function describe<T extends object>(t: T) {
+  const keys: (keyof T)[] = Object.keys(t);
+  return keys;
+}
+\`\`\`
+อันนี้ compile ผ่านไหม และทำไม?`,
     options: [
       'ผ่าน — Object.keys ตรงกับ keyof T เป๊ะเสมอ',
       'ไม่ผ่าน, TS2322 — Object.keys(t) type เป็น string[] และ keyof T ยังคง deferred (ยังไม่ resolve) ข้างใน generic body เลยพิสูจน์ไม่ได้ว่า string[] assignable ให้ (keyof T)[]',
@@ -308,7 +314,11 @@ export const quizKeyof = [
     explain: 'Object.keys คืน string[] อย่างตั้งใจ — value ที่ type เป็น T มี key เกินได้ตอน runtime มากกว่าที่ T ประกาศไว้ compiler เลยสัญญาไม่ได้ว่าผลลัพธ์จะตรงกับ keyof T แถม keyof T เองก็ไม่มี key ที่เป็นรูปธรรมให้เช็คจนกว่า T จะถูก instantiate',
   },
   {
-    q: '```ts\ntype Data = { type: "a"; value: string } | { type: "b"; value: number };\ntype V = Data["value"];\n```\n`V` คืออะไร?',
+    q: `\`\`\`ts
+type Data = { type: "a"; value: string } | { type: "b"; value: number };
+type V = Data["value"];
+\`\`\`
+\`V\` คืออะไร?`,
     options: [
       '`string` อย่างเดียว จาก member แรก',
       '`string | number` — indexed access บน union distribute ผ่านแต่ละ member แล้ว union value type เข้าด้วยกัน',

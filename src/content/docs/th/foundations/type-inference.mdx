@@ -52,8 +52,8 @@ req(method2); // ❌ string is too wide for "GET" | "POST"
 <Mermaid title="const เก็บ literal; let widen" code={widenDiagram} />
 
 export const widenDiagram = `flowchart LR
-  lit["literal value\n\"GET\""] -->|const: เปลี่ยนไม่ได้| keep["type: \"GET\"\n(แคบ)"]
-  lit -->|let: อาจเปลี่ยนได้| wide["type: string\n(ถูก widen)"]`;
+  lit["literal value<br/>#quot;GET#quot;"] -->|const: เปลี่ยนไม่ได้| keep["type: #quot;GET#quot;<br/>(แคบ)"]
+  lit -->|let: อาจเปลี่ยนได้| wide["type: string<br/>(ถูก widen)"]`;
 
 เมื่อคุณอยากได้ literal type จาก `let` หรือจาก property ของ object ให้ใช้ **const assertion** (`as const`) — เป็นหัวข้อเต็ม ๆ ในโมดูลถัดไป
 
@@ -298,7 +298,11 @@ export const quizInference = [
     explain: 'compiler สร้าง union ที่ครอบคลุมทุก element แทนที่จะเลือกอันเดียวแล้ว error ที่เหลือ — นี่คือ "best common type"',
   },
   {
-    q: '```ts\nconst obj = { x: "hi" };\ntype ObjX = typeof obj.x;\n```\n`ObjX` คืออะไร และทำไม?',
+    q: `\`\`\`ts
+const obj = { x: "hi" };
+type ObjX = typeof obj.x;
+\`\`\`
+\`ObjX\` คืออะไร และทำไม?`,
     options: [
       '`"hi"` — const เก็บ literal ตลอดทางเสมอ',
       '`string` — const ป้องกันแค่ binding `obj` จากการ reassign; property `obj.x` ยัง mutable อยู่ จึง widen เหมือน property อื่น',
@@ -309,7 +313,15 @@ export const quizInference = [
     explain: '`const` เป็นคุณสมบัติของตัวแปร ไม่ใช่การ deep freeze value `obj.x = "bye"` ถูกกฎหมาย compiler จึง infer `obj.x` เป็น `string` อย่างถูกต้อง แม้ `obj` เองจะประกาศด้วย `const`',
   },
   {
-    q: '```ts\nfunction parseAmount(input: string) {\n  const n = Number(input);\n  if (Number.isNaN(n)) return;\n  return n;\n}\nconst total = parseAmount("42").toFixed(2);\n```\nCompile error ที่เกิดขึ้นโผล่ที่ไหน และทำไมถึงสำคัญ?',
+    q: `\`\`\`ts
+function parseAmount(input: string) {
+  const n = Number(input);
+  if (Number.isNaN(n)) return;
+  return n;
+}
+const total = parseAmount("42").toFixed(2);
+\`\`\`
+Compile error ที่เกิดขึ้นโผล่ที่ไหน และทำไมถึงสำคัญ?`,
     options: [
       'ข้างใน `parseAmount` ที่บรรทัด `return;` เพราะไม่มี return-type annotation',
       'ที่จุดเรียก — `parseAmount("42").toFixed(2)` — เพราะ return type ที่ infer ให้ `parseAmount` widen ไปเป็น `number | undefined` แบบเงียบ ๆ และไม่มีอะไรที่ตัว function เอง flag การเปลี่ยนนั้น',

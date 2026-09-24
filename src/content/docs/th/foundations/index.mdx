@@ -227,7 +227,17 @@ export const quizIndex = [
     explain: 'Declaration merging เป็นของเฉพาะ `interface`: หลายการประกาศชื่อเดียวกันใน scope เดียวกันรวมกันเป็น interface เดียวที่มีทุก member ส่วน `type` alias ประกาศซ้ำไม่ได้เลย — เป็น `TS2300` แข็ง ๆ',
   },
   {
-    q: '```ts\ninterface Base { id: string }\ninterface IUser extends Base { name: string }\n\ntype TBase = { id: string };\ntype TUser = TBase & { name: string };\n\nfunction greetT(u: TUser) {}\ngreetT({ id: "1" });\n```\nError ที่ได้เรียกชื่อ property ที่ขาดหายว่าอะไร และทำไม?',
+    q: `\`\`\`ts
+interface Base { id: string }
+interface IUser extends Base { name: string }
+
+type TBase = { id: string };
+type TUser = TBase & { name: string };
+
+function greetT(u: TUser) {}
+greetT({ id: "1" });
+\`\`\`
+Error ที่ได้เรียกชื่อ property ที่ขาดหายว่าอะไร และทำไม?`,
     options: [
       'เรียกชื่อ `TUser` เพราะ type alias เรียกชื่อตัวเองเสมอ',
       'เรียกชื่อ anonymous `{ name: string }` ซึ่งเป็น intersection member ไม่ใช่ `TBase` — การประกอบด้วย `&` ขยายเป็น anonymous shape ได้เมื่อ checker ต้องอธิบายว่าชิ้นไหนพัง',
@@ -238,7 +248,12 @@ export const quizIndex = [
     explain: '`interface extends` เรียกชื่อ interface เสมอไม่ว่าจะต่อกันกี่ชั้น ส่วน `type` alias ที่สร้างด้วย `&` รายงานชื่อ alias ระดับบนสุด แต่ขยายเป็น anonymous shape ของ member ตัวที่พังจริง ซึ่งอ่านรกกว่าเมื่อมี intersection ซ้อนหลายชั้น',
   },
   {
-    q: '```text\nerror TS2322: Type \'{ name: string; address: { city: string; zip: string; }; }\' is not assignable to type \'Person\'.\n  The types of \'address.zip\' are incompatible between these types.\n    Type \'string\' is not assignable to type \'number\'.\n```\nบรรทัดไหนมีข้อเท็จจริงที่แก้ได้ และควรอ่านทิศทางไหน?',
+    q: `\`\`\`text
+error TS2322: Type '{ name: string; address: { city: string; zip: string; }; }' is not assignable to type 'Person'.
+  The types of 'address.zip' are incompatible between these types.
+    Type 'string' is not assignable to type 'number'.
+\`\`\`
+บรรทัดไหนมีข้อเท็จจริงที่แก้ได้ และควรอ่านทิศทางไหน?`,
     options: [
       'บนลงล่าง — บรรทัดแรกเรียกชื่อปัญหาจริง',
       'ล่างขึ้นบน — บรรทัดสุดท้ายคือความไม่ลงรอยตัวจริง บรรทัดกลางบอกตำแหน่งแน่นอน ส่วนบรรทัดบนเป็นแค่บทสรุป',

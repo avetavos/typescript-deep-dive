@@ -297,7 +297,16 @@ export const quizThis = [
     explain: 'Typing the return as the concrete class name would "forget" that a subclass instance called the method, breaking the chain the moment a subclass-only method is called next.',
   },
   {
-    q: '```ts\nclass Counter {\n  count = 0;\n  increment() { this.count++; }\n}\nconst c = new Counter();\nconst fn = c.increment;\nfn();\n```\nWhat happens by default (no `this` parameter declared)?',
+    q: `\`\`\`ts
+class Counter {
+  count = 0;
+  increment() { this.count++; }
+}
+const c = new Counter();
+const fn = c.increment;
+fn();
+\`\`\`
+What happens by default (no \`this\` parameter declared)?`,
     options: [
       'Compile error — `increment` cannot be assigned to a variable',
       'Type-checks with zero diagnostics, then crashes at runtime because `this` is undefined inside `fn()`',
@@ -308,7 +317,17 @@ export const quizThis = [
     explain: '`increment` never declares a required `this`, so the type checker has nothing to compare `fn()`\'s (missing) `this` context against. It compiles clean and crashes at runtime -- the exact reason a `this` parameter or an arrow field exists.',
   },
   {
-    q: '```ts\nclass Base {\n  greet = () => "base";\n  constructor() { console.log(this.greet()); }\n}\nclass Derived extends Base {\n  override greet = () => "derived";\n}\nnew Derived();\n```\nWhat does this log, and why?',
+    q: `\`\`\`ts
+class Base {
+  greet = () => "base";
+  constructor() { console.log(this.greet()); }
+}
+class Derived extends Base {
+  override greet = () => "derived";
+}
+new Derived();
+\`\`\`
+What does this log, and why?`,
     options: [
       '`"derived"` — `override` makes the arrow field dispatch virtually, same as a method',
       '`"base"` — `Base`\'s own arrow field runs during its constructor, before `Derived`\'s field assignment (which only happens after `super()` returns) has occurred',

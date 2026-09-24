@@ -503,7 +503,12 @@ A generated type that compiles is not tested — a real type-level test suite is
 
 export const quizTesting = [
   {
-    q: '```ts\ntype RequiredKeys<T> = { [K in keyof T]: T[K] extends undefined ? never : K }[keyof T];\ninterface Basic { a: string; b?: number; }\ntype R = RequiredKeys<Basic>;\n```\nWhat is `R`, and why is this a realistic type-level testing failure?',
+    q: `\`\`\`ts
+type RequiredKeys<T> = { [K in keyof T]: T[K] extends undefined ? never : K }[keyof T];
+interface Basic { a: string; b?: number; }
+type R = RequiredKeys<Basic>;
+\`\`\`
+What is \`R\`, and why is this a realistic type-level testing failure?`,
     options: [
       '`"a"` -- the utility works correctly',
       '`"a" | "b" | undefined` -- the optional key "b" leaks in because RequiredKeys only checks the VALUE type (which includes undefined for an optional property) rather than whether the key itself is optional',
@@ -547,7 +552,12 @@ export const quizTesting = [
     explain: 'satisfies validates shape at the point of construction without changing inference the way `as` or an annotation would. It is only as precise as the constraint given -- a typo\'d key still satisfies a wide Record<string, ...> constraint.',
   },
   {
-    q: '```ts\ntest("add returns a number", () => {\n  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose\n});\n```\nRunning plain `vitest run` on this file (no --typecheck flag) reports 1 test passed. Why?',
+    q: `\`\`\`ts
+test("add returns a number", () => {
+  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose
+});
+\`\`\`
+Running plain \`vitest run\` on this file (no --typecheck flag) reports 1 test passed. Why?`,
     options: [
       'vitest secretly runs tsc on every test file automatically',
       '`expectTypeOf` performs no runtime action at all -- without --typecheck (or test.typecheck.enabled) actually running and matching the file via typecheck.include, the assertion is never checked, so nothing throws and the arrow function completes normally',
@@ -569,7 +579,12 @@ export const quizTesting = [
     explain: 'tsc --noEmit never writes a .js file for these constructs in the first place -- there is no runtime representation of a type-level assertion to emit, so the entire test suite disappears after the compiler is done with it, exactly like every other erasable construct this course has covered.',
   },
   {
-    q: '```ts\ntype BuggyPick<T> = T & { extraDebugFlag: boolean };\ntype Result = BuggyPick<{ id: number }>;\ntype WrongTest = Result extends { id: number } ? true : false;\n```\nWhy does `WrongTest` compile to `true` even though `Result` has an unwanted extra property, and what should the test have used instead?',
+    q: `\`\`\`ts
+type BuggyPick<T> = T & { extraDebugFlag: boolean };
+type Result = BuggyPick<{ id: number }>;
+type WrongTest = Result extends { id: number } ? true : false;
+\`\`\`
+Why does \`WrongTest\` compile to \`true\` even though \`Result\` has an unwanted extra property, and what should the test have used instead?`,
     options: [
       '`extends` is broken and should never be used in type tests',
       '`extends` only checks "is a subtype of" -- a type with MORE properties than the target is still a subtype of it, so the leaked extraDebugFlag is invisible to this check. Expect<Equal<Result, { id: number }>> checks both directions and correctly fails',

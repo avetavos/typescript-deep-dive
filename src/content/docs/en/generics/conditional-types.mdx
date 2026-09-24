@@ -283,7 +283,16 @@ export const quizConditional = [
     explain: 'Because T is naked on the checked side, the conditional runs once per union member and unions the branch results, rather than producing one array of the whole union.',
   },
   {
-    q: '```ts\ntype Naked<T> = T extends string ? "str" : "other";\ntype Wrapped<T> = [T] extends [string] ? "str" : "other";\ntype ArrWrapped<T> = T[] extends string[] ? "str" : "other";\n\ntype N = Naked<"a" | 42>;\ntype W = Wrapped<"a" | 42>;\ntype A = ArrWrapped<"a" | 42>;\n```\nWhat are `N`, `W`, and `A`?',
+    q: `\`\`\`ts
+type Naked<T> = T extends string ? "str" : "other";
+type Wrapped<T> = [T] extends [string] ? "str" : "other";
+type ArrWrapped<T> = T[] extends string[] ? "str" : "other";
+
+type N = Naked<"a" | 42>;
+type W = Wrapped<"a" | 42>;
+type A = ArrWrapped<"a" | 42>;
+\`\`\`
+What are \`N\`, \`W\`, and \`A\`?`,
     options: [
       'All three are `"other"`',
       '`N` is `"str" | "other"` (distributes); `W` and `A` are both `"other"` (wrapped in a tuple or array, so neither distributes)',

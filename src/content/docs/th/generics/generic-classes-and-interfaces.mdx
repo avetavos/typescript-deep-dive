@@ -547,7 +547,19 @@ export const quizClasses = [
     explain: 'เมื่อไม่มี inference site เลย T จะ default เป็น unknown ไม่ใช่ any ตำแหน่ง parameter ยอมรับทุกอย่างภายใต้ unknown แต่ค่าที่อ่านกลับมายังเป็น unknown จนกว่าจะ narrow — ต่างจาก any ที่จะข้ามข้อกำหนดนี้ไปด้วย',
   },
   {
-    q: '```ts\nclass StackWrong {\n  private items: any[] = [];\n  push<U>(item: U): void { this.items.push(item); }\n  pop<U>(): U | undefined { return this.items.pop(); }\n}\nconst sw = new StackWrong();\nsw.push("first");\nsw.push(42);\nconst claimed = sw.pop<string>();\nclaimed!.toUpperCase();\n```\nโค้ดนี้ compile ผ่านไหม แล้วตอนรันเกิดอะไรขึ้น?',
+    q: `\`\`\`ts
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42);
+const claimed = sw.pop<string>();
+claimed!.toUpperCase();
+\`\`\`
+โค้ดนี้ compile ผ่านไหม แล้วตอนรันเกิดอะไรขึ้น?`,
     options: [
       'compile error — push กับ pop ต้องใช้ type parameter ร่วมกัน',
       'compile ผ่านโดยไม่มี error แล้วพังตอนรัน — `<U>` ของ pop เป็น type parameter อิสระใหม่ทุก call และ `items: any[]` ไม่เคยตรวจว่า claimed คืออะไรจริง ๆ',

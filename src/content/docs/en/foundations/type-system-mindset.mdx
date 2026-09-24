@@ -255,7 +255,14 @@ export const quizMindset = [
     explain: '`unknown` stays inside the sets model as the top type — everything fits in, but you must narrow before doing anything with it. `any` disables the model rather than sitting at either end of it.',
   },
   {
-    q: '```ts\nconst withAny: any = "42";\nwithAny.toFixed(2);\n\nconst withUnknown: unknown = "42";\nwithUnknown.toFixed(2);\n```\nWhat does `tsc` report for these two lines?',
+    q: `\`\`\`ts
+const withAny: any = "42";
+withAny.toFixed(2);
+
+const withUnknown: unknown = "42";
+withUnknown.toFixed(2);
+\`\`\`
+What does \`tsc\` report for these two lines?`,
     options: [
       'Both compile with zero errors',
       'The `any` line compiles with zero errors; the `unknown` line fails with `TS18046` because `unknown` must be narrowed before any property access',
@@ -266,7 +273,23 @@ export const quizMindset = [
     explain: '`any` is assignable to and from anything with no checking at all, so `.toFixed` on it is allowed even though it will crash at runtime. `unknown` is the set of all values but keeps the model intact, so the compiler refuses `.toFixed` until the value is narrowed.',
   },
   {
-    q: '```ts\ntype Shape =\n  | { kind: "circle"; radius: number }\n  | { kind: "square"; side: number }\n  | { kind: "triangle"; base: number; height: number };\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case "circle": return Math.PI * shape.radius ** 2;\n    case "square": return shape.side ** 2;\n    default:\n      const exhaustive: never = shape;\n      throw new Error(`Unhandled: ${exhaustive}`);\n  }\n}\n```\nDoes this compile, and why?',
+    q: `\`\`\`ts
+type Shape =
+  | { kind: "circle"; radius: number }
+  | { kind: "square"; side: number }
+  | { kind: "triangle"; base: number; height: number };
+
+function area(shape: Shape): number {
+  switch (shape.kind) {
+    case "circle": return Math.PI * shape.radius ** 2;
+    case "square": return shape.side ** 2;
+    default:
+      const exhaustive: never = shape;
+      throw new Error(\`Unhandled: \${exhaustive}\`);
+  }
+}
+\`\`\`
+Does this compile, and why?`,
     options: [
       'Yes — `never` accepts any leftover value',
       'No — in the `default` branch, `shape` could still be the `triangle` case, so its set of possible values is not empty and it no longer fits in `never`',

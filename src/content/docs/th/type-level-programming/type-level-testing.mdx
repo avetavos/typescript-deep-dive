@@ -503,7 +503,12 @@ type ที่ generate มา compile ผ่านไม่ได้แปล�
 
 export const quizTesting = [
   {
-    q: '```ts\ntype RequiredKeys<T> = { [K in keyof T]: T[K] extends undefined ? never : K }[keyof T];\ninterface Basic { a: string; b?: number; }\ntype R = RequiredKeys<Basic>;\n```\n`R` คืออะไร และทำไมนี่คือ type-level testing failure ที่สมจริง?',
+    q: `\`\`\`ts
+type RequiredKeys<T> = { [K in keyof T]: T[K] extends undefined ? never : K }[keyof T];
+interface Basic { a: string; b?: number; }
+type R = RequiredKeys<Basic>;
+\`\`\`
+\`R\` คืออะไร และทำไมนี่คือ type-level testing failure ที่สมจริง?`,
     options: [
       '`"a"` -- utility ทำงานถูกต้อง',
       '`"a" | "b" | undefined` -- key optional "b" รั่วเข้ามาเพราะ RequiredKeys เช็คแค่ type ของ VALUE (ซึ่งมี undefined รวมอยู่แล้วสำหรับ optional property) แทนที่จะเช็คว่า key เองเป็น optional หรือไม่',
@@ -547,7 +552,12 @@ export const quizTesting = [
     explain: 'satisfies validate shape ณ จุดสร้างโดยไม่เปลี่ยน inference แบบที่ `as` หรือ annotation จะทำ มันแม่นยำแค่เท่า constraint ที่ให้ไป -- key พิมพ์ผิดยังคง satisfies constraint Record<string, ...> ที่กว้างได้',
   },
   {
-    q: '```ts\ntest("add returns a number", () => {\n  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose\n});\n```\nรัน `vitest run` เฉย ๆ (ไม่มี flag --typecheck) บนไฟล์นี้แล้วรายงาน 1 test ผ่าน ทำไม?',
+    q: `\`\`\`ts
+test("add returns a number", () => {
+  expectTypeOf(add(1, 2)).toEqualTypeOf<string>(); // wrong on purpose
+});
+\`\`\`
+รัน \`vitest run\` เฉย ๆ (ไม่มี flag --typecheck) บนไฟล์นี้แล้วรายงาน 1 test ผ่าน ทำไม?`,
     options: [
       'vitest แอบรัน tsc บน test file ทุกไฟล์อัตโนมัติ',
       '`expectTypeOf` ไม่ทำ action ตอน runtime เลย -- ถ้าไม่มี --typecheck (หรือ test.typecheck.enabled) ที่รันจริงและไฟล์ตรงกับ typecheck.include assertion จะไม่ถูกเช็คเลย ไม่มีอะไร throw arrow function ก็จบตามปกติ',
@@ -569,7 +579,12 @@ export const quizTesting = [
     explain: 'tsc --noEmit ไม่เคยเขียนไฟล์ .js สำหรับ construct พวกนี้ตั้งแต่แรก -- ไม่มี runtime representation ของ type-level assertion ให้ emit ดังนั้น test suite ทั้งหมดหายไปหลัง compiler ทำงานเสร็จ เหมือน erasable construct อื่น ๆ ที่คอร์สนี้พูดถึงมาแล้ว',
   },
   {
-    q: '```ts\ntype BuggyPick<T> = T & { extraDebugFlag: boolean };\ntype Result = BuggyPick<{ id: number }>;\ntype WrongTest = Result extends { id: number } ? true : false;\n```\nทำไม `WrongTest` compile เป็น `true` ทั้งที่ `Result` มี property เกินมาที่ไม่ต้องการ และควรใช้อะไรแทน?',
+    q: `\`\`\`ts
+type BuggyPick<T> = T & { extraDebugFlag: boolean };
+type Result = BuggyPick<{ id: number }>;
+type WrongTest = Result extends { id: number } ? true : false;
+\`\`\`
+ทำไม \`WrongTest\` compile เป็น \`true\` ทั้งที่ \`Result\` มี property เกินมาที่ไม่ต้องการ และควรใช้อะไรแทน?`,
     options: [
       '`extends` เสีย ไม่ควรใช้ใน type test เลย',
       '`extends` เช็คแค่ "เป็น subtype ของ" -- type ที่มี property มากกว่า target ก็ยังเป็น subtype ของมันอยู่ดี ดังนั้น extraDebugFlag ที่รั่วมาจึงมองไม่เห็นในเช็คนี้ Expect<Equal<Result, { id: number }>> เช็คสองทิศทางและพังถูกต้อง',

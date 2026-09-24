@@ -400,7 +400,13 @@ export const quizUtility = [
     explain: 'Omit removes K by first computing keyof T minus K (via Exclude) and then Picking exactly those remaining keys.',
   },
   {
-    q: '```ts\ninterface Circle { kind: "circle"; radius: number; }\ninterface Square { kind: "square"; side: number; }\ntype Shape = Circle | Square;\ntype R = Omit<Shape, "kind">;\n```\nWhat is `R`, and why?',
+    q: `\`\`\`ts
+interface Circle { kind: "circle"; radius: number; }
+interface Square { kind: "square"; side: number; }
+type Shape = Circle | Square;
+type R = Omit<Shape, "kind">;
+\`\`\`
+What is \`R\`, and why?`,
     options: [
       '`{ radius: number } | { side: number }` — Omit removes kind from each branch',
       '`{}` — kind is the only key common to both members of the union, so keyof Shape is just "kind"; removing it leaves keyof Shape as never, and Omit collapses to the empty object type',
@@ -422,7 +428,12 @@ export const quizUtility = [
     explain: 'Wrapping Omit in a conditional with a naked checked type forces the same per-member distribution seen in Conditional Types, so each union member keeps its own non-K properties instead of the whole union being reduced to its common keys first.',
   },
   {
-    q: '```ts\ntype Loose = { a?: number | undefined };\ntype R = Required<Loose>;\ntype AType = R["a"];\n```\nIs `AType` `number` or `number | undefined`, and what does it depend on?',
+    q: `\`\`\`ts
+type Loose = { a?: number | undefined };
+type R = Required<Loose>;
+type AType = R["a"];
+\`\`\`
+Is \`AType\` \`number\` or \`number | undefined\`, and what does it depend on?`,
     options: [
       'Always `number` -- Required always strips undefined',
       'Always `number | undefined` -- Required never touches the value type',

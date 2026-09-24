@@ -252,7 +252,14 @@ export const quizMigrate = [
     explain: '@ts-expect-error is self-correcting: once the underlying type is fixed, the now-unnecessary suppression itself becomes a build error, forcing its removal. @ts-ignore has no such check and can rot silently forever.',
   },
   {
-    q: '```ts\n// @ts-nocheck\nexport function parseConfig(raw) {\n  const data = JSON.parse(raw);\n  return { port: data.port, host: data.host.toLowerCase() };\n}\n```\nWhat does `@ts-nocheck` do here, and what is the risk?',
+    q: `\`\`\`ts
+// @ts-nocheck
+export function parseConfig(raw) {
+  const data = JSON.parse(raw);
+  return { port: data.port, host: data.host.toLowerCase() };
+}
+\`\`\`
+What does \`@ts-nocheck\` do here, and what is the risk?`,
     options: [
       'It only suppresses the JSON.parse line -- the rest is still checked',
       'It suppresses every error in the entire file, including any real bugs introduced later, until the directive is removed',
@@ -263,7 +270,11 @@ export const quizMigrate = [
     explain: '@ts-nocheck disables checking for the whole file, not just one line, and unlike @ts-expect-error it never self-corrects -- a real bug (like host being undefined) can sit there indefinitely with zero compiler warning.',
   },
   {
-    q: '```ts\nimport { User, makeUser } from "./types";\nconst u: User = makeUser(1, "Ada");\n```\nUnder `verbatimModuleSyntax`, what happens, and why does `import type` matter beyond satisfying that flag?',
+    q: `\`\`\`ts
+import { User, makeUser } from "./types";
+const u: User = makeUser(1, "Ada");
+\`\`\`
+Under \`verbatimModuleSyntax\`, what happens, and why does \`import type\` matter beyond satisfying that flag?`,
     options: [
       'Nothing changes -- verbatimModuleSyntax only affects export statements',
       'TS1484 -- User must be a type-only import; splitting it also guarantees the type can never accidentally create a real runtime circular-import (a common barrel-file hazard)',

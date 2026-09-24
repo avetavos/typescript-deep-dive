@@ -343,7 +343,22 @@ export const quizFn = [
     explain: '`forEach` type callback ของมันว่า return `void`; เพราะ return type แบบ `void` รับ return value จริงอะไรก็ได้ callback ที่บังเอิญ return ผลของ `push` เลย compile ผ่าน',
   },
   {
-    q: '```ts\ninterface ShelterMethod {\n  handle(a: Animal): void;\n}\ninterface ShelterProp {\n  handle: (a: Animal) => void;\n}\n\nconst byMethod: ShelterMethod = {\n  handle(a: Dog) { console.log(a.breed); },\n};\nconst byProp: ShelterProp = {\n  handle: (a: Dog) => { console.log(a.breed); },\n};\n```\nใต้ `--strict` ตัวไหน compile ผ่าน?',
+    q: `\`\`\`ts
+interface ShelterMethod {
+  handle(a: Animal): void;
+}
+interface ShelterProp {
+  handle: (a: Animal) => void;
+}
+
+const byMethod: ShelterMethod = {
+  handle(a: Dog) { console.log(a.breed); },
+};
+const byProp: ShelterProp = {
+  handle: (a: Dog) => { console.log(a.breed); },
+};
+\`\`\`
+ใต้ \`--strict\` ตัวไหน compile ผ่าน?`,
     options: [
       'fail ทั้งคู่ — narrow parameter เป็น error เสมอ',
       'ผ่านแค่ byMethod — method shorthand ถูกเช็คแบบ bivariant, byProp ถูกเช็คแบบ contravariant แล้ว fail',
@@ -354,7 +369,17 @@ export const quizFn = [
     explain: 'strictFunctionTypes บังคับการเช็ค contravariant ปกติกับ function ที่ type เป็น property (`byProp` fail ด้วย TS2322) แต่ member แบบ method-shorthand ยังคงข้อยกเว้น bivariant ไว้เพื่อ backward compatibility เลย `byMethod` compile ผ่านทั้งที่ unsound เท่ากัน',
   },
   {
-    q: '```ts\nclass Counter {\n  count = 0;\n  increment(this: Counter) { this.count++; }\n}\nconst c = new Counter();\nconst handlers: Array<() => void> = [];\nhandlers.push(c.increment);\nfor (const h of handlers) h();\n```\nโค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?',
+    q: `\`\`\`ts
+class Counter {
+  count = 0;
+  increment(this: Counter) { this.count++; }
+}
+const c = new Counter();
+const handlers: Array<() => void> = [];
+handlers.push(c.increment);
+for (const h of handlers) h();
+\`\`\`
+โค้ดนี้ compile ผ่านไหม แล้วเกิดอะไรขึ้นตอนรัน?`,
     options: [
       'compile error — this: Counter ของ increment เข้ากันไม่ได้กับ () => void',
       'compile ผ่าน แต่ throw ตอน runtime เพราะ increment เสีย receiver Counter ไป',

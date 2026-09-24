@@ -257,7 +257,12 @@ export const quizWhy = [
     explain: 'พอ code รันจริง type ทุกตัวถูกถอดออกหมดแล้ว `x is string` (type predicate) เป็น syntax ระดับ compile-time เท่านั้น ไม่ใช่ runtime check เอง — runtime check จริง ๆ คือ expression ของ JavaScript ที่ body ของมันใช้',
   },
   {
-    q: '```ts\nconst raw: string = "42";\nconst n = raw as unknown as number;\nconsole.log(n.toFixed(2));\n```\nเกิดอะไรขึ้นตอนรัน?',
+    q: `\`\`\`ts
+const raw: string = "42";
+const n = raw as unknown as number;
+console.log(n.toFixed(2));
+\`\`\`
+เกิดอะไรขึ้นตอนรัน?`,
     options: [
       'compile ผ่านแล้วพิมพ์ `42.00` เพราะ `as` แปลง string เป็น number จริง',
       'compile ผ่านโดยไม่มี error เลย แต่พังตอน runtime ด้วย `TypeError: n.toFixed is not a function` — `raw` ยังเป็น string `"42"` เหมือนเดิม',
@@ -279,7 +284,15 @@ export const quizWhy = [
     explain: '`@ts-expect-error` บนบรรทัดที่ไม่มี error จริงจะกลายเป็น error ของตัวเอง (`TS2578: Unused directive`) ซึ่งเป็นเหตุผลที่มันจับการแก้ที่อื่นที่เอา bug เดิมออกไปได้ `@ts-ignore` ไม่บอกอะไรเลยทั้งสองทาง',
   },
   {
-    q: '```ts\nfunction getConfigValue(key: string): string {\n  const config: Record<string, string | undefined> = { host: "localhost" };\n  return config[key]!;\n}\nconst port = getConfigValue("port");\nconsole.log(port.toUpperCase());\n```\nโค้ดนี้ compile ผ่านไหม และเกิดอะไรขึ้นตอนรัน?',
+    q: `\`\`\`ts
+function getConfigValue(key: string): string {
+  const config: Record<string, string | undefined> = { host: "localhost" };
+  return config[key]!;
+}
+const port = getConfigValue("port");
+console.log(port.toUpperCase());
+\`\`\`
+โค้ดนี้ compile ผ่านไหม และเกิดอะไรขึ้นตอนรัน?`,
     options: [
       'compile error — ใช้ `!` กับ index access ไม่ได้',
       'compile ผ่านโดยไม่มี error เลย — `!` assert ว่า lookup ไม่มีทาง `undefined` — แล้วพังตอน runtime เพราะ `config["port"]` เป็น `undefined` จริง ๆ',

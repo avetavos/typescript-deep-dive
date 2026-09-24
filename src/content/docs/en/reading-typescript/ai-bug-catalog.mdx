@@ -1100,7 +1100,12 @@ A third of this catalog has no automated safety net at all, and several more are
 
 export const quizAiBugCatalog = [
   {
-    q: "```ts\ninterface User { id: number; name: string }\nconst user = JSON.parse(raw) as User;\nconsole.log(user.name.toUpperCase());\n```\nIf `raw` is `'{\"id\": 1}'` (no `name` field), what does `tsc --strict` report, and what happens at runtime?",
+    q: `\`\`\`ts
+interface User { id: number; name: string }
+const user = JSON.parse(raw) as User;
+console.log(user.name.toUpperCase());
+\`\`\`
+If \`raw\` is \`'{"id": 1}'\` (no \`name\` field), what does \`tsc --strict\` report, and what happens at runtime?`,
     options: [
       "tsc reports an error; the code never runs",
       "tsc reports zero errors; at runtime, `user.name.toUpperCase()` throws because `name` is undefined",

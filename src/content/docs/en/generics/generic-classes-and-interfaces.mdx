@@ -547,7 +547,19 @@ export const quizClasses = [
     explain: 'With no inference site at all, T defaults to unknown, not any. Parameter positions accept anything under unknown, but values read back out are still unknown until narrowed — unlike any, which would skip that requirement too.',
   },
   {
-    q: '```ts\nclass StackWrong {\n  private items: any[] = [];\n  push<U>(item: U): void { this.items.push(item); }\n  pop<U>(): U | undefined { return this.items.pop(); }\n}\nconst sw = new StackWrong();\nsw.push("first");\nsw.push(42);\nconst claimed = sw.pop<string>();\nclaimed!.toUpperCase();\n```\nDoes this compile, and what happens when it runs?',
+    q: `\`\`\`ts
+class StackWrong {
+  private items: any[] = [];
+  push<U>(item: U): void { this.items.push(item); }
+  pop<U>(): U | undefined { return this.items.pop(); }
+}
+const sw = new StackWrong();
+sw.push("first");
+sw.push(42);
+const claimed = sw.pop<string>();
+claimed!.toUpperCase();
+\`\`\`
+Does this compile, and what happens when it runs?`,
     options: [
       'Compile error — push and pop must share the same type parameter',
       'Compiles with zero errors, then crashes at runtime — pop\'s `<U>` is a fresh, disconnected type parameter each call, and `items: any[]` never actually checked what `claimed` really is',

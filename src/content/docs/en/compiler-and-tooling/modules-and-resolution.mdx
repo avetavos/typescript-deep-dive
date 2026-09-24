@@ -258,7 +258,11 @@ export const quizModules = [
     explain: 'A JSON module has only a default export, and the with attribute (not the deprecated assert) is required under nodenext.',
   },
   {
-    q: '```ts\nconst data = require("node:fs");\nconsole.log(data);\n```\nIn an ESM-detected file, `tsc --strict` reports `TS2591` when no Node types are loaded, but reports **zero errors** on the identical code once `"types": ["node"]` is set. Why the difference, and what actually happens when this file runs?',
+    q: `\`\`\`ts
+const data = require("node:fs");
+console.log(data);
+\`\`\`
+In an ESM-detected file, \`tsc --strict\` reports \`TS2591\` when no Node types are loaded, but reports **zero errors** on the identical code once \`"types": ["node"]\` is set. Why the difference, and what actually happens when this file runs?`,
     options: [
       'TypeScript re-checks the module format once @types/node is present, and correctly allows require in ESM',
       '`@types/node` declares `require` as an ordinary ambient global with no awareness of the current file\'s module format, so the checker is satisfied either way -- but Node itself still throws `ReferenceError: require is not defined in ES module scope` the moment this file runs',

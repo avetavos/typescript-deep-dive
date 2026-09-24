@@ -257,7 +257,12 @@ export const quizWhy = [
     explain: 'By the time the code runs, every type has been stripped away; `x is string` (a type predicate) is compile-time-only syntax, not a runtime check itself — the runtime check is whatever real JavaScript expression its body uses.',
   },
   {
-    q: '```ts\nconst raw: string = "42";\nconst n = raw as unknown as number;\nconsole.log(n.toFixed(2));\n```\nWhat happens when this runs?',
+    q: `\`\`\`ts
+const raw: string = "42";
+const n = raw as unknown as number;
+console.log(n.toFixed(2));
+\`\`\`
+What happens when this runs?`,
     options: [
       'It compiles and prints `42.00`, because `as` converts the string to a real number',
       'It compiles with zero errors, but crashes at runtime with `TypeError: n.toFixed is not a function` — `raw` is still the string `"42"`',
@@ -279,7 +284,15 @@ export const quizWhy = [
     explain: '`@ts-expect-error` on a line with no actual error becomes its own error (`TS2578: Unused directive`), which is exactly why it catches a fix elsewhere that removed the original bug. `@ts-ignore` never tells you either way.',
   },
   {
-    q: '```ts\nfunction getConfigValue(key: string): string {\n  const config: Record<string, string | undefined> = { host: "localhost" };\n  return config[key]!;\n}\nconst port = getConfigValue("port");\nconsole.log(port.toUpperCase());\n```\nDoes this compile, and what happens when it runs?',
+    q: `\`\`\`ts
+function getConfigValue(key: string): string {
+  const config: Record<string, string | undefined> = { host: "localhost" };
+  return config[key]!;
+}
+const port = getConfigValue("port");
+console.log(port.toUpperCase());
+\`\`\`
+Does this compile, and what happens when it runs?`,
     options: [
       'Compile error — you cannot use `!` on an index access',
       'Compiles with zero errors — `!` asserts the lookup is never `undefined` — then crashes at runtime because `config["port"]` really is `undefined`',

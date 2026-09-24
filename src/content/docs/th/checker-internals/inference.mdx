@@ -217,7 +217,11 @@ export const quizInference = [
     explain: 'Verify แล้ว: `identity<string | number>(42)` ให้ `string | number` ไม่ใช่ `number` -- explicit type argument override สิ่งที่ argument literal `42` จะมีส่วนร่วมตามปกติ และ priority นี้เข้มงวด ไม่ใช่การ merge',
   },
   {
-    q: '```ts\nconst obj = { method: "GET" };\nobj.method = "POST";\n```\nอันนี้ compile ผ่านโดยไม่มี error เลย นี่พิสูจน์อะไรเกี่ยวกับ inferred type ของ `obj.method`?',
+    q: `\`\`\`ts
+const obj = { method: "GET" };
+obj.method = "POST";
+\`\`\`
+อันนี้ compile ผ่านโดยไม่มี error เลย นี่พิสูจน์อะไรเกี่ยวกับ inferred type ของ \`obj.method\`?`,
     options: [
       'ไม่พิสูจน์อะไรพิเศษ -- property ของ object literal ถูก widen เสมอ',
       'พิสูจน์ว่า `obj.method` ถูก infer เป็น `string` ไม่ใช่ literal `"GET"` -- property ที่ MUTABLE widen ได้แม้ `obj` เองถูกประกาศด้วย `const`',
@@ -228,7 +232,14 @@ export const quizInference = [
     explain: 'Widening ตาม reassignability ของ binding เฉพาะตัว ไม่ใช่ keyword ของตัวแปรชั้นนอก -- `obj` เป็น `const` ป้องกันแค่การ rebind ตัว `obj` เอง; property `method` mutable ข้างในยัง reassign ได้ ดังนั้นมัน widen เป็น `string` ตอน inference',
   },
   {
-    q: '```ts\nfunction classify(n: number) {\n  if (n > 0) return "positive";\n  if (n < 0) return "negative";\n  return 0;\n}\n```\nไม่มี return-type annotation inferred return type คืออะไร?',
+    q: `\`\`\`ts
+function classify(n: number) {
+  if (n > 0) return "positive";
+  if (n < 0) return "negative";
+  return 0;
+}
+\`\`\`
+ไม่มี return-type annotation inferred return type คืออะไร?`,
     options: [
       'string -- return ที่เป็น string-like ทั้งหมดถูก merge',
       '"positive" | "negative" | 0 -- union ของทุก return statement ที่ reachable verify ด้วยการ assign ผลลัพธ์เข้า union เป๊ะนั้น',
@@ -261,7 +272,16 @@ export const quizInference = [
     explain: 'กลไกสองรอบข้างใต้ (defer สิ่งที่ขึ้นกับ type ที่ยังไม่ resolve, resolve ที่เหลือก่อน แล้วเช็ค body ที่ถูก defer) ไม่เปลี่ยน -- 6.0 แคบลงว่าฟังก์ชันไหนถูก flag ว่าต้องการ defer ตั้งแต่แรก ซึ่งเป็นนิยามที่แคบกว่าและแม่นยำกว่าอย่างเข้มงวด ไม่ใช่พฤติกรรม opt-in ใหม่',
   },
   {
-    q: '```ts\ntype Colors = "red" | "green" | "blue";\nconst paletteAnnotated: Record<Colors, string | number[]> = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n};\nconst paletteSatisfies = {\n  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],\n} satisfies Record<Colors, string | number[]>;\n```\nทำไม `paletteAnnotated.red.push(0)` พังด้วย `TS2339` ในขณะที่ `paletteSatisfies.red.push(0)` compile ผ่าน?',
+    q: `\`\`\`ts
+type Colors = "red" | "green" | "blue";
+const paletteAnnotated: Record<Colors, string | number[]> = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+};
+const paletteSatisfies = {
+  red: [255, 0, 0], green: "#00ff00", blue: [0, 0, 255],
+} satisfies Record<Colors, string | number[]>;
+\`\`\`
+ทำไม \`paletteAnnotated.red.push(0)\` พังด้วย \`TS2339\` ในขณะที่ \`paletteSatisfies.red.push(0)\` compile ผ่าน?`,
     options: [
       'เป็นเรื่องบังเอิญ -- ทั้งคู่ควรมีพฤติกรรมเหมือนกัน',
       'annotation ตรง ๆ บังคับทุก value ให้เป็น union ที่ประกาศไว้ `string | number[]` ดังนั้น `.red` เสีย shape ที่เฉพาะเจาะจงกว่า `number[]` ไป; `satisfies` แค่ validate กับ union นั้นโดยไม่ป้อนมันกลับเข้าไปเป็น type ของ expression เอง ดังนั้น `.red` เก็บ `number[]` ที่ infer ของตัวเองไว้',

@@ -228,7 +228,11 @@ export const quizIndex = [
     explain: 'Box<T> รับ type argument แล้วผลิต type ออกมา — เป็น shape เดียวกับ function เป๊ะ แค่ compiler เป็นคนประเมินแทนที่จะรันตอน runtime',
   },
   {
-    q: '```ts\ntype EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;\ntype R = EqualNaive<any, string>;\n```\n`R` คืออะไร และทำไมมันเป็นปัญหาสำหรับ type-level test?',
+    q: `\`\`\`ts
+type EqualNaive<A, B> = A extends B ? (B extends A ? true : false) : false;
+type R = EqualNaive<any, string>;
+\`\`\`
+\`R\` คืออะไร และทำไมมันเป็นปัญหาสำหรับ type-level test?`,
     options: [
       '`false` — ถูกต้อง เพราะ any กับ string เป็นคนละ type',
       '`true` — เพราะ any เข้ากันได้กับทุกอย่าง',
@@ -239,7 +243,12 @@ export const quizIndex = [
     explain: 'any ทำให้การเช็คแบบ naive ผ่านทั้งสองทิศทาง conditional เลย resolve เป็น literal เดียวไม่ได้ — มันยุบเหลือ boolean แปลว่า "test" จะยอมรับคำตอบไหนก็ได้',
   },
   {
-    q: '```ts\ntype Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;\ntype Expect<T extends true> = T;\ntype Case = Expect<Equal<any, string>>;\n```\nอันนี้ compile ผ่านไหม และทำไม?',
+    q: `\`\`\`ts
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+type Case = Expect<Equal<any, string>>;
+\`\`\`
+อันนี้ compile ผ่านไหม และทำไม?`,
     options: [
       'ผ่าน — any assignable ให้ทุกอย่าง',
       'ไม่ผ่าน, TS2344 — Equal<any, string> resolve เป็น literal false ถูกต้อง ซึ่งไม่ตรง constraint true ของ Expect',

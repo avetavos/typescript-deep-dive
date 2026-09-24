@@ -202,7 +202,17 @@ export const quizIndex = [
     explain: 'Parametric polymorphism คือ implementation เดียวที่ทำงานเหมือนกันกับหลาย type ผ่าน type parameter ต่างจาก overloading (หลาย signature) หรือ inheritance',
   },
   {
-    q: '```ts\ninterface User { id: string; name: string }\n\nfunction parseAs<T>(json: string): T {\n  return JSON.parse(json);\n}\n\nconst user = parseAs<User>(\'{"id":"1"}\');\nconsole.log(user.name.toUpperCase());\n```\nโค้ดนี้ compile ผ่านไหม เพราะอะไร?',
+    q: `\`\`\`ts
+interface User { id: string; name: string }
+
+function parseAs<T>(json: string): T {
+  return JSON.parse(json);
+}
+
+const user = parseAs<User>('{"id":"1"}');
+console.log(user.name.toUpperCase());
+\`\`\`
+โค้ดนี้ compile ผ่านไหม เพราะอะไร?`,
     options: [
       'compile error — ใช้ `T` ใน return type อย่างเดียวไม่ได้',
       'compile ผ่านโดยไม่มี error เลย — `T` ปรากฏแค่ใน return position ทำให้ไม่เคยถูกตรวจกับ argument จริงหรือ shape จริงของ JSON',
